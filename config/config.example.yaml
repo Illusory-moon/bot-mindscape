@@ -31,6 +31,11 @@ diary:
       groups: ["20000001"]                     # 只记这些群（留空=全部）
       output: "./data/bot-name.md"
       state: "./data/bot-name.state.json"
+      # relations: 从人格档案里取「关系与称呼」这类段落，作为不会被自动摘要
+      #            覆盖的权威条目。没有它，摘要会把「喜欢的人」写成「群友」。
+      # relations:
+      #   file: "./persona/soul.md"
+      #   section: "关系与称呼"
       # persona: 决定日记用什么口吻写（留空则用内置默认，内置默认会同时产出 diary 和 people）
       persona: "你在翻阅自己所在群聊的记录。只记发生了什么有趣的事，不要总结任何人的说话风格。只输出 JSON：{\"diary\":[\"条目1\"],\"people\":{\"昵称\":\"一句话描述\"}}"
   llm:
@@ -41,6 +46,7 @@ diary:
   batch: 40
   max_input_chars: 14000
   max_tokens: 900
+  # max_batches: 40                              # 单次运行最多处理几批（默认 40 批 = 40×batch 条）
 
 # ── 表达层：素材采集与调度 ──
 stickers:

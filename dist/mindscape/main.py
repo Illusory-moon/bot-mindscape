@@ -731,7 +731,7 @@ def fetch(src, target, since_ts, since_seq):
     return rows
 
 
-def call_llm(llm, persona, msgs, max_input_chars, max_tokens):
+def call_llm(llm, persona, msgs, max_input_chars, max_tokens, relations=None):
     api_base = (llm.get("api_base") or "").rstrip("/")
     if not api_base:
         raise RuntimeError("diary.llm.api_base 未配置")
@@ -745,10 +745,16 @@ def call_llm(llm, persona, msgs, max_input_chars, max_tokens):
     user = "群聊记录：\n" + "\n".join(
         "[" + m["time"] + "][" + m["gname"] + "] " + m["who"] + ": " + m["txt"] for m in msgs
     )
+    system = persona or DEFAULT_PERSONA
+    if relations:
+        # 没有这段，摘要会把「喜欢的人」写成「某个群友」—— 日记正文和人物画像
+        # 都会跟着错，而这些关系本来是作者写死的。
+        system += ("\n\n你已经知道的关系（描述必须与这里一致，绝不能写成陌生群友）：\n"
+                   + "\n".join(relations))
     body = json.dumps({
         "model": llm.get("model") or "gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": persona or DEFAULT_PERSONA},
+            {"role": "system", "content": system},
             {"role": "user", "content": user[:max_input_chars]},
         ],
         "temperature": 0.7,
@@ -776,26 +782,101 @@ def call_llm(llm, persona, msgs, max_input_chars, max_tokens):
     return parsed
 
 
-def _update_people(path, people, now):
-    """把人物画像合并进 people.md（同名覆盖，保留最近时间）。"""
+REL_TITLE = "## 对我来说重要的人（来自人格档案，自动整理不会覆盖）"
+
+
+AUTO_TITLE = "## 群里遇到的人（自动整理）"
+
+
+def load_relations(spec):
+    """从人格档案里取「关系与称呼」这类段落，作为不会被自动覆盖的权威条目。
+
+    为什么需要：人物画像是一句话自动摘要，它不知道谁是「喜欢的人」，
+    只会把对方写成「群友」。一旦好友被降级成陌生人，bot 就会认错人 ——
+    而这类关系是**作者写死的**，不该由摘要模型来猜。
+
+    spec 可以是字符串（文件路径，取全文的 - 行），也可以是
+    {file: ..., section: "关系与称呼"} —— 只取该 ## 段落里的 - 行。
+    """
+    if not spec:
+        return []
+    if isinstance(spec, str):
+        spec = {"file": spec}
+    path = _abs(spec.get("file"))
+    if not path or not os.path.exists(path):
+        return []
+    section = str(spec.get("section") or "").strip()
+    out = []
+    inside = not section          # 没指定段落就取全文的 - 行
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                s = line.rstrip()
+                if s.startswith("## "):
+                    inside = (section in s) if section else True
+                    continue
+                if inside and s.startswith("- "):
+                    out.append(s)
+    except Exception:
+        return []
+    return out
+
+
+def _relation_heads(relations):
+    """取每条关系「→」之前的名字部分，用来判断摘要是否在讲同一个人。"""
+    heads = []
+    for r in relations or []:
+        body = r[2:] if r.startswith("- ") else r
+        heads.append(body.split("→", 1)[0].strip())
+    return heads
+
+
+def _update_people(path, people, now, relations=None):
+    """把人物画像合并进 people.md（同名覆盖，保留最近时间）。
+
+    relations 是来自人格档案的权威条目，单独放在文件开头；
+    自动摘要如果提到了权威条目里的人（如「重要的人」出现在
+    「Alice（小爱）」中），**不允许**把它写成普通群友。
+    """
+    relations = [r for r in (relations or []) if str(r).strip()]
+    heads = _relation_heads(relations)
     existing = {}
     try:
         with open(path, encoding="utf-8") as f:
+            in_auto = True                    # 旧格式没有分段标题，按自动段处理
             for line in f:
-                line = line.strip()
-                if line.startswith("- ") and "：" in line:
-                    k, v = line[2:].split("：", 1)
+                s = line.strip()
+                if s.startswith("## "):
+                    in_auto = s.startswith(AUTO_TITLE)
+                    continue
+                if s.startswith("#"):         # 一级标题不是分段
+                    continue
+                if in_auto and s.startswith("- ") and "：" in s:
+                    k, v = s[2:].split("：", 1)
                     existing[k.strip()] = v.strip()
     except Exception:
         pass
+    # 历史上被摘要降级过的条目（比如「重要的人：群友」）也要清掉 ——
+    # 只挡新的不够，旧的那条会一直躺在文件里继续误导 bot。
+    for k in [k for k in existing if any(k in h for h in heads)]:
+        del existing[k]
     for k, v in people.items():
         key = str(k).strip()
-        if key and str(v).strip():
-            existing[key] = str(v).strip()[:80]
+        if not key or not str(v).strip():
+            continue
+        if any(key in h for h in heads):
+            continue                          # 权威关系里的人，不让摘要顶掉
+        existing[key] = str(v).strip()[:80]
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        f.write("# 你认识的人（自动维护）\n\n")
+        f.write("# 你认识的人\n\n")
         f.write("最后更新：" + now + "\n\n")
+        if relations:
+            f.write(REL_TITLE + "\n")
+            for r in relations:
+                f.write(r + "\n")
+            f.write("\n")
+        f.write(AUTO_TITLE + "\n")
         for k in sorted(existing):
             f.write("- " + k + "：" + existing[k] + "\n")
 
@@ -818,10 +899,16 @@ def run_target(d):
         out_file = _abs(target.get("output"))
         state_file = _abs(target.get("state") or (out_file + ".state.json"))
         st = load_state(state_file)
+        relations = load_relations(target.get("relations"))
+        people_file = _abs(target.get("people") or (out_file.rsplit(".", 1)[0] + ".people.md"))
         rows = fetch(src, target, st.get("since_ts", 0), st.get("since_seq", 0))
         if not rows:
+            # 即使没新消息，也要保证权威关系已经落在画像里
+            if relations:
+                _update_people(people_file, {}, datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), relations)
             continue
         total_read += len(rows)
+        all_people = {}
         done = 0
         for i in range(0, len(rows), batch):
             if done >= max_batches:
@@ -830,7 +917,7 @@ def run_target(d):
                 break
             chunk = rows[i:i + batch]
             try:
-                res = call_llm(llm, target.get("persona"), chunk, max_in, max_tok)
+                res = call_llm(llm, target.get("persona"), chunk, max_in, max_tok, relations)
             except Exception as e:
                 # 失败就停：只推进会成功的那部分，剩下的下次重试
                 print("[mindscape_diary] LLM 失败，本批中断，剩余留待下次: %s" % str(e)[:120])
@@ -852,16 +939,18 @@ def run_target(d):
                         fp.write("- " + str(e) + "\n")
                     fp.write("\n")
                 total_added += len(entries)
-            # 人物画像：单独落盘（后出现的描述覆盖旧的）
+            # 人物画像先攒着，一轮结束时合并落盘一次即可
             people = res.get("people") or {}
             if isinstance(people, dict) and people:
-                people_file = target.get("people") or (out_file.rsplit(".", 1)[0] + ".people.md")
-                people_file = _abs(people_file)
-                _update_people(people_file, people, now)
+                all_people.update(people)
             st["since_ts"] = chunk[-1]["ts"]
             st["since_seq"] = chunk[-1]["seq"]
             save_state(state_file, st)
             done += 1
+        # 人物画像：权威关系 + 本轮摘要，合并后写一次
+        if all_people or relations:
+            _update_people(people_file, all_people,
+                           datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), relations)
     return total_read, total_added
 
 

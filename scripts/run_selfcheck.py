@@ -364,6 +364,55 @@ def check_regressions():
     except Exception as e:
         bad("R12 救援挂点", str(e)[:140])
 
+    # R13: 人物画像必须让「关系与称呼」这类权威条目压过自动摘要。
+    #      实测：重要的人被自动摘要写成「群友，常发图」，而人格档案里她明明是
+    #      「Alice（小爱）→ 喜欢的人」。关系是作者写死的，不该交给摘要模型猜。
+    try:
+        import mindscape_diary as MD
+        importlib.reload(MD)
+        f = os.path.join(HERE, "_sc_people.md")
+        # 先放一个「旧格式」文件，确认迁移不会把已有条目整批冲掉
+        with open(f, "w", encoding="utf-8") as fp:
+            # 旧格式：没有分段标题，且已经有一条被降级的「重要的人：群友」
+            fp.write("# 你认识的人（自动维护）" + chr(10) * 2
+                     + "最后更新：2026-01-01 00:00" + chr(10) * 2
+                     + "- 老条目：迁移前就存在" + chr(10)
+                     + "- 重要的人：群友，常发图" + chr(10))
+        rel = ["- Alice（小爱）→ 喜欢的人，认真对待"]
+        MD._update_people(f, {"重要的人": "群友，常发图", "新群友": "刚进群"},
+                          "2026-01-02 00:00", rel)
+        got = open(f, encoding="utf-8").read()
+        kept_old = "老条目" in got
+        pinned = "喜欢的人" in got
+        not_downgraded = ("群友，常发图" not in got) and ("群友，发图" not in got)
+        added_new = "新群友" in got
+        (ok if (kept_old and pinned and not_downgraded and added_new) else bad)(
+            "R13 权威关系不被摘要覆盖",
+            "旧条目=%s 关系=%s 未降级=%s 新条目=%s"
+            % (kept_old, pinned, not_downgraded, added_new))
+        os.remove(f)
+    except Exception as e:
+        bad("R13 权威关系", str(e)[:140])
+
+    # R14: load_relations 只能取指定段落的 - 行，不能把整份人格档案倒进来
+    try:
+        import mindscape_diary as MD2
+        importlib.reload(MD2)
+        f = os.path.join(HERE, "_sc_soul.md")
+        with open(f, "w", encoding="utf-8") as fp:
+            fp.write("# 人格" + chr(10)
+                     + "## 关系与称呼" + chr(10)
+                     + "- Alice（小爱）→ 喜欢的人" + chr(10)
+                     + "这段普通文字不该被取" + chr(10)
+                     + "## 别的段落" + chr(10)
+                     + "- 这段也不该被取" + chr(10))
+        rows = MD2.load_relations({"file": f, "section": "关系与称呼"})
+        right = (len(rows) == 1 and "重要的人" in rows[0])
+        (ok if right else bad)("R14 relations 只取指定段落", "%d 行: %s" % (len(rows), rows))
+        os.remove(f)
+    except Exception as e:
+        bad("R14 relations 段落提取", str(e)[:140])
+
     # R05: 同一秒内更大序号的消息不能被漏读
     try:
         import mindscape_diary as MD
