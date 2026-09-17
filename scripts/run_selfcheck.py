@@ -275,6 +275,7 @@ def check_structure():
             "plugins/mindscape_diary.py", "plugins/mindscape_stickers.py",
             "plugins/mindscape_sticker_use.py", "plugins/mindscape_format.py",
             "plugins/mindscape_janitor.py", "plugins/mindscape_digest.py",
+            "plugins/mindscape_notes.py",
             "scripts/config_gui.py", "scripts/web_ui.py",
             "scripts/import_stickers.py", "scripts/mindscape_forget.py",
             "patches/astrbot/install.py", "patches/astrbot/README.md"]
@@ -565,9 +566,8 @@ def check_regressions():
         bad("R18 检索知道自己的边界", str(e)[:140])
 
     # R19: 「别人的话 ≠ 事实」必须写进提示词，而且不能逼它改说话方式。
-    #      实测：日记里记着「某人说群里唯一一对纯爱」，bot 开口就变成
-    #      「小本本上写的是『本群唯一一对纯爱』」—— 把别人的一句口嗨升格成了
-    #      自己笔记本里的权威事实，然后拿去执法（群友：「这 bot 太容易被骗了」）。
+    #      实测：日记里记着「某人说……」，bot 开口就变成「本本上写的是……」，
+    #      把别人的一句口嗨升格成了自己笔记本里的权威事实，然后拿去当规矩执法。
     #      同时要写明「不用原样复述、用你自己的方式讲」，否则它会为了标注来源
     #      变成复读机，反而把说话风格改掉了。
     try:
@@ -579,6 +579,33 @@ def check_regressions():
             "R19 转述不等于事实", "注入块=%s 检索结果=%s" % (mem_ok, rec_ok))
     except Exception as e:
         bad("R19 转述不等于事实", str(e)[:140])
+
+    # R20: 账本必须「可写 + 读得回来 + 同名覆盖」，而且要真的进注入。
+    #      病根：日记/摘要都是后台生成的、检索只读 —— bot 能承诺却没地方落笔，
+    #      于是同一件细节问几次能答出几个样（实测同一个问题六轮六个答案）。
+    try:
+        import mindscape_notes as NT
+        importlib.reload(NT)
+        t = NT.upsert_note("", "甲", "乙来挂的")
+        t = NT.upsert_note(t, "丙", "丁自己认的")
+        t = NT.upsert_note(t, "甲", "乙来挂的（后来补挂）")   # 同名要就地覆盖
+        rows = NT.parse_notes(t)
+        upsert_ok = (len(rows) == 2 and rows[0][0] == "丙"
+                     and rows[1][1] == "乙来挂的（后来补挂）")
+        f = os.path.join(HERE, "_sc_notes.md")
+        NT.write_notes(f, t)
+        with open(f, encoding="utf-8") as fp:
+            rt = (NT.parse_notes(fp.read()) == rows)
+        mem_src = open(os.path.join(PLUGINS, "mindscape_memory.py"),
+                       encoding="utf-8").read()
+        injected = ("SECTION_NOTES" in mem_src and "SECTION_RULES" in mem_src
+                    and 'bot.get("notes")' in mem_src and 'bot.get("rules")' in mem_src)
+        (ok if (upsert_ok and rt and injected) else bad)(
+            "R20 账本可写可读且已注入",
+            "同名覆盖=%s 读写一致=%s 注入=%s" % (upsert_ok, rt, injected))
+        os.remove(f)
+    except Exception as e:
+        bad("R20 账本", str(e)[:140])
 
     # R05: 同一秒内更大序号的消息不能被漏读
     try:

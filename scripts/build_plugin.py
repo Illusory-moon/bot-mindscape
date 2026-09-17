@@ -24,7 +24,7 @@ OUT_DIR = os.path.join(HERE, "dist", "mindscape")
 # 顺序有意义：core/config 是共享层；Mixin 的先后决定 MRO
 ORDER = [
     "mindscape_core", "mindscape_config",
-    "mindscape_guard", "mindscape_memory", "mindscape_recall",
+    "mindscape_guard", "mindscape_memory", "mindscape_recall", "mindscape_notes",
     "mindscape_diary", "mindscape_stickers", "mindscape_sticker_use",
     "mindscape_format", "mindscape_rescue", "mindscape_janitor",
 ]

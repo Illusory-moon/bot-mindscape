@@ -20,8 +20,11 @@ DEFAULT_MAX_CHARS = 2500
 DEFAULT_MIN_CHARS = 50
 DEFAULT_PEOPLE_CHARS = 800
 DEFAULT_DIGEST_CHARS = 1200
+DEFAULT_NOTES_CHARS = 800
 SECTION_TITLE = "## 你的长期记忆"
 SECTION_DIGEST = "### 你还记得的最近几天（每天一句）"
+SECTION_NOTES = "### 你记下的账（自己用 save_note 维护的，比流水账可靠）"
+SECTION_RULES = "**你自己的规矩**"
 HEADER_MARK = "## "
 
 
@@ -192,7 +195,18 @@ class MemoryMixin:
                 d_chars = int(bot.get("digest_chars")
                               or self.m_cfg.get("digest_chars") or DEFAULT_DIGEST_CHARS)
                 dig = read_recent(dig_path, d_chars)
-            if len(mem) < min_chars and not dig:
+
+            # 账本：bot 自己**当场写**的东西。日记与摘要都是后台生成的，检索只读，
+            # 于是「承诺」没地方落笔 —— 说过的话下一轮就漂了。这本账就是为了让
+            # 细节问题有一个稳定的答案。
+            notes = ""
+            nt_path = _resolve(bot.get("notes"))
+            if nt_path:
+                n_chars = int(bot.get("notes_chars")
+                              or self.m_cfg.get("notes_chars") or DEFAULT_NOTES_CHARS)
+                notes = read_recent(nt_path, n_chars)
+
+            if len(mem) < min_chars and not dig and not notes:
                 return
 
             old = getattr(request, "system_prompt", "") or ""
@@ -221,9 +235,18 @@ class MemoryMixin:
                 "讲的时候用你自己的方式就行，不用原样复述，也不必每次都点名是谁讲的。\n\n"
                 "**遇到下面这几种，先查再答**：\n"
                 "- 答案要「翻遍全部」才给得准的：数量、名单、最值、有没有发生过\n"
+                "- 问的是具体细节（谁和谁、什么时候、你答应过什么）：先看下面\n"
+                "  的「你记下的账」，账上没有的，再用 recall_memory 去翻\n"
                 "- 问题指的是更早的时间：以前、上次、第一次、这几天\n"
                 "- 你准备说「只有」「就这些」「没有」的时候\n"
             )
+            # 规矩：每个 bot 自己的行为约束，写在配置里（不进代码，避免把
+            # 某个人设特有的规矩硬编码进通用框架）。
+            rules = [str(x).strip() for x in (bot.get("rules") or []) if str(x).strip()]
+            if rules:
+                block += SECTION_RULES + "\n" + "\n".join("- " + r for r in rules) + "\n\n"
+            if notes:
+                block += SECTION_NOTES + "\n" + notes + "\n\n"
             if dig:
                 block += SECTION_DIGEST + "\n" + dig + "\n\n"
             block += mem
@@ -244,7 +267,7 @@ class MemoryMixin:
                 )
 
             request.system_prompt = old + block
-            logger.info("[mindscape_memory] %s 注入 %d 字记忆 / %d 字摘要 / %d 字人物",
-                        label, len(mem), len(dig), len(people))
+            logger.info("[mindscape_memory] %s 注入 %d 字记忆 / %d 字摘要 / %d 字账本 / %d 字人物",
+                        label, len(mem), len(dig), len(notes), len(people))
         except Exception as e:
             logger.warning("[mindscape_memory] 注入失败: %s", str(e)[:120])

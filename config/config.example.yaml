@@ -8,6 +8,7 @@ memory:
   max_chars: 2500          # 每轮请求注入的记忆字数上限（越小越省 token）
   min_chars: 50            # 少于此长度就不注入
   digest_chars: 1200       # 「每日摘要」注入上限（分层记忆的骨架层）
+  notes_chars: 800         # 「账本」注入上限（bot 自己写的，细节问题看它）
   bots:
     - self_id: "20000000"                      # 你的 bot 账号
       name: "bot-name"                         # 显示名（只用于日志）
@@ -16,6 +17,14 @@ memory:
       people: "./data/bot-name.people.md"      # 人物画像（由 diary 自动生成，可留空）
       people_chars: 800                        # 人物画像注入上限
       digest: "./data/bot-name.digest.md"      # 每日摘要（由下面的 digest 段生成，留空则不注入）
+      # notes: bot **自己能写**的账本（工具 save_note 维护）。日记与摘要都是后台
+      #        生成的、检索只读 —— bot 能承诺却没地方落笔，于是同一件细节问几次
+      #        能答出几个样。给它一本账，细节才有稳定答案。
+      notes: "./data/bot-name.notes.md"
+      # rules: 这个 bot 自己的行为规矩，随记忆一起注入。
+      #        写在这里而不是代码里 —— 通用框架不该硬编码某个人设特有的规矩。
+      # rules:
+      #   - "……"
 
 # ── 认知层：记忆生成 ──
 diary:
