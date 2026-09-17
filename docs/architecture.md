@@ -5,17 +5,20 @@
 ```text
 群聊 / 私聊
     |
-    +--> 消息库(SQLite) --(增量读取)--> mindscape_diary --LLM提炼--> memory.md
+    +--> 消息库(SQLite) --(增量读取)--> mindscape_diary --LLM提炼--> memory.md / people.md
+    |                                        |                     |
+    |                                        +--(按天压缩)--> digest.md
     |                                                              |
-    |                                                      (滑动窗口注入)
+    |                            (分层注入: 规矩 / 账本 / 摘要 / 原文)
     |                                                              v
     |                                                    system prompt
     |                                                              ^
+    |   notes.md <--(bot 当场写: save_note 工具)--------------------+
     +--> 图片消息 --(概率采样)--> mindscape_stickers --视觉判定--> 分类图库
                                                                   |
                                                           (选图/强制配图)
                                                                   |
-   memory.md <--(按需检索: recall_memory 工具)---------------------+
+   memory.md / digest.md / notes.md <--(按需检索: recall_memory)----+
                                                                   v
                                                         回复链 -> guard 拦截 -> 发送
 
@@ -90,11 +93,14 @@ if result is None or not result.chain:
 | `mindscape_core` | 共享 | 纯函数：索引读写、路径校验、判定类型校验、跨进程锁 | 无框架依赖 |
 | `mindscape_config` | 共享 | 配置读取（YAML，带缓存与失败降级） | 无框架依赖 |
 | `mindscape_guard` | 沉浸 | 报错拦截 + 日志脱敏 | core |
-| `mindscape_memory` | 认知 | 滑动窗口注入记忆与人物画像 | core / config |
-| `mindscape_recall` | 认知 | 按需检索（混合检索 + 证据约束） | core / config |
+| `mindscape_memory` | 认知 | **分层注入**（规矩 / 账本 / 摘要 / 原文）+ 人物画像 | core / config |
+| `mindscape_recall` | 认知 | 按需检索（混合检索 + 多词 + 边界自知 + 转述≠事实） | core / config |
 | `mindscape_diary` | 认知 | 增量读消息库 → LLM 提炼 → 写 Markdown | core / config（独立脚本） |
+| `mindscape_digest` | 认知 | 把「已过完的一天」压成摘要（分层记忆的骨架层） | core / config（独立脚本） |
+| `mindscape_notes` | 认知 | **bot 当场可写的账本**（save_note 工具，原子写） | core / config |
 | `mindscape_stickers` | 表达 | 概率采样图片 → 视觉判定 → 分类入库 | core / config |
 | `mindscape_sticker_use` | 表达 | 选图发送 / 概率强制配图 / 斗图队形 / 存图工具 | core / config |
+| `mindscape_rescue` | 沉浸 | 空回复救援（推理模型只吐 reasoning 时补一次轻量调用） | core / config |
 | `mindscape_format` | 沉浸 | 把多段回复压平 | config |
 | `mindscape_janitor` | 运维 | 会话防膨胀清理 | core / config（独立脚本） |
 
@@ -151,14 +157,21 @@ if result is None or not result.chain:
    -> 追加写入 memory.md 与 people.md
 
 ② 每轮对话：mindscape_memory 挂在 on_llm_request
-      | 读 memory.md 末尾 N 字（硬上限，按条目边界裁剪）
+      | 按四层拼装，每层独立字数预算（硬上限，按条目边界裁剪）：
+      |   规矩（rules）→ 账本（notes.md）→ 摘要（digest.md）→ 原文（memory.md）
       | 拼进 system_prompt
    -> 模型带着「记忆」生成回复
 
-③ 用户问「几天前的事」
+③ bot 自己记一笔：聊到需要记住的细节
+      | 模型调用 save_note(key, value)
+      | 同名就地覆盖并挪到末尾（最新的优先被注入）
+   -> 同一件细节不会每次答得不一样
+
+④ 用户问「几天前的事」
       | 模型自主调用 recall_memory(keyword)
       | 混合检索：完整子串命中 100 分；
       |           否则去掉虚词后按命中率给分，命中率 < 60% 直接判为不相关
+      | 结果里报**真实命中总数**，并提示「命中条数 ≠ 个数」「转述 ≠ 事实」
       | 返回带时间戳的原文，并附「只依据这些回答，没有就说想不起来」
 ```
 
