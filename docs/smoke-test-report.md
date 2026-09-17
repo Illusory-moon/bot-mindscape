@@ -63,6 +63,44 @@
 
 **解法**：每个 Mixin 用独立前缀（`s_c` / `u_c` / `f_c` / `m_cfg` / `g_c`）。
 
+### B07 · 空回复救援挂在了永远不触发的钩子上
+
+**现象**：推理模型偶尔只输出 `reasoning_content`、`completion_text` 为空，
+框架记一句 `LLM returned empty assistant message with no tool calls.` 之后静默跳过。
+给这种情况写的救援模块挂在 `on_decorating_result` 上，**从未触发过**。
+
+**根因**：`result_decorate/stage.py` 第一句就是
+
+```python
+result = event.get_result()
+if result is None or not result.chain:
+    return
+```
+
+空回复**恰恰没有 chain** —— 装饰阶段直接提前返回，装饰钩子根本不会被派发。
+挂在「结果已经成形之后」的地方去救「结果没能成形」的情况，是自相矛盾的。
+
+**解法**：改挂 `@filter.on_llm_response()`。它由 agent 的 `on_agent_done` 派发
+（`tool_loop_agent_runner._complete_with_assistant_response`，即「无工具调用的终止步」），
+此时 `final_llm_resp` 就是同一个对象，改写 `completion_text` 会被
+`internal.py` 的 `if final_llm_resp.completion_text:` 直接采用。
+
+**回归**：`R12`（断言救援挂在 `on_llm_response` 上，且代码里不出现 `on_decorating_result`）。
+
+### B08 · 滑动窗口在「单个块超预算」时返回空 —— bot 彻底失忆
+
+**现象**：注入长期记忆后，bot 表现为**完全不记得任何人**，而日志显示注入成功（0 字）。
+
+**根因**：`read_recent` 以「条目块」为单位从文件尾部向前累加，块太大就整块丢弃
+（宁可缺，不可断）。但一份**成长记录整段就是一个块**（标题之间的连续非空行会被合并），
+实测 2385 字。配上 2000 字预算时，最新那块自己就超预算 → 直接 `break` →
+**返回空字符串**。越是「只记最近」的场景，越容易踩到。
+
+**解法**：最新一块自己就超预算时，退一步取**这一块的尾部**并按行截断
+（宁可少记，不能全忘）；更旧的块仍然整块丢弃。
+
+**回归**：`R11`（60 条的大块 + 300 字预算，必须非空且含尾部关键词）。
+
 ## 三、架构上的两个硬约束（实测确认）
 
 1. **插件之间不能互相 import** —— 框架把每个插件当独立包（`plugins.<name>.main`）加载
@@ -93,7 +131,7 @@ cp dist/mindscape/* <框架>/data/plugins/mindscape/
 cp config/config.example.yaml ~/.mindscape/config.yaml
 
 # 4) 重启框架，观察日志应出现：
-#    [mindscape] 插件已加载（5 个模块）
+#    [mindscape] 插件已加载（6 个模块）
 
 # 5) 群里问一句「几天前的事」，看是否触发 recall_memory
 ```

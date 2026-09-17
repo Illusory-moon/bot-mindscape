@@ -350,6 +350,20 @@ def check_regressions():
     except Exception as e:
         bad("R11 超大块不丢记忆", str(e)[:140])
 
+    # R12: 空回复救援必须挂在 on_llm_response 上。挂在 on_decorating_result 会
+    #      永远不触发 —— result_decorate/stage.py 开头就是
+    #      `if result is None or not result.chain: return`，而空回复恰恰没有 chain。
+    try:
+        src = open(os.path.join(PLUGINS, "mindscape_rescue.py"), encoding="utf-8").read()
+        code = src.split('"""', 2)[-1]          # 去掉模块 docstring，只查真正的代码
+        has_right = "on_llm_response" in code
+        has_wrong = "on_decorating_result" in code
+        (ok if (has_right and not has_wrong) else bad)(
+            "R12 救援挂在正确的钩子上",
+            "on_llm_response=%s on_decorating_result=%s" % (has_right, has_wrong))
+    except Exception as e:
+        bad("R12 救援挂点", str(e)[:140])
+
     # R05: 同一秒内更大序号的消息不能被漏读
     try:
         import mindscape_diary as MD

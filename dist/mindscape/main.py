@@ -944,9 +944,6 @@ def flatten(text, join_with="，", drop_last_if_short=False, short_len=8):
     return out
 
 
-DEFAULT_TEXT = "……（刚才走神了，你再说一遍？）"
-
-
 def _abs(path):
     if not path:
         return ""
@@ -1632,40 +1629,26 @@ class FormatMixin:
 class RescueMixin:
     def setup(self, context):
         self.r_cfg = cfg.section("rescue") or {}
-        self.r_done = set()          # 防止同一条回复反复救援
         logger.info("[mindscape_rescue] loaded | %s",
                     "启用" if self.r_cfg.get("enabled", True) else "关闭")
 
-    @staticmethod
-    def _is_empty_result(result):
-        """完全没有文字、也没有图片，才算「空回复」。"""
-        try:
-            if (result.get_plain_text() or "").strip():
-                return False
-        except Exception:
-            return False
-        try:
-            for c in (getattr(result, "chain", None) or []):
-                if isinstance(c, Image):
-                    return False
-        except Exception:
-            pass
-        return True
-
-    @filter.on_decorating_result(priority=800)
-    async def rescue_empty(self, event: AstrMessageEvent):
+    @filter.on_llm_response()
+    async def rescue_empty(self, event: AstrMessageEvent, response):
         if not self.r_cfg.get("enabled", True):
             return
         try:
-            result = event.get_result()
-            if result is None or not result.is_llm_result():
+            if response is None:
                 return
-            if not self._is_empty_result(result):
+            # 已经有文字 / 已经带了结果链（比如只发了图）/ 还要调工具，都不算空回复
+            if (getattr(response, "completion_text", "") or "").strip():
+                return
+            if getattr(response, "result_chain", None):
+                return
+            if getattr(response, "tools_call_name", None):
                 return
             text = await self._ask_once(event)
             if text:
-                from astrbot.core.message.components import Plain
-                result.chain.append(Plain(text))
+                response.completion_text = text
                 logger.info("[mindscape_rescue] 空回复已补: %s", text[:40])
         except Exception as e:
             logger.warning("[mindscape_rescue] 救援失败: %s", str(e)[:120])
@@ -1703,7 +1686,6 @@ class RescueMixin:
             txt = (msg.get("content") or "").strip()
             if not txt:
                 txt = (msg.get("reasoning_content") or "").strip()
-            # 极简清洗：去掉可能的引号和前缀
             txt = txt.strip().strip('"').strip("“”").strip()
             if txt and len(txt) > 60:
                 txt = txt[:60]
