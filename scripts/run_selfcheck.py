@@ -520,8 +520,8 @@ def check_regressions():
         bad("R17 模块全局名自洽", str(e)[:140])
 
     # R18: 检索必须「知道自己只看了多少」。
-    #      实测：群里问「现在有几对纯爱」，bot 只在最近窗口里找到一个就答
-    #      「一对」，日记里其实记着好几对 —— 它把「上下文里有的」当成了「全部」。
+    #      实测：bot 只在最近窗口里翻到一个就下了结论，日记里其实记着好几回 ——
+    #      它把「上下文里有的」当成了「全部」。
     #      修法两半：(1) 注入的记忆块写明「这只是最近一部分」+ 何时必须先查；
     #      (2) 检索返回真实命中总数，并给 full 模式供数数用。
     try:
@@ -531,15 +531,15 @@ def check_regressions():
         with open(f, "w", encoding="utf-8") as fp:
             for i in range(40):
                 fp.write("## 2026-01-%02d" % (i % 28 + 1) + chr(10)
-                         + "- 第 %d 对纯爱在群里登记了" % i + chr(10))
-        hits, total = RC.search_diary(f, "纯爱")
+                         + "- 第 %d 条示例记录" % i + chr(10))
+        hits, total = RC.search_diary(f, "示例记录")
         capped = (len(hits) == RC.DEFAULT_LIMIT and total == 40)
-        allhits, total2 = RC.search_diary(f, "纯爱", full=True)
+        allhits, total2 = RC.search_diary(f, "示例记录", full=True)
         full_ok = (len(allhits) == 40 and total2 == 40)
         # 提问用的词常常不是记日记用的词：允许给一组近义词，命中任意一个都算
-        syn = RC.split_terms("纯爱 情侣,登记")
-        multi, mtotal = RC.search_diary(f, "完全对不上的词 纯爱")
-        multi_ok = (syn == ["纯爱", "情侣", "登记"] and mtotal == 40)
+        syn = RC.split_terms("示例记录 近义词甲,近义词乙")
+        multi, mtotal = RC.search_diary(f, "完全对不上的词 示例记录")
+        multi_ok = (syn == ["示例记录", "近义词甲", "近义词乙"] and mtotal == 40)
         # 结果文案不能谎报「全部」—— full 模式被 FULL_CAP 截断时也必须说清。
         # 曾经这里写「全部 87 条」而只列了 80 条，等于自己又犯了「把看到的
         # 当成全部」这个毛病。
