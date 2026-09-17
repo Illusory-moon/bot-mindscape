@@ -75,6 +75,142 @@ def read_text(path, limit=None):
         return "(读取失败: %s)" % str(e)[:100]
 
 
+JS = r"""const TK = '@@TOKEN@@';
+const ITEMS = @@ITEMS@@;
+const K_TAB = 'mindscape.tab';
+const K_CFG = 'mindscape.draft.config';
+const K_ITEM = 'mindscape.draft.item.';
+let CUR = null;
+
+// 草稿存取：写不进去也只是丢草稿，绝不能让功能挂掉
+function ls(k, v){
+  try {
+    if (v === undefined) return localStorage.getItem(k);
+    if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v);
+  } catch (e) {}
+  return null;
+}
+
+function show(i, btn){
+  document.querySelectorAll('.panel').forEach((p,n)=>p.classList.toggle('on',n===i));
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));
+  const b = btn || document.querySelectorAll('.tabs button')[i];
+  if (b) b.classList.add('on');
+  ls(K_TAB, String(i));
+}
+
+async function post(url, body){
+  const r = await fetch(url, {method:'POST', headers:{'X-Mindscape-Token':TK}, body:body});
+  return await r.json();
+}
+
+// ── 配置页：边打边存草稿，浏览器丢标签页 / 误刷新都不会白改 ──
+function cfgDirty(){
+  const el = document.getElementById('cfg');
+  return !!(el && el.value !== el.defaultValue);
+}
+function cfgRestore(){
+  const el = document.getElementById('cfg');
+  const d = ls(K_CFG);
+  if (d !== null && d !== el.value){
+    el.value = d;
+    document.getElementById('cmsg').textContent = '（已恢复上次没保存的草稿）';
+  }
+}
+async function saveCfg(){
+  const el = document.getElementById('cfg');
+  const j = await post('/api/config', el.value);
+  document.getElementById('cmsg').textContent = j.ok ? '已保存' : ('失败: ' + j.error);
+  if (j.ok){ el.defaultValue = el.value; ls(K_CFG, null); }
+}
+
+// ── 图库：弹窗编辑，保存后【就地更新卡片】，不刷新页面 ──
+function updateCard(it){
+  const fig = document.querySelector('figure[data-i="' + it.i + '"]');
+  if (!fig) return;
+  const n = fig.querySelector('.cname'); if (n) n.textContent = it.name || '?';
+  const d = fig.querySelector('.cdesc'); if (d) d.textContent = it.desc || '';
+  const t = fig.querySelector('.ctags');
+  if (t){
+    t.innerHTML = (it.tags || '').split(/\s+/).filter(x=>x).slice(0,5)
+      .map(x=>'<span class="tag">' + x.replace(/[<>&"]/g,'') + '</span>').join('');
+  }
+}
+function editItem(cat, file){
+  const it = ITEMS.find(x => x.cat === cat && x.file === file);
+  if (!it) return;
+  CUR = it;
+  let d = null;
+  const draft = ls(K_ITEM + cat + '|' + file);
+  if (draft){ try { d = JSON.parse(draft); } catch(e){} }
+  document.getElementById('mimg').src = '/img/' + encodeURIComponent(file);
+  document.getElementById('mname').value = (d && d.name) || it.name;
+  document.getElementById('mtags').value = (d && d.tags) || it.tags;
+  document.getElementById('mdesc').value = (d && d.desc) || it.desc;
+  document.getElementById('mmsg').textContent = d ? '（已恢复未保存的改动）' : '';
+  document.getElementById('modal').classList.add('on');
+  document.getElementById('mname').focus();
+}
+function closeModal(){
+  document.getElementById('modal').classList.remove('on');
+  CUR = null;
+}
+function mDraft(){
+  if (!CUR) return;
+  ls(K_ITEM + CUR.cat + '|' + CUR.file, JSON.stringify({
+    name: document.getElementById('mname').value,
+    tags: document.getElementById('mtags').value,
+    desc: document.getElementById('mdesc').value
+  }));
+}
+async function saveItem(){
+  if (!CUR) return;
+  const it = CUR;
+  const vals = {
+    category: it.cat, file: it.file,
+    name: document.getElementById('mname').value,
+    tags: document.getElementById('mtags').value,
+    desc: document.getElementById('mdesc').value
+  };
+  const j = await post('/api/stickers/edit', JSON.stringify(vals));
+  document.getElementById('mmsg').textContent = j.ok ? '已保存' : ('失败: ' + j.error);
+  if (!j.ok) return;
+  ls(K_ITEM + it.cat + '|' + it.file, null);
+  it.name = vals.name; it.tags = vals.tags; it.desc = vals.desc;
+  updateCard(it);
+  setTimeout(closeModal, 450);
+}
+async function removeItem(cat, file){
+  if (!confirm('移除「' + file + '」？（图片文件会保留）')) return;
+  const j = await post('/api/stickers/remove', JSON.stringify({category:cat, file:file}));
+  if (!j.ok){ alert('失败: ' + j.error); return; }
+  const it = ITEMS.find(x => x.cat === cat && x.file === file);
+  const fig = it ? document.querySelector('figure[data-i="' + it.i + '"]') : null;
+  if (fig) fig.remove();
+}
+async function doSync(a){
+  document.getElementById('smsg').textContent = '处理中...';
+  const j = await post('/api/sync/' + a, '');
+  document.getElementById('smsg').textContent = j.ok ? j.message : ('失败: ' + j.error);
+  if (a !== 'status' && j.ok) setTimeout(()=>location.reload(), 900);
+}
+
+// ── 启动 ──
+['mname','mtags','mdesc'].forEach(id => document.getElementById(id).addEventListener('input', mDraft));
+document.getElementById('cfg').addEventListener('input', function(){
+  ls(K_CFG, document.getElementById('cfg').value);
+});
+document.getElementById('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+// 真有没保存的东西时，拦一下刷新/关闭
+window.addEventListener('beforeunload', e => {
+  if (cfgDirty() || CUR){ e.preventDefault(); e.returnValue = ''; }
+});
+cfgRestore();
+show(parseInt(ls(K_TAB) || '0', 10) || 0, null);
+"""
+
+
 PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <title>bot-mindscape 管理台</title><style>
 body{{background:#14121a;color:#eee;font-family:system-ui,sans-serif;margin:0;padding:20px}}
@@ -107,6 +243,21 @@ h2.cat span{{color:#6f6880;font-weight:400;font-size:12px;margin-left:8px}}
 .hint{{color:#8b83a0;font-size:12px;line-height:1.8;background:#1b1823;border:1px solid #332c42;
 border-radius:8px;padding:10px 12px;margin:10px 0}}
 code{{background:#2a2436;padding:1px 6px;border-radius:4px;color:#e9b7d4;font-size:12px}}
+.modal{{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;
+align-items:center;justify-content:center}}
+.modal.on{{display:flex}}
+.mbox{{background:#1e1b26;border:1px solid #3d3450;border-radius:12px;padding:18px;
+width:470px;max-width:92vw;max-height:90vh;overflow:auto}}
+.mbox h3{{margin:0 0 12px;color:#e85a9b;font-size:15px}}
+.mbox img{{width:100%;max-height:180px;object-fit:contain;background:#0d0b12;border-radius:8px}}
+.mbox label{{display:block;font-size:12px;color:#9a93ad;margin:12px 0 4px}}
+.mbox input,.mbox textarea{{width:100%;box-sizing:border-box;background:#14121a;color:#eee;
+border:1px solid #3d3450;border-radius:6px;padding:7px 9px;font-size:13px;font-family:inherit}}
+.mbox textarea{{height:70px;resize:vertical}}
+.mrow{{margin-top:14px;display:flex;align-items:center}}
+.btn2{{background:#2c2438;color:#ddd;border:1px solid #3d3450;padding:8px 18px;
+border-radius:6px;cursor:pointer;margin-top:8px;margin-left:8px}}
+.btn2:hover{{border-color:#e85a9b}}
 </style></head><body>
 <h1>bot-mindscape 管理台</h1>
 <div class="tabs">
@@ -134,45 +285,25 @@ code{{background:#2a2436;padding:1px 6px;border-radius:4px;color:#e9b7d4;font-si
 
 <div class="panel"><pre>{memory}</pre></div>
 
-<script>
-function show(i,btn){{
-  document.querySelectorAll('.panel').forEach((p,n)=>p.classList.toggle('on',n===i));
-  document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));
-  btn.classList.add('on');
-}}
-const TK = '{token}';
-async function post(url, body){{
-  const r = await fetch(url, {{method:'POST', headers:{{'X-Mindscape-Token':TK}}, body:body}});
-  return await r.json();
-}}
-async function saveCfg(){{
-  const j = await post('/api/config', document.getElementById('cfg').value);
-  document.getElementById('cmsg').textContent = j.ok ? '已保存' : ('失败: ' + j.error);
-}}
-async function doSync(a){{
-  document.getElementById('smsg').textContent = '处理中...';
-  const j = await post('/api/sync/' + a, '');
-  document.getElementById('smsg').textContent = j.ok ? j.message : ('失败: ' + j.error);
-  if (a !== 'status') setTimeout(()=>location.reload(), 900);
-}}
-async function editItem(cat, file){{
-  const name = prompt('名称：');
-  if (name === null) return;
-  const tags = prompt('标签（空格分隔）：');
-  if (tags === null) return;
-  const desc = prompt('描述：');
-  if (desc === null) return;
-  const j = await post('/api/stickers/edit', JSON.stringify({{category:cat, file:file, name:name, tags:tags, desc:desc}}));
-  alert(j.ok ? j.message : ('失败: ' + j.error));
-  if (j.ok) location.reload();
-}}
-async function removeItem(cat, file){{
-  if (!confirm('移除「' + file + '」？（图片文件会保留）')) return;
-  const j = await post('/api/stickers/remove', JSON.stringify({{category:cat, file:file}}));
-  alert(j.ok ? j.message : ('失败: ' + j.error));
-  if (j.ok) location.reload();
-}}
-</script></body></html>"""
+<div class="modal" id="modal">
+  <div class="mbox">
+    <h3>编辑表情包</h3>
+    <img id="mimg" alt="">
+    <label>名称</label>
+    <input id="mname" placeholder="给它起个名">
+    <label>标签（空格分隔）</label>
+    <input id="mtags" placeholder="无语 嫌弃 敷衍">
+    <label>描述</label>
+    <textarea id="mdesc" placeholder="什么场合适合用这张"></textarea>
+    <div class="mrow">
+      <button class="btn" onclick="saveItem()">保存</button>
+      <button class="btn2" onclick="closeModal()">关闭</button>
+      <span class="msg" id="mmsg"></span>
+    </div>
+  </div>
+</div>
+
+<script>__JS__</script></body></html>"""
 
 
 def render():
@@ -195,6 +326,24 @@ def render():
         if str(it.get("file") or ""):
             by_cat.setdefault(str(it.get("category") or ""), []).append(it)
 
+    # 编辑弹窗要拿「当前值」；顺便给每张卡片编号，保存后好【就地更新】
+    # （以前 saveItem 里是 location.reload()，刷新会跳回第一个标签页、还会丢草稿）
+    items = []
+    item_index = {}
+    for it in idx:
+        fn = str(it.get("file") or "")
+        if not fn:
+            continue
+        cat = str(it.get("category") or "")
+        item_index[(cat, fn)] = len(items)
+        items.append({
+            "i": len(items), "cat": cat, "file": fn,
+            "name": str(it.get("name") or ""),
+            "tags": " ".join(str(x) for x in (it.get("tags") or [])),
+            "desc": str(it.get("desc") or ""),
+        })
+    items_js = json.dumps(items, ensure_ascii=False)
+
     def figure(it):
         fn = str(it.get("file") or "")
         cat = str(it.get("category") or "")
@@ -202,14 +351,17 @@ def render():
                        % html.escape(str(t)) for t in (it.get("tags") or [])[:5])
         esc_cat = html.escape(cat, quote=True)
         esc_fn = html.escape(fn, quote=True)
+        n = item_index.get((cat, fn), -1)
         return (
-            '<figure><img loading="lazy" src="/img/%s"><figcaption><b>%s</b>'
-            '<div style="font-size:10px;color:#5d5768">%s</div>%s'
-            '<p style="margin:4px 0 0;font-size:11px">%s</p>'
+            '<figure data-i="%d"><img loading="lazy" src="/img/%s">'
+            '<figcaption><b class="cname">%s</b>'
+            '<div style="font-size:10px;color:#5d5768">%s</div>'
+            '<span class="ctags">%s</span>'
+            '<p class="cdesc" style="margin:4px 0 0;font-size:11px">%s</p>'
             '<div class="row"><button onclick="editItem(\'%s\',\'%s\')">编辑</button>'
             '<button onclick="removeItem(\'%s\',\'%s\')">移除</button></div>'
             '</figcaption></figure>' % (
-                urllib.parse.quote(fn), html.escape(str(it.get("name") or "?")),
+                n, urllib.parse.quote(fn), html.escape(str(it.get("name") or "?")),
                 html.escape(cat), tags, html.escape(str(it.get("desc") or "")),
                 esc_cat, esc_fn, esc_cat, esc_fn))
 
@@ -222,6 +374,7 @@ def render():
                "".join(figure(it) for it in by_cat[cat])))
     gallery = "".join(blocks) or '<p style="color:#6f6880">图库还是空的</p>'
     gcount = sum(len(v) for v in by_cat.values())
+
 
     # 记忆页：本地配置通常没有 memory.bots（长期记忆在 bot 所在的那台机器上），
     # 空着是正常的 —— 把「为什么空」和「正在读哪个文件」直接写出来。
@@ -247,9 +400,12 @@ def render():
 
     sync_ok = bool(edit) and edit.sync_available()
     syncmsg = "" if sync_ok else "（未配置 ui.sync，同步功能不可用）"
-    return PAGE.format(config=html.escape(raw), gallery=gallery, memory=html.escape(memory),
+    page = PAGE.format(config=html.escape(raw), gallery=gallery, memory=html.escape(memory),
                        token=TOKEN, syncmsg=html.escape(syncmsg),
                        gdir=html.escape(stickers_dir()), gcount=gcount)
+    # JS 走占位符注入，不进 str.format —— 否则 JS 里每个花括号都要手写双份
+    return page.replace("__JS__", JS.replace("@@TOKEN@@", TOKEN)
+                                 .replace("@@ITEMS@@", items_js))
 
 
 class Handler(BaseHTTPRequestHandler):
