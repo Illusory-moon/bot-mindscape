@@ -607,6 +607,37 @@ def check_regressions():
     except Exception as e:
         bad("R20 账本", str(e)[:140])
 
+    # R21: 采集入库必须有「分辨率闸门」。
+    #      实测：视觉模型把 1920×1200 的原神剧情截图判成了「二次元、可爱」，
+    #      直接进了图库。**体积不是判据**（大 GIF 往往正是最合适的那张），
+    #      **分辨率才是**；而且读文件头是零成本，能挡在视觉判定之前、省一次 API。
+    try:
+        import struct as _st
+        import mindscape_stickers as MS
+        importlib.reload(MS)
+        src = open(os.path.join(PLUGINS, "mindscape_stickers.py"),
+                   encoding="utf-8").read()
+        has_gate = ("def img_size" in src) and ("max_side" in src)
+        cases = [
+            (b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+             + _st.pack(">II", 1920, 1200) + b"\x00" * 32, (1920, 1200), "png"),
+            (b"GIF89a" + _st.pack("<HH", 500, 400) + b"\x00" * 32, (500, 400), "gif"),
+            (b"\xff\xd8\xff\xc0" + _st.pack(">H", 17) + b"\x08"
+             + _st.pack(">HH", 1080, 1920) + b"\x00" * 32, (1920, 1080), "jpg"),
+        ]
+        f = os.path.join(HERE, "_sc_size.bin")
+        got = {}
+        for data, want, tag in cases:
+            with open(f, "wb") as fp:
+                fp.write(data)
+            got[tag] = (MS.img_size(f) == want)
+        os.remove(f)
+        (ok if (has_gate and all(got.values())) else bad)(
+            "R21 采集有分辨率闸门",
+            "闸门=%s %s" % (has_gate, " ".join("%s=%s" % (k, v) for k, v in got.items())))
+    except Exception as e:
+        bad("R21 分辨率闸门", str(e)[:140])
+
     # R05: 同一秒内更大序号的消息不能被漏读
     try:
         import mindscape_diary as MD

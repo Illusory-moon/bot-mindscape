@@ -17,6 +17,7 @@ import json
 import os
 import random
 import shutil
+import struct
 import time
 
 from astrbot.api import logger, star
@@ -27,6 +28,60 @@ from astrbot.core.star.filter.event_message_type import EventMessageType
 import mindscape_config as cfg
 from mindscape_core import (DEFAULT_PROMPT, IndexLock, abs_path, load_index,
                            match_score, parse_verdict, save_index, verdict_ok)
+
+
+def img_size(path):
+    """只读文件头拿宽高，不依赖 Pillow。
+
+    为什么需要它：采集器靠视觉模型判断「像不像这个 bot 的图」，
+    但模型经常把游戏截图/壁纸也判成「二次元、可爱」—— 实测抓到过
+    1920×1200 的原神剧情截图。**分辨率是这个误判最可靠的铁证**，
+    而且读文件头几乎是零成本，能在调用视觉模型之前就挡掉。
+
+    刻意**不按文件体积**判断：大 GIF 往往正是最合适的那张（动图帧多自然大），
+    压缩或者丢弃都会把好东西扔掉。
+
+    拿不到尺寸时返回 (0, 0)，调用方放行（宁可漏过，不可误杀）。
+    """
+    try:
+        with open(path, "rb") as f:
+            b = f.read(65536)
+    except Exception:
+        return 0, 0
+    if len(b) < 24:
+        return 0, 0
+    if b[:8] == b"\x89PNG\r\n\x1a\n":
+        return struct.unpack(">II", b[16:24])
+    if b[:3] == b"GIF":
+        return struct.unpack("<HH", b[6:10])
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+        fmt = b[12:16]
+        if fmt == b"VP8X":
+            return (1 + b[24] + (b[25] << 8) + (b[26] << 16),
+                    1 + b[27] + (b[28] << 8) + (b[29] << 16))
+        if fmt == b"VP8 ":
+            return (struct.unpack("<H", b[26:28])[0] & 0x3FFF,
+                    struct.unpack("<H", b[28:30])[0] & 0x3FFF)
+        if fmt == b"VP8L":
+            bits = b[21] | (b[22] << 8) | (b[23] << 16) | (b[24] << 24)
+            return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+        return 0, 0
+    if b[:2] == b"\xff\xd8":
+        i = 2
+        while i < len(b) - 9:
+            if b[i] != 0xFF:
+                i += 1
+                continue
+            m = b[i + 1]
+            if m in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+                     0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                h, w = struct.unpack(">HH", b[i + 5:i + 9])
+                return w, h
+            if m in (0xD8, 0xD9) or 0xD0 <= m <= 0xD7:
+                i += 2
+                continue
+            i += 2 + struct.unpack(">H", b[i + 2:i + 4])[0]
+    return 0, 0
 
 
 def st_abs(path):
@@ -131,6 +186,19 @@ class StickersMixin:
         key = category + ":" + h
         if key in self.seen:
             return
+
+        # 分辨率闸门：尺寸过大的一律视为「抓错了」（游戏截图 / 壁纸 / 壁纸级同人图），
+        # 直接不入库。放在视觉判定之前 —— 既省一次 API，也不必把几 MB 的图 base64
+        # 传上去。（判据用分辨率而不是体积，理由见 img_size 的注释。）
+        max_side = int((self.s_c.get("judge") or {}).get("max_side") or 0)
+        if max_side > 0:
+            w, h = img_size(path)
+            if w and h and max(w, h) > max_side:
+                self.seen.add(key)      # 记下：同一张不必反复下载重判
+                self._save_seen()
+                logger.info("[mindscape_stickers] 跳过 %dx%d（超过 %d，疑似截图/壁纸）",
+                            w, h, max_side)
+                return
 
         verdict = await self._judge(path)
         if verdict is None:
