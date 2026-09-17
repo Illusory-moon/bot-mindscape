@@ -24,14 +24,33 @@
 
 ### 一、认知层 Cognition —— 治「金鱼记忆」
 
+记忆不是「一段越堆越长的文本」，而是**四层**，按由近及远注入：
+
+| 层 | 谁写的 | 解决什么 |
+|---|---|---|
+| **规矩** | 你写在配置里（`bots[].rules`） | 这个 bot 的行为约束，随记忆一起进 prompt |
+| **账本** | **bot 当场写**（工具 `save_note`） | 「细节」从此有稳定答案，不再每次现编 |
+| **摘要** | 后台每天生成 | 「昨天」压成骨架，几乎不吃窗口预算 |
+| **原文** | 后台从聊天流提炼 | 逐条事件，提供细节与口吻 |
+
 | 模块 | 职责 |
 |---|---|
-| `mindscape_memory` | **滑动窗口注入** —— 每轮请求只带最近 N 字记忆，永不膨胀 |
-| `mindscape_diary` | **结构化长期记忆** —— LLM 从聊天流提炼事件，写成可读的 Markdown 日记 |
-| `mindscape_recall` | **混合检索 + 证据约束** —— 精确 + 模糊匹配，且强制「只依据检索结果回答」 |
-| `mindscape_diary`（附带） | **人物画像** —— 日记同时产出 people.md，memory 会一并注入 |
+| `mindscape_memory` | **分层注入** —— 按 规矩 → 账本 → 摘要 → 原文 拼装，每层独立字数预算，永不膨胀 |
+| `mindscape_diary` | **结构化长期记忆** —— LLM 从聊天流提炼事件，写成人类可读的 Markdown；顺带产出人物画像 |
+| `mindscape_digest` | **每日摘要** —— 把「已过完的一天」压成一句话，为每个日期只调一次 LLM |
+| `mindscape_notes` | **可写的账本** —— 给 bot 一个 `save_note` 工具，它当场就能落笔 |
+| `mindscape_recall` | **混合检索 + 边界自知** —— 精确 + 模糊匹配，多词检索，且明说「这只是最近一部分」 |
 
 **设计要点**：记忆存在人类可读的 Markdown 里，不锁在数据库。
+
+#### 单一记忆文件的四种死法（本项目全堵了）
+
+| 症状 | 根因 | 解法 |
+|---|---|---|
+| **每天忘了昨天** | 滑动窗口 2500 字 ÷ 日均一万多字 ≈ 只覆盖几小时，bot 每天醒来都是全新的一天 | **摘要层**：骨架永远在 |
+| **细节没有稳定答案** | 日记是后台写的、摘要是后台生成的、检索只读 —— bot 能承诺却没地方落笔，同一件事问六轮能答六个样 | **账本层**：bot 当场能写 |
+| **检索不知道自己的边界** | bot 把「上下文里没有」当成「不存在」，随口给个答案 | 注入块明说边界 + 检索报**真实命中总数**，并提示「命中条数 ≠ 个数」 |
+| **把转述当成事实** | 「他讲过这句话」和「这是真的」被混为一谈 | 注入与检索都标注**转述 ≠ 事实** |
 
 ### 二、表达层 Expression —— 治「文字机器」
 
@@ -49,6 +68,7 @@
 |---|---|
 | `mindscape_guard` | **错误拦截** —— 经该钩子的常见错误文本（API Error / Timeout / Traceback）会被吞掉，不会发出去 |
 | `mindscape_format` | **输出规范化** —— 压平多行、去除 AI 腔 |
+| `mindscape_rescue` | **空回复救援** —— 推理模型只吐 reasoning、正文为空时，补一次轻量调用兜住 |
 | `mindscape_silence`（规划中） | **静默规则** —— 该不说话的时候，真的不说话 |
 
 **设计要点**：这是同类项目几乎没人做的一层。
@@ -67,7 +87,6 @@
 
 ---
 
-## 运维层（原第四层改编号为第五层）
 ### 五、运维层 Ops —— 治「假死」
 
 | 模块 | 职责 |
@@ -87,6 +106,8 @@
 2. **部署极简** —— 配置文件驱动，不需要改源码
 3. **报错拦截** —— 目前几乎没有项目做过这一层；
    即使服务器炸了，正在 role-play 的 bot **也不会吐出一句冷冰冰的 API Error**
+4. **记忆会分层，而且 bot 能自己记** —— 大多数「长期记忆」只是把历史切片塞进 prompt；
+   这里是 规矩 / 账本 / 摘要 / 原文 四层，且**细节由 bot 当场记账**，而不是事后编
 
 ---
 
@@ -125,19 +146,43 @@ python scripts/config_gui.py         # 生成配置
 
 ## 配置示例
 
+完整版见 [`config/config.example.yaml`](config/config.example.yaml)，这里只挑记忆相关的核心项：
+
 ```yaml
 memory:
+  max_chars: 2500          # 每轮注入的总字数预算
+  digest_chars: 1200       #   其中「摘要层」
+  notes_chars: 800         #   其中「账本层」
   bots:
-    - self_id: "20000000"          # 你的 bot QQ 号
-    name: "bot-name"             # 显示名
-    diary: "./data/bot-name.md"  # 长期记忆文件
-    memory_chars: 2500            # 每轮注入的记忆字数
+    - self_id: "20000000"
+      name: "bot-name"
+      diary: "./data/bot-name.md"            # 原文层：逐条事件
+      digest: "./data/bot-name.digest.md"    # 摘要层：每天一句骨架
+      notes: "./data/bot-name.notes.md"      # 账本层：工具 save_note 维护
+      people: "./data/bot-name.people.md"    # 人物画像
+      people_chars: 800
+      rules:                                 # 规矩层：这个 bot 自己的行为约束
+        - "被点名时必须回复"
+      extra_diaries: []                      # 还能把别处的文件并进原文层
+
+digest:                    # 每日摘要生成：把「昨天」压成骨架
+  enabled: true
+  targets:
+    - name: "bot-name"
+      diary: "./data/bot-name.md"
+      output: "./data/bot-name.digest.md"
+  min_entries: 3           # 少于这么多条的一天不生成
+  keep_days: 30
+  max_per_run: 3           # 单次最多补几天（首次回填分几次跑完）
 
 stickers:
-  sample_prob: 0.10               # 图片采样概率
-  categories:                     # 图库分类隔离
-    - bot-name
-    - general
+  sample_prob: 0.10                    # 图片采样概率
+  targets:
+    - self_id: "20000000"
+      category: "bot-name"             # 图库分类隔离，不同 bot 互不串味
+  judge:
+    persona: "一名温柔的学生少女"
+    max_side: 1200                     # 任一边超过这个像素数就不入库
 
 guard:
   patterns:
