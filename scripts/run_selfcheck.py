@@ -753,6 +753,82 @@ def check_regressions():
     except Exception as e:
         bad("R23 引用图片", str(e)[:140])
 
+    # R24: 去重表（seen.json）要能自愈。
+    #      病根：从 WebUI 删掉图库条目时，seen 里的去重记录不会跟着删，于是留下
+    #      一条**墓碑** —— collect 第一件事就是 `if key in self.seen: return`，
+    #      所以那张图再发一次也收不进来，用户看到的是「删了以后就再也收不回来」。
+    #      文件名就是 md5 的前 10 位，所以只比对前缀，不用重新哈希整个图库。
+    try:
+        import json as _js
+        import mindscape_stickers as MS3
+        importlib.reload(MS3)
+
+        work = os.path.join(HERE, "_sc_seen")
+        if not os.path.isdir(work):
+            os.makedirs(work)
+        # 图库里真放一张图（内容 md5 决定它的去重键）；另有 2 条对不上的
+        import hashlib as _hl
+        blob = b"\x89PNG\r\n\x1a\n" + b"x" * 64
+        real = _hl.md5(blob).hexdigest()
+        live_key = "catA:" + real
+        dead_key = "catA:" + "f" * 32
+        dead2 = "catB:" + "0" * 32
+        ifile = os.path.join(work, "index.json")
+        sfile = os.path.join(work, "seen.json")
+        with open(os.path.join(work, real[:10] + ".gif"), "wb") as fp:
+            fp.write(blob)
+        with open(ifile, "w", encoding="utf-8") as fp:
+            _js.dump([{"file": real[:10] + ".gif", "category": "catA"}], fp)
+        with open(sfile, "w", encoding="utf-8") as fp:
+            _js.dump([live_key, dead_key, dead2], fp)
+
+        class _S:
+            pass
+
+        s = _S()
+        s.seen_path = sfile
+        s.index_path = ifile
+        s.dir = work
+        s._save_seen = lambda: None
+        kept = MS3.StickersMixin._load_seen(s)
+
+        # 带前缀的文件名不能被误判成墓碑（catA_<md5>.gif 的前缀不是 md5）
+        pf = "catA_" + real[:10] + ".gif"
+        os.rename(os.path.join(work, real[:10] + ".gif"), os.path.join(work, pf))
+        with open(ifile, "w", encoding="utf-8") as fp:
+            _js.dump([{"file": pf, "category": "catA"}], fp)
+        with open(sfile, "w", encoding="utf-8") as fp:
+            _js.dump([live_key], fp)
+        s3 = _S()
+        s3.seen_path = sfile
+        s3.index_path = ifile
+        s3.dir = work
+        s3._save_seen = lambda: None
+        prefixed_ok = (MS3.StickersMixin._load_seen(s3) == {live_key})
+        with open(sfile, "w", encoding="utf-8") as fp:
+            _js.dump([live_key, dead_key], fp)
+
+        # 坏文件不能炸：seen.json 写成乱七八糟的，应返回空集
+        with open(sfile, "w", encoding="utf-8") as fp:
+            fp.write("{not a list")
+        s2 = _S()
+        s2.seen_path = sfile
+        s2.index_path = ifile
+        s2.dir = work
+        s2._save_seen = lambda: None
+        bad_ok = (MS3.StickersMixin._load_seen(s2) == set())
+
+        prune_ok = (kept == {live_key})
+        for n in os.listdir(work):
+            os.remove(os.path.join(work, n))
+        os.rmdir(work)
+        (ok if (prune_ok and bad_ok and prefixed_ok) else bad)(
+            "R24 去重表自愈",
+            "只留现存=%s 坏文件不炸=%s 带前缀不误杀=%s"
+            % (prune_ok, bad_ok, prefixed_ok))
+    except Exception as e:
+        bad("R24 去重表自愈", str(e)[:140])
+
     # R05: 同一秒内更大序号的消息不能被漏读
     try:
         import mindscape_diary as MD

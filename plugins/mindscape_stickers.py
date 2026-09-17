@@ -140,11 +140,40 @@ class StickersMixin:
         try:
             with open(self.seen_path, encoding="utf-8") as f:
                 d = json.load(f)
-            if isinstance(d, list):
-                return set(d)
         except Exception:
-            pass
-        return set()
+            return set()
+        if not isinstance(d, list):
+            return set()
+        keys = set(d)
+        # 自愈：去重表的条目在「图库条目被删」之后不会跟着删，于是变成**墓碑** ——
+        # 那张图再发一次也不会被采集，用户看到的是「删掉以后就再也收不回来」。
+        #
+        # 判据必须用**内容的 md5**，不能拿文件名前缀凑：导入脚本会把文件重命名成
+        # 「<前缀>_xxxx.gif」，前缀就不再是 md5 了 —— 用前缀匹配会把真实存在的图
+        # 误判成墓碑，去重记录一丢，那张图重发就会以原名再入一份（造出重复）。
+        # ponytail: 这里把整个图库哈希一遍（目前 51 张 / 54MB，约 0.2s，只在启动时做）。
+        #            图库涨到几百 MB 就该改成 sidecar 的 md5 清单。
+        try:
+            live = set()
+            for x in (load_index(self.index_path) or []):
+                fn = str(x.get("file") or "")
+                if not fn:
+                    continue
+                with open(os.path.join(self.dir, fn), "rb") as fp:
+                    live.add(str(x.get("category") or "") + ":"
+                             + hashlib.md5(fp.read()).hexdigest())
+            kept = set()
+            for k in keys:
+                if k in live:
+                    kept.add(k)
+            if kept != keys:
+                self.seen = kept
+                self._save_seen()
+                logger.info("[mindscape_stickers] 去重表自愈：%d -> %d（清掉 %d 条墓碑）",
+                            len(keys), len(kept), len(keys) - len(kept))
+            return kept
+        except Exception:
+            return keys
 
     def _save_seen(self):
         try:

@@ -66,6 +66,61 @@ def index_path():
     return _abs(s.get("index") or os.path.join(stickers_dir(), "index.json"))
 
 
+def seen_path():
+    s = (cfg.section("stickers") if cfg else {}) or {}
+    return _abs(s.get("seen") or os.path.join(stickers_dir(), "seen.json"))
+
+
+def load_seen():
+    try:
+        with open(seen_path(), encoding="utf-8") as f:
+            d = json.load(f)
+        return [str(k) for k in d] if isinstance(d, list) else []
+    except Exception:
+        return []
+
+
+def save_seen(keys):
+    import datetime
+    import shutil
+    p = seen_path()
+    if os.path.exists(p):
+        shutil.copy2(p, p + ".bak-" + datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(sorted(set(keys)), f)
+    os.replace(tmp, p)
+
+
+def seen_rows():
+    """把去重表摊开给主人看。
+
+    bot 用它判断「这张图处理过了，别再折腾」。**删图库条目时它不会跟着删**，
+    于是留下一条墓碑：那张图再发一次也收不进来。这里把墓碑标出来，
+    既能单独解除（我想让它重新判一次），也能一键清理（删错了想收回来）。
+    """
+    keys = load_seen()
+    try:
+        with open(index_path(), encoding="utf-8") as f:
+            idx = json.load(f)
+    except Exception:
+        idx = []
+    name_of = {}
+    for it in (idx if isinstance(idx, list) else []):
+        fn = str(it.get("file") or "")
+        if fn:
+            name_of[str(it.get("category") or "") + ":" + fn[:10]] = \
+                str(it.get("name") or fn)
+    rows = []
+    for k in keys:
+        cat, _, h = k.partition(":")
+        hit = name_of.get(cat + ":" + h[:10])
+        rows.append({"key": k, "cat": cat, "live": bool(hit),
+                     "label": hit or "已不在图库（墓碑）"})
+    rows.sort(key=lambda r: (r["live"], r["cat"], r["key"]))
+    return rows
+
+
 def read_text(path, limit=None):
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -207,6 +262,23 @@ window.addEventListener('beforeunload', e => {
   if (cfgDirty() || CUR){ e.preventDefault(); e.returnValue = ''; }
 });
 cfgRestore();
+async function rmSeen(btn){
+  const tr = btn.closest('tr');
+  const j = await post('/api/seen/remove', JSON.stringify({key: tr.dataset.k}));
+  const m = document.getElementById('kmsg');
+  if (!j.ok) { m.textContent = j.error || '失败'; return; }
+  tr.remove();
+  m.textContent = '已解除：' + tr.dataset.k;
+}
+
+async function pruneSeen(){
+  const m = document.getElementById('kmsg');
+  const j = await post('/api/seen/prune', '');
+  if (!j.ok) { m.textContent = j.error || '失败'; return; }
+  document.querySelectorAll('tr.tomb').forEach(r => r.remove());
+  m.textContent = j.message || '已清理';
+}
+
 show(parseInt(ls(K_TAB) || '0', 10) || 0, null);
 """
 
@@ -258,12 +330,20 @@ border:1px solid #3d3450;border-radius:6px;padding:7px 9px;font-size:13px;font-f
 .btn2{{background:#2c2438;color:#ddd;border:1px solid #3d3450;padding:8px 18px;
 border-radius:6px;cursor:pointer;margin-top:8px;margin-left:8px}}
 .btn2:hover{{border-color:#e85a9b}}
+table.seen{{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}}
+table.seen td{{padding:5px 8px;border-bottom:1px solid #2a2436}}
+table.seen tr.tomb td{{background:#1d1826;color:#8a7f9c}}
+table.seen code{{color:#e85a9b;font-size:11px}}
+table.seen button{{background:#2c2438;color:#ddd;border:1px solid #3d3450;
+padding:2px 10px;border-radius:5px;cursor:pointer}}
+table.seen button:hover{{border-color:#e85a9b}}
 </style></head><body>
 <h1>bot-mindscape 管理台</h1>
 <div class="tabs">
 <button class="on" onclick="show(0,this)">配置</button>
 <button onclick="show(1,this)">图库</button>
 <button onclick="show(2,this)">记忆</button>
+<button onclick="show(3,this)">去重表</button>
 </div>
 
 <div class="panel on">
@@ -284,6 +364,16 @@ border-radius:6px;cursor:pointer;margin-top:8px;margin-left:8px}}
 </div>
 
 <div class="panel"><pre>{memory}</pre></div>
+
+<div class="panel">
+<div class="bar">
+<button onclick="pruneSeen()">清理墓碑</button>
+<span class="msg" id="kmsg"></span>
+</div>
+<p class="hint">bot 靠这张表判断「这张图处理过了」。共 <b>{seencount}</b> 条，
+其中 <b>{stale}</b> 条已不在图库（<b>墓碑</b>）—— 它们会让那张图再发也收不进来。</p>
+<table class="seen">{seenrows}</table>
+</div>
 
 <div class="modal" id="modal">
   <div class="mbox">
@@ -400,9 +490,18 @@ def render():
 
     sync_ok = bool(edit) and edit.sync_available()
     syncmsg = "" if sync_ok else "（未配置 ui.sync，同步功能不可用）"
+    srows = seen_rows()
+    stale_n = sum(1 for r in srows if not r["live"])
+    seenrows = "".join(
+        '<tr%s data-k="%s"><td><code>%s</code></td><td>%s</td>'
+        '<td style="text-align:right"><button onclick="rmSeen(this)">移除</button></td></tr>'
+        % ("" if r["live"] else ' class="tomb"', html.escape(r["key"], quote=True),
+           html.escape(r["cat"]), html.escape(r["label"])) for r in srows
+    ) or '<tr><td colspan="3" style="color:#6f6880">去重表是空的</td></tr>'
     page = PAGE.format(config=html.escape(raw), gallery=gallery, memory=html.escape(memory),
                        token=TOKEN, syncmsg=html.escape(syncmsg),
-                       gdir=html.escape(stickers_dir()), gcount=gcount)
+                       gdir=html.escape(stickers_dir()), gcount=gcount,
+                       seencount=len(srows), stale=stale_n, seenrows=seenrows)
     # JS 走占位符注入，不进 str.format —— 否则 JS 里每个花括号都要手写双份
     return page.replace("__JS__", JS.replace("@@TOKEN@@", TOKEN)
                                  .replace("@@ITEMS@@", items_js))
@@ -527,6 +626,28 @@ class Handler(BaseHTTPRequestHandler):
             ok, msg = edit.remove_item(d.get("category"), d.get("file"),
                                        bool(d.get("delete_file")))
             self._json({"ok": ok, "message" if ok else "error": msg})
+            return
+
+        if path == "/api/seen/remove":
+            try:
+                d = json.loads(body or "{}")
+            except Exception:
+                self._json({"ok": False, "error": "参数不是合法 JSON"})
+                return
+            k = str(d.get("key") or "")
+            keys = load_seen()
+            if k not in keys:
+                self._json({"ok": False, "error": "去重表里没有这条"})
+                return
+            save_seen([x for x in keys if x != k])
+            self._json({"ok": True, "message": "已解除"})
+            return
+
+        if path == "/api/seen/prune":
+            dead = [r["key"] for r in seen_rows() if not r["live"]]
+            keys = load_seen()
+            save_seen([x for x in keys if x not in set(dead)])
+            self._json({"ok": True, "message": "清掉 %d 条墓碑" % len(dead)})
             return
 
         if path.startswith("/api/sync/"):
