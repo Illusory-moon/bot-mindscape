@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """mindscape_web —— 可选的本地 Web 管理台
 
 依赖：PyYAML + Python 标准库（http.server）。默认只监听 127.0.0.1。

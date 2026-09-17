@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """mindscape_sync —— 本地素材库与远程服务器的双向同步
 
 设计目标（易维护优先）：

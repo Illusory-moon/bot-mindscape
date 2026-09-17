@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """mindscape_webedit —— 给 web_ui 打补丁：图库编辑 / 移除 / 同步按钮
 
 作为独立模块被 web_ui.py 调用，避免把 web_ui 撑得太大。
