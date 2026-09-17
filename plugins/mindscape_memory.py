@@ -119,7 +119,7 @@ def read_people(path, max_chars):
     out = "\n".join(lines)
     # ponytail: 这里按从头截断，而画像文件是按昵称排序的 —— 一旦文件超过
     # max_chars，排序靠后的群友会整批消失（实测：2175 字的画像配 800 字预算，
-    # 正好把「重要的人」切掉，bot 于是完全不认得这个人）。当前对策是把
+    # 正好把某位重要的人切掉，bot 于是完全不认得这个人）。当前对策是把
     # people_chars 配足装下整份文件；画像再长大时应改为按「最近出现」挑选条目，
     # 而不是按字母序切。
     return out[:max_chars]

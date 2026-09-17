@@ -1,0 +1,10 @@
+# 只在本地有效的敏感词：你自己的昵称、真名、群号、bot 号、群名、密码片段……
+# 一行一个，# 开头是注释。这些词一旦出现在仓库任何文件里，
+# scripts/run_selfcheck.py 第 4 节「脱敏扫描」就会报错。
+#
+# 用法：复制成 scripts/private-names.txt 再填。
+# 该文件已被 .gitignore 忽略 —— 这份清单本身也是要藏的东西，
+# 所以它不会、也不该出现在仓库里。
+your-nickname
+123456789
+example.com

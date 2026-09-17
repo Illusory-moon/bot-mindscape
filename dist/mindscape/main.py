@@ -450,7 +450,7 @@ def read_people(path, max_chars):
     out = "\n".join(lines)
     # ponytail: 这里按从头截断，而画像文件是按昵称排序的 —— 一旦文件超过
     # max_chars，排序靠后的群友会整批消失（实测：2175 字的画像配 800 字预算，
-    # 正好把「重要的人」切掉，bot 于是完全不认得这个人）。当前对策是把
+    # 正好把某位重要的人切掉，bot 于是完全不认得这个人）。当前对策是把
     # people_chars 配足装下整份文件；画像再长大时应改为按「最近出现」挑选条目，
     # 而不是按字母序切。
     return out[:max_chars]
@@ -835,7 +835,7 @@ def _update_people(path, people, now, relations=None):
     """把人物画像合并进 people.md（同名覆盖，保留最近时间）。
 
     relations 是来自人格档案的权威条目，单独放在文件开头；
-    自动摘要如果提到了权威条目里的人（如「重要的人」出现在
+    自动摘要如果提到了权威条目里的人（如「小爱」出现在
     「Alice（小爱）」中），**不允许**把它写成普通群友。
     """
     relations = [r for r in (relations or []) if str(r).strip()]
@@ -856,7 +856,7 @@ def _update_people(path, people, now, relations=None):
                     existing[k.strip()] = v.strip()
     except Exception:
         pass
-    # 历史上被摘要降级过的条目（比如「重要的人：群友」）也要清掉 ——
+    # 历史上被摘要降级过的条目（比如「某人：群友」）也要清掉 ——
     # 只挡新的不够，旧的那条会一直躺在文件里继续误导 bot。
     for k in [k for k in existing if any(k in h for h in heads)]:
         del existing[k]

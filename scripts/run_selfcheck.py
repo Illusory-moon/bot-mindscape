@@ -213,19 +213,38 @@ def check_functions():
 
 
 # ── 4. 脱敏 ──
+def _private_names():
+    """只在本地有效的敏感词（自己的昵称、真名、群号、bot 号、群名……）。
+
+    刻意**不写进源码**：这份清单本身也会被公开，明文列出来等于把要藏的东西
+    印在封面上 —— 而且扫描器还得为了「不扫自己」开一个例外，越描越黑。
+    改成读 scripts/private-names.txt（一行一个，# 开头是注释，已被 .gitignore
+    忽略）；仓库里只留 .example 模板。文件不存在时这一项自动跳过。
+    """
+    words = []
+    try:
+        with open(os.path.join(HERE, "scripts", "private-names.txt"),
+                  encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    words.append(line)
+    except Exception:
+        pass
+    return words
+
+
 def check_privacy():
     section("4. 脱敏扫描")
-    pats = ["20000000", "20000001", "20000002", "20000003",
-            "bot-name", "bot", "example-bot", "***", "主播腔", "毒舌",
-            "某企划"]
-    SELF = "run_selfcheck.py"     # 本脚本含词表，跳过自身
+    pats = _private_names()
+    SKIP = {"run_selfcheck.py", "private-names.txt", "private-names.example.txt"}
     leaked = []
     for root, dirs, names in os.walk(HERE):
         dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git")]
         for n in names:
             if not n.endswith((".py", ".md", ".yaml", ".json", ".txt")):
                 continue
-            if n == SELF:
+            if n in SKIP:
                 continue
             fp = os.path.join(root, n)
             try:
@@ -242,7 +261,7 @@ def check_privacy():
         for x in leaked:
             bad("泄漏", x)
     else:
-        ok("脱敏", "未发现敏感信息")
+        ok("脱敏", "未发现敏感信息（本地词表 %d 条）" % len(pats))
 
 
 # ── 5. 结构 ──
@@ -333,7 +352,7 @@ def check_regressions():
 
     # R11: 单个块超过预算时不能返回空。实测：一份 2385 字的「成长记录」整段
     #      就是一个块，配上 2000 字预算会整块丢弃 → 返回 0 字，bot 表现为
-    #      「完全不记得任何人」（这正是某个 bot忘了重要的人的机制性原因）。
+    #      「完全不记得任何人」（这就是 bot 忘了某个人的机制性原因）。
     try:
         import mindscape_memory as MM3
         importlib.reload(MM3)
@@ -341,11 +360,11 @@ def check_regressions():
         with open(f, "w", encoding="utf-8") as fp:
             fp.write("## 我的成长记录" + chr(10))
             for i in range(60):
-                fp.write("- 第 %d 条：重要的人是姐姐" % i + chr(10))
+                fp.write("- 第 %d 条：关键词在此" % i + chr(10))
         r = MM3.read_recent(f, 300)
-        good = bool(r) and ("重要的人" in r) and len(r) <= 300
+        good = bool(r) and ("关键词" in r) and len(r) <= 300
         (ok if good else bad)("R11 超大块不丢记忆",
-                              "%d 字，含关键词=%s" % (len(r), "重要的人" in r))
+                              "%d 字，含关键词=%s" % (len(r), "关键词" in r))
         os.remove(f)
     except Exception as e:
         bad("R11 超大块不丢记忆", str(e)[:140])
@@ -365,25 +384,25 @@ def check_regressions():
         bad("R12 救援挂点", str(e)[:140])
 
     # R13: 人物画像必须让「关系与称呼」这类权威条目压过自动摘要。
-    #      实测：重要的人被自动摘要写成「群友，常发图」，而人格档案里她明明是
-    #      「Alice（小爱）→ 喜欢的人」。关系是作者写死的，不该交给摘要模型猜。
+    #      实测：某位重要的人被自动摘要写成「群友，常发图」，而人格档案里她明明是
+    #      「Alice（小爱）→ 重要的人」。关系是作者写死的，不该交给摘要模型猜。
     try:
         import mindscape_diary as MD
         importlib.reload(MD)
         f = os.path.join(HERE, "_sc_people.md")
         # 先放一个「旧格式」文件，确认迁移不会把已有条目整批冲掉
         with open(f, "w", encoding="utf-8") as fp:
-            # 旧格式：没有分段标题，且已经有一条被降级的「重要的人：群友」
+            # 旧格式：没有分段标题，且已经有一条被降级的「小爱：群友」
             fp.write("# 你认识的人（自动维护）" + chr(10) * 2
                      + "最后更新：2026-01-01 00:00" + chr(10) * 2
                      + "- 老条目：迁移前就存在" + chr(10)
-                     + "- 重要的人：群友，常发图" + chr(10))
-        rel = ["- Alice（小爱）→ 喜欢的人，认真对待"]
-        MD._update_people(f, {"重要的人": "群友，常发图", "新群友": "刚进群"},
+                     + "- 小爱：群友，常发图" + chr(10))
+        rel = ["- Alice（小爱）→ 重要的人，认真对待"]
+        MD._update_people(f, {"小爱": "群友，常发图", "新群友": "刚进群"},
                           "2026-01-02 00:00", rel)
         got = open(f, encoding="utf-8").read()
         kept_old = "老条目" in got
-        pinned = "喜欢的人" in got
+        pinned = "重要的人" in got
         not_downgraded = ("群友，常发图" not in got) and ("群友，发图" not in got)
         added_new = "新群友" in got
         (ok if (kept_old and pinned and not_downgraded and added_new) else bad)(
@@ -402,12 +421,12 @@ def check_regressions():
         with open(f, "w", encoding="utf-8") as fp:
             fp.write("# 人格" + chr(10)
                      + "## 关系与称呼" + chr(10)
-                     + "- Alice（小爱）→ 喜欢的人" + chr(10)
+                     + "- Alice（小爱）→ 重要的人" + chr(10)
                      + "这段普通文字不该被取" + chr(10)
                      + "## 别的段落" + chr(10)
                      + "- 这段也不该被取" + chr(10))
         rows = MD2.load_relations({"file": f, "section": "关系与称呼"})
-        right = (len(rows) == 1 and "重要的人" in rows[0])
+        right = (len(rows) == 1 and "Alice" in rows[0])
         (ok if right else bad)("R14 relations 只取指定段落", "%d 行: %s" % (len(rows), rows))
         os.remove(f)
     except Exception as e:

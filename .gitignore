@@ -10,6 +10,9 @@ data/
 # 审查用的合并文档（含完整源码副本，不随仓库分发）
 docs/review-bundle.md
 
+# 只在本地有效的敏感词表（仓库里只留 .example 模板）
+scripts/private-names.txt
+
 # Python
 __pycache__/
 *.py[cod]
