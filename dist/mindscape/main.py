@@ -807,6 +807,11 @@ def run_target(d):
     batch = int(d.get("batch") or 40)
     max_in = int(d.get("max_input_chars") or 14000)
     max_tok = int(d.get("max_tokens") or 900)
+    # ponytail: fetch 不带 LIMIT，一次运行会把游标之后的全部积压跑完 ——
+    # 首次指向一个几千条消息的群时会变成几百上千次 LLM 调用（烧钱且占满
+    # 这台 2 核小机器）。用 max_batches 给单次运行封顶，剩下的留给下一次
+    # cron 慢慢追。追历史变慢时才需要调大它。
+    max_batches = int(d.get("max_batches") or 40)
 
     total_read = total_added = 0
     for target in (d.get("targets") or []):
@@ -817,7 +822,12 @@ def run_target(d):
         if not rows:
             continue
         total_read += len(rows)
+        done = 0
         for i in range(0, len(rows), batch):
+            if done >= max_batches:
+                print("[mindscape_diary] 已达单次上限 %d 批，剩余 %d 条留待下次"
+                      % (max_batches, len(rows) - i))
+                break
             chunk = rows[i:i + batch]
             try:
                 res = call_llm(llm, target.get("persona"), chunk, max_in, max_tok)
@@ -832,9 +842,12 @@ def run_target(d):
             entries = res.get("diary") or []
             os.makedirs(os.path.dirname(out_file) or ".", exist_ok=True)
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            # 标题用这批消息自己的时间，而不是「运行时刻」—— 追历史时一次运行会
+            # 写出几十批，用运行时刻就会出现几十个一模一样的 ## 标题。
+            stamp = datetime.datetime.fromtimestamp(chunk[-1]["ts"]).strftime("%Y-%m-%d %H:%M")
             if entries:
                 with open(out_file, "a", encoding="utf-8") as fp:
-                    fp.write("## " + now + "\n")
+                    fp.write("## " + stamp + "\n")
                     for e in entries:
                         fp.write("- " + str(e) + "\n")
                     fp.write("\n")
@@ -848,6 +861,7 @@ def run_target(d):
             st["since_ts"] = chunk[-1]["ts"]
             st["since_seq"] = chunk[-1]["seq"]
             save_state(state_file, st)
+            done += 1
     return total_read, total_added
 
 
