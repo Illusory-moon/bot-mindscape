@@ -1,5 +1,6 @@
 # 配置（含密钥）
 config/config.yaml
+config/config.local.yaml
 secrets/
 
 # 运行时数据（记忆 / 图库 / 日志）

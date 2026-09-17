@@ -109,3 +109,19 @@ waking:
       sample_prob: 0.02      # 本 bot 的冒泡概率（覆盖全局）
       min_interval: 600      # 本 bot 的冒泡间隔（覆盖全局）
       groups: ["20000001"]   # 只在这些群活动（留空=全部）
+
+# ── 本地管理台（可选）──
+# 配置了 ui.sync 后，运行 scripts/web_ui.py 会出现「拉取/推送」按钮，
+# 可在本地浏览、改名、改标签、移除素材，然后一键同步到远端。
+# 不配置 = 纯本地工具（开源默认形态）。
+ui:
+  sync:
+    enabled: false                # 改成 true 才启用
+    host: "1.2.3.4"
+    port: 22
+    user: "root"
+    password: ""                  # 或用 key_file（优先）
+    # key_file: "~/.ssh/id_rsa"
+    remote_dir: "/opt/your-bot/data/stickers"
+    remote_index: "stickers_index.json"   # 远端索引文件名
+    timeout: 25

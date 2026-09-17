@@ -156,6 +156,20 @@ guard:
 
 ---
 
+### 远程同步（可选）
+
+在 `ui.sync` 里填好服务器信息后，本地管理台会多出「拉取 / 推送」按钮，也可以在命令行直接用：
+
+```bash
+python scripts/mindscape_sync.py status  # 看两边差异
+python scripts/mindscape_sync.py pull    # 服务器 -> 本地
+python scripts/mindscape_sync.py push    # 本地 -> 服务器
+```
+
+**推送前会先拉取远端再合并**，所以不会覆盖远端自动采集的新素材；
+删除默认只从索引移除，图片文件留底可恢复。
+---
+
 ## 许可
 
 MIT License —— 随便用，随便改。
