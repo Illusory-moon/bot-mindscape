@@ -101,6 +101,12 @@ margin:0 3px 3px 0;font-size:10px}}
 border:1px solid #3d3450;border-radius:4px;cursor:pointer}}
 .msg{{color:#7dd87d;font-size:13px;margin-left:10px}}
 pre{{background:#1b1823;border:1px solid #332c42;border-radius:8px;padding:12px;overflow:auto;max-height:60vh}}
+h2.cat{{font-size:14px;color:#c9bfe0;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid #2e2a3a}}
+h2.cat:first-child{{margin-top:4px}}
+h2.cat span{{color:#6f6880;font-weight:400;font-size:12px;margin-left:8px}}
+.hint{{color:#8b83a0;font-size:12px;line-height:1.8;background:#1b1823;border:1px solid #332c42;
+border-radius:8px;padding:10px 12px;margin:10px 0}}
+code{{background:#2a2436;padding:1px 6px;border-radius:4px;color:#e9b7d4;font-size:12px}}
 </style></head><body>
 <h1>bot-mindscape 管理台</h1>
 <div class="tabs">
@@ -122,7 +128,8 @@ pre{{background:#1b1823;border:1px solid #332c42;border-radius:8px;padding:12px;
 <button onclick="doSync('push')">推送到服务器</button>
 <span class="msg" id="smsg">{syncmsg}</span>
 </div>
-<div class="grid">{gallery}</div>
+<p class="hint">图库目录：<code>{gdir}</code>　共 <b>{gcount}</b> 张，按分类分组</p>
+{gallery}
 </div>
 
 <div class="panel"><pre>{memory}</pre></div>
@@ -175,7 +182,6 @@ def render():
     else:
         raw = "# 还没有配置文件\n# 复制 config/config.example.yaml 过来，或直接在这里写\n"
 
-    parts = []
     idx = []
     try:
         with open(index_path(), encoding="utf-8") as f:
@@ -184,15 +190,19 @@ def render():
         idx = []
     if not isinstance(idx, list):
         idx = []
+    by_cat = {}
     for it in idx:
+        if str(it.get("file") or ""):
+            by_cat.setdefault(str(it.get("category") or ""), []).append(it)
+
+    def figure(it):
         fn = str(it.get("file") or "")
-        if not fn:
-            continue
         cat = str(it.get("category") or "")
-        tags = "".join('<span class="tag">%s</span>' % html.escape(str(t)) for t in (it.get("tags") or [])[:5])
+        tags = "".join('<span class="tag">%s</span>'
+                       % html.escape(str(t)) for t in (it.get("tags") or [])[:5])
         esc_cat = html.escape(cat, quote=True)
         esc_fn = html.escape(fn, quote=True)
-        parts.append(
+        return (
             '<figure><img loading="lazy" src="/img/%s"><figcaption><b>%s</b>'
             '<div style="font-size:10px;color:#5d5768">%s</div>%s'
             '<p style="margin:4px 0 0;font-size:11px">%s</p>'
@@ -202,20 +212,44 @@ def render():
                 urllib.parse.quote(fn), html.escape(str(it.get("name") or "?")),
                 html.escape(cat), tags, html.escape(str(it.get("desc") or "")),
                 esc_cat, esc_fn, esc_cat, esc_fn))
-    gallery = "".join(parts) or '<p style="color:#6f6880">图库还是空的</p>'
 
+    # 每个分类一个标题 + 一个网格：不同 bot 的图库一眼分得开
+    blocks = []
+    for cat in sorted(by_cat):
+        blocks.append(
+            '<h2 class="cat">%s<span>%d 张</span></h2><div class="grid">%s</div>'
+            % (html.escape(cat or "(未分类)"), len(by_cat[cat]),
+               "".join(figure(it) for it in by_cat[cat])))
+    gallery = "".join(blocks) or '<p style="color:#6f6880">图库还是空的</p>'
+    gcount = sum(len(v) for v in by_cat.values())
+
+    # 记忆页：本地配置通常没有 memory.bots（长期记忆在 bot 所在的那台机器上），
+    # 空着是正常的 —— 把「为什么空」和「正在读哪个文件」直接写出来。
     mem_parts = []
     s = (cfg.section("memory") if cfg else {}) or {}
     for b in (s.get("bots") or []):
         dp = _abs(b.get("diary"))
         mem_parts.append("### %s\n%s" % (b.get("name") or b.get("self_id"),
-                                         read_text(dp, 4000) if dp else "(未配置)"))
-    memory = "\n\n".join(mem_parts) or "(未配置记忆文件)"
+                                         read_text(dp, 4000) if dp else "(未配置 diary)"))
+    if mem_parts:
+        memory = "\n\n".join(mem_parts)
+    else:
+        memory = (
+            "这个标签页会列出 memory.bots 里每个 bot 的长期记忆文件，方便直接翻看。\n\n"
+            "当前「memory.bots」是空的 —— 本地这边只管图库，长期记忆在 bot 所在的那台\n"
+            "机器上，所以这里空着是正常的。想在本地看记忆，就在「配置」页加一条：\n\n"
+            "memory:\n"
+            "  bots:\n"
+            "    - self_id: \"20000000\"\n"
+            "      name: \"bot-name\"\n"
+            "      diary: \"/path/to/bot-name.md\"\n\n"
+            "当前读取的配置文件：" + config_path())
 
     sync_ok = bool(edit) and edit.sync_available()
     syncmsg = "" if sync_ok else "（未配置 ui.sync，同步功能不可用）"
     return PAGE.format(config=html.escape(raw), gallery=gallery, memory=html.escape(memory),
-                       token=TOKEN, syncmsg=html.escape(syncmsg))
+                       token=TOKEN, syncmsg=html.escape(syncmsg),
+                       gdir=html.escape(stickers_dir()), gcount=gcount)
 
 
 class Handler(BaseHTTPRequestHandler):

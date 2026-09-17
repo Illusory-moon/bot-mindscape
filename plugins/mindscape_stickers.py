@@ -25,16 +25,22 @@ from astrbot.core.message.components import Image
 from astrbot.core.star.filter.event_message_type import EventMessageType
 
 import mindscape_config as cfg
-from mindscape_core import (DEFAULT_PROMPT, IndexLock, load_index, match_score,
-                           parse_verdict, save_index, verdict_ok)
+from mindscape_core import (DEFAULT_PROMPT, IndexLock, abs_path, load_index,
+                           match_score, parse_verdict, save_index, verdict_ok)
+
+
+def st_abs(path):
+    """相对路径按「配置文件所在目录」解析（与其它模块各自持有一份，互不覆盖）。"""
+    return abs_path(path, os.path.dirname(cfg.config_path()))
+
 
 class StickersMixin:
     def setup(self, context):
 
         self.s_c = cfg.section("stickers")
-        self.dir = _abs(self.s_c.get("dir") or "./data/stickers")
-        self.index_path = _abs(self.s_c.get("index") or os.path.join(self.dir, "index.json"))
-        self.seen_path = _abs(self.s_c.get("seen") or os.path.join(self.dir, "seen.json"))
+        self.dir = st_abs(self.s_c.get("dir") or "./data/stickers")
+        self.index_path = st_abs(self.s_c.get("index") or os.path.join(self.dir, "index.json"))
+        self.seen_path = st_abs(self.s_c.get("seen") or os.path.join(self.dir, "seen.json"))
         os.makedirs(self.dir, exist_ok=True)
         self.seen = self._load_seen()
         logger.info(

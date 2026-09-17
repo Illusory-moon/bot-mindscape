@@ -36,7 +36,7 @@ DEFAULT_PERSONA = (
 )
 
 
-def _abs(path):
+def dy_abs(path):
     if not path:
         return ""
     if os.path.isabs(path):
@@ -81,7 +81,7 @@ def save_state(path, st):
 
 def fetch(src, target, since_ts, since_seq):
     """从 SQLite 增量读取消息（表名/字段名来自配置）。"""
-    db = _abs(src.get("db"))
+    db = dy_abs(src.get("db"))
     if not db or not os.path.exists(db):
         return []
     table = src.get("table") or "messages"
@@ -138,7 +138,7 @@ def call_llm(llm, persona, msgs, max_input_chars, max_tokens, relations=None):
         raise RuntimeError("diary.llm.api_base 未配置")
     key = os.environ.get(llm.get("api_key_env") or "", "")
     if not key and llm.get("api_key_file"):
-        with open(_abs(llm["api_key_file"]), encoding="utf-8") as f:
+        with open(dy_abs(llm["api_key_file"]), encoding="utf-8") as f:
             key = f.read().strip()
     if not key:
         raise RuntimeError("未找到 API key（检查 api_key_env / api_key_file）")
@@ -201,7 +201,7 @@ def load_relations(spec):
         return []
     if isinstance(spec, str):
         spec = {"file": spec}
-    path = _abs(spec.get("file"))
+    path = dy_abs(spec.get("file"))
     if not path or not os.path.exists(path):
         return []
     section = str(spec.get("section") or "").strip()
@@ -295,11 +295,11 @@ def run_target(d):
 
     total_read = total_added = 0
     for target in (d.get("targets") or []):
-        out_file = _abs(target.get("output"))
-        state_file = _abs(target.get("state") or (out_file + ".state.json"))
+        out_file = dy_abs(target.get("output"))
+        state_file = dy_abs(target.get("state") or (out_file + ".state.json"))
         st = load_state(state_file)
         relations = load_relations(target.get("relations"))
-        people_file = _abs(target.get("people") or (out_file.rsplit(".", 1)[0] + ".people.md"))
+        people_file = dy_abs(target.get("people") or (out_file.rsplit(".", 1)[0] + ".people.md"))
         rows = fetch(src, target, st.get("since_ts", 0), st.get("since_seq", 0))
         if not rows:
             # 即使没新消息，也要保证权威关系已经落在画像里
@@ -353,7 +353,7 @@ def run_target(d):
     return total_read, total_added
 
 
-def main():
+def dy_main():
     d = cfg.section("diary")
     if not d:
         print("[mindscape_diary] 未找到 diary 配置，跳过")
@@ -363,4 +363,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    dy_main()

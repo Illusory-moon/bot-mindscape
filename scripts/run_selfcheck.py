@@ -274,7 +274,7 @@ def check_structure():
             "plugins/mindscape_memory.py", "plugins/mindscape_recall.py",
             "plugins/mindscape_diary.py", "plugins/mindscape_stickers.py",
             "plugins/mindscape_sticker_use.py", "plugins/mindscape_format.py",
-            "plugins/mindscape_janitor.py",
+            "plugins/mindscape_janitor.py", "plugins/mindscape_digest.py",
             "scripts/config_gui.py", "scripts/web_ui.py",
             "scripts/import_stickers.py",
             "patches/astrbot/install.py", "patches/astrbot/README.md"]
@@ -431,6 +431,93 @@ def check_regressions():
         os.remove(f)
     except Exception as e:
         bad("R14 relations 段落提取", str(e)[:140])
+
+    # R15: 每日摘要层必须闭环 —— 日记按天切分 -> 写摘要 -> 读回。
+    #      同一天出现多个 ## 标题（追历史时会这样）要合并，不能当成两天。
+    try:
+        import mindscape_digest as DG
+        importlib.reload(DG)
+        f = os.path.join(HERE, "_sc_diary2.md")
+        with open(f, "w", encoding="utf-8") as fp:
+            fp.write("## 2026-01-01 10:00" + chr(10) + "- 甲" + chr(10) + "- 乙" + chr(10)
+                     + "## 2026-01-01 11:00" + chr(10) + "- 丙" + chr(10)
+                     + "## 2026-01-02 09:00" + chr(10) + "- 丁" + chr(10))
+        days = DG.parse_days(open(f, encoding="utf-8").read())
+        merged = len(days.get("2026-01-01", [])) == 3
+        p = os.path.join(HERE, "_sc_digest.md")
+        DG.save_digests(p, "bot-name",
+                        {"2026-01-01": "那天发生了甲和乙。", "2026-01-02": "第二天是丁。"})
+        back = DG.load_digests(p)
+        rt = (back.get("2026-01-01") == "那天发生了甲和乙。" and len(back) == 2)
+        sampled = DG.sample_lines(["- %d" % i for i in range(200)], 100)
+        samp = 0 < len(sampled) < 200
+        (ok if (merged and rt and samp) else bad)(
+            "R15 每日摘要闭环",
+            "同日合并=%s 读写一致=%s 均匀抽样=%s" % (merged, rt, samp))
+        for x in (f, p):
+            if os.path.exists(x):
+                os.remove(x)
+    except Exception as e:
+        bad("R15 每日摘要闭环", str(e)[:140])
+
+    # R16: 模块级函数不能跨模块重名。构建脚本是按顺序把各模块源码拼起来，
+    #      重名的只有最后一个生效 —— 曾经 _abs 有 4 份、实现各不相同，
+    #      于是三个模块的路径解析被悄悄换成了另一个模块的（生产环境全用绝对
+    #      路径才没爆，一用相对路径就会踩）。
+    try:
+        import ast as _ast
+        seen, dup = {}, []
+        pdir = os.path.join(HERE, "plugins")
+        for f in sorted(os.listdir(pdir)):
+            if not (f.startswith("mindscape_") and f.endswith(".py")):
+                continue
+            src = open(os.path.join(pdir, f), encoding="utf-8-sig").read()
+            for n in _ast.parse(src).body:
+                if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    if n.name in seen:
+                        dup.append("%s(%s+%s)" % (n.name, seen[n.name][:-3], f[:-3]))
+                    else:
+                        seen[n.name] = f
+        (ok if not dup else bad)("R16 模块级函数不重名",
+                                 " / ".join(dup) or "%d 个唯一名" % len(seen))
+    except Exception as e:
+        bad("R16 模块级函数不重名", str(e)[:140])
+
+    # R17: 每个模块用到的全局名必须能在本模块里找到（定义或 import）。
+    #      曾经 mindscape_stickers.py 用了 _abs 却没定义 —— 在合并后的单文件里
+    #      它一直蹭别的模块的同名函数，直到把重名清掉才暴露成 NameError
+    #      （整个插件加载失败）。这种「跨模块搭便车」编译期查不出来，只能看符号表。
+    try:
+        import symtable
+        import builtins as _bi
+        pdir = os.path.join(HERE, "plugins")
+        miss = []
+        for f in sorted(os.listdir(pdir)):
+            if not (f.startswith("mindscape_") and f.endswith(".py")):
+                continue
+            src = open(os.path.join(pdir, f), encoding="utf-8-sig").read()
+            top = symtable.symtable(src, f, "exec")
+            defined = {s.get_name() for s in top.get_symbols()}
+            used = set()
+
+            def _walk(t):
+                for s in t.get_symbols():
+                    if s.is_global() and not s.is_assigned():
+                        used.add(s.get_name())
+                for ch in t.get_children():
+                    _walk(ch)
+
+            _walk(top)
+            unknown = sorted(n for n in used
+                             if n not in defined
+                             and not hasattr(_bi, n)
+                             and not n.startswith("__"))
+            if unknown:
+                miss.append("%s:%s" % (f[10:-3], ",".join(unknown)))
+        (ok if not miss else bad)("R17 模块不蹭别人的全局名",
+                                 " / ".join(miss) or "12 个模块全部自洽")
+    except Exception as e:
+        bad("R17 模块全局名自洽", str(e)[:140])
 
     # R05: 同一秒内更大序号的消息不能被漏读
     try:

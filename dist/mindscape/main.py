@@ -348,7 +348,13 @@ DEFAULT_MIN_CHARS = 50
 DEFAULT_PEOPLE_CHARS = 800
 
 
+DEFAULT_DIGEST_CHARS = 1200
+
+
 SECTION_TITLE = "## 你的长期记忆"
+
+
+SECTION_DIGEST = "### 你还记得的最近几天（每天一句）"
 
 
 HEADER_MARK = "## "
@@ -635,7 +641,7 @@ DEFAULT_PERSONA = (
 )
 
 
-def _abs(path):
+def dy_abs(path):
     if not path:
         return ""
     if os.path.isabs(path):
@@ -680,7 +686,7 @@ def save_state(path, st):
 
 def fetch(src, target, since_ts, since_seq):
     """从 SQLite 增量读取消息（表名/字段名来自配置）。"""
-    db = _abs(src.get("db"))
+    db = dy_abs(src.get("db"))
     if not db or not os.path.exists(db):
         return []
     table = src.get("table") or "messages"
@@ -737,7 +743,7 @@ def call_llm(llm, persona, msgs, max_input_chars, max_tokens, relations=None):
         raise RuntimeError("diary.llm.api_base 未配置")
     key = os.environ.get(llm.get("api_key_env") or "", "")
     if not key and llm.get("api_key_file"):
-        with open(_abs(llm["api_key_file"]), encoding="utf-8") as f:
+        with open(dy_abs(llm["api_key_file"]), encoding="utf-8") as f:
             key = f.read().strip()
     if not key:
         raise RuntimeError("未找到 API key（检查 api_key_env / api_key_file）")
@@ -802,7 +808,7 @@ def load_relations(spec):
         return []
     if isinstance(spec, str):
         spec = {"file": spec}
-    path = _abs(spec.get("file"))
+    path = dy_abs(spec.get("file"))
     if not path or not os.path.exists(path):
         return []
     section = str(spec.get("section") or "").strip()
@@ -896,11 +902,11 @@ def run_target(d):
 
     total_read = total_added = 0
     for target in (d.get("targets") or []):
-        out_file = _abs(target.get("output"))
-        state_file = _abs(target.get("state") or (out_file + ".state.json"))
+        out_file = dy_abs(target.get("output"))
+        state_file = dy_abs(target.get("state") or (out_file + ".state.json"))
         st = load_state(state_file)
         relations = load_relations(target.get("relations"))
-        people_file = _abs(target.get("people") or (out_file.rsplit(".", 1)[0] + ".people.md"))
+        people_file = dy_abs(target.get("people") or (out_file.rsplit(".", 1)[0] + ".people.md"))
         rows = fetch(src, target, st.get("since_ts", 0), st.get("since_seq", 0))
         if not rows:
             # 即使没新消息，也要保证权威关系已经落在画像里
@@ -954,7 +960,7 @@ def run_target(d):
     return total_read, total_added
 
 
-def main():
+def dy_main():
     d = cfg.section("diary")
     if not d:
         print("[mindscape_diary] 未找到 diary 配置，跳过")
@@ -964,7 +970,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    dy_main()
+
+
+def st_abs(path):
+    """相对路径按「配置文件所在目录」解析（与其它模块各自持有一份，互不覆盖）。"""
+    return abs_path(path, os.path.dirname(cfg.config_path()))
 
 
 _INSTANCE = None
@@ -974,7 +985,7 @@ def _NS():
     return _INSTANCE
 
 
-def _abs(path):
+def su_abs(path):
     """相对路径按「配置文件所在目录」解析。"""
     return abs_path(path, os.path.dirname(cfg.config_path()))
 
@@ -1047,22 +1058,13 @@ def flatten(text, join_with="，", drop_last_if_short=False, short_len=8):
     return out
 
 
-def _abs(path):
-    if not path:
-        return ""
-    if os.path.isabs(path):
-        return path
-    base = os.path.dirname(cfg.config_path()) if cfg else "."
-    return os.path.join(base, path)
-
-
 DEFAULT_MAX_MB = 2.0
 
 
 DEFAULT_LOG = "./data/janitor.log"
 
 
-def _abs(path):
+def jn_abs(path):
     if not path:
         return ""
     if os.path.isabs(path):
@@ -1134,16 +1136,16 @@ def clean(db, table, column, max_mb, log_path=None):
     return (n_img, n_big, before / 1048576.0, after / 1048576.0)
 
 
-def main():
+def jn_main():
     c = cfg.section("janitor")
     if not c:
         print("[mindscape_janitor] 未找到 janitor 配置，跳过")
         return
-    db = _abs(c.get("db"))
+    db = jn_abs(c.get("db"))
     table = c.get("table") or "conversations"
     column = c.get("column") or "content"
     max_mb = float(c.get("max_mb") or DEFAULT_MAX_MB)
-    log_path = _abs(c.get("log") or DEFAULT_LOG)
+    log_path = jn_abs(c.get("log") or DEFAULT_LOG)
 
     n_img, n_big, before, after = clean(db, table, column, max_mb, log_path)
     if n_img or n_big:
@@ -1155,7 +1157,7 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        jn_main()
     except Exception as e:
         print("[mindscape_janitor] 失败: %s" % str(e)[:200])
         sys.exit(1)
@@ -1233,7 +1235,17 @@ class MemoryMixin:
                 if isinstance(x, str) and x.strip():
                     extras.append(_resolve(x))
             mem = read_many(extras + [path] if extras else [path], max_chars)
-            if len(mem) < min_chars:
+
+            # 骨架层：前几天各一句（mindscape_digest 产的）。滑动窗口只够覆盖
+            # 几小时，没有这一层，bot 每天都「忘了昨天」—— 细节可以让它去
+            # recall，但「记不记得昨天发生过什么」必须是常驻的。
+            dig = ""
+            dig_path = _resolve(bot.get("digest"))
+            if dig_path:
+                d_chars = int(bot.get("digest_chars")
+                              or self.m_cfg.get("digest_chars") or DEFAULT_DIGEST_CHARS)
+                dig = read_recent(dig_path, d_chars)
+            if len(mem) < min_chars and not dig:
                 return
 
             old = getattr(request, "system_prompt", "") or ""
@@ -1245,8 +1257,10 @@ class MemoryMixin:
                 "\n\n" + SECTION_TITLE + "\n"
                 "以下是你自己记下来的往事，是你亲身经历的，可以自然地提起，"
                 "但不要照本宣科地念，也不要说「根据我的记忆」这种话。\n\n"
-                + mem
             )
+            if dig:
+                block += SECTION_DIGEST + "\n" + dig + "\n\n"
+            block += mem
 
             # 人物画像（可选）：让 bot 认得群里的人
             people_path = bot.get("people")
@@ -1264,8 +1278,8 @@ class MemoryMixin:
                 )
 
             request.system_prompt = old + block
-            logger.info("[mindscape_memory] %s 注入 %d 字记忆 / %d 字人物",
-                        label, len(mem), len(people))
+            logger.info("[mindscape_memory] %s 注入 %d 字记忆 / %d 字摘要 / %d 字人物",
+                        label, len(mem), len(dig), len(people))
         except Exception as e:
             logger.warning("[mindscape_memory] 注入失败: %s", str(e)[:120])
 
@@ -1274,9 +1288,9 @@ class StickersMixin:
     def setup(self, context):
 
         self.s_c = cfg.section("stickers")
-        self.dir = _abs(self.s_c.get("dir") or "./data/stickers")
-        self.index_path = _abs(self.s_c.get("index") or os.path.join(self.dir, "index.json"))
-        self.seen_path = _abs(self.s_c.get("seen") or os.path.join(self.dir, "seen.json"))
+        self.dir = st_abs(self.s_c.get("dir") or "./data/stickers")
+        self.index_path = st_abs(self.s_c.get("index") or os.path.join(self.dir, "index.json"))
+        self.seen_path = st_abs(self.s_c.get("seen") or os.path.join(self.dir, "seen.json"))
         os.makedirs(self.dir, exist_ok=True)
         self.seen = self._load_seen()
         logger.info(
@@ -1451,8 +1465,8 @@ class StickerUseMixin:
     def setup(self, context):
 
         self.u_c = cfg.section("stickers")
-        self.dir = _abs(self.u_c.get("dir") or "./data/stickers")
-        self.index_path = _abs(self.u_c.get("index") or os.path.join(self.dir, "index.json"))
+        self.dir = su_abs(self.u_c.get("dir") or "./data/stickers")
+        self.index_path = su_abs(self.u_c.get("index") or os.path.join(self.dir, "index.json"))
         self.send_cfg = self.u_c.get("send") or {}
         # 队形检测：记录各群最近的图片指纹（不下载图片，只用框架给的标识）
         self._recent_imgs = {}

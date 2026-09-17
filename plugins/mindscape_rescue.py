@@ -35,15 +35,6 @@ from astrbot.api.event import AstrMessageEvent, filter
 import mindscape_config as cfg
 
 
-def _abs(path):
-    if not path:
-        return ""
-    if os.path.isabs(path):
-        return path
-    base = os.path.dirname(cfg.config_path()) if cfg else "."
-    return os.path.join(base, path)
-
-
 class RescueMixin:
     def setup(self, context):
         self.r_cfg = cfg.section("rescue") or {}

@@ -7,6 +7,7 @@
 memory:
   max_chars: 2500          # 每轮请求注入的记忆字数上限（越小越省 token）
   min_chars: 50            # 少于此长度就不注入
+  digest_chars: 1200       # 「每日摘要」注入上限（分层记忆的骨架层）
   bots:
     - self_id: "20000000"                      # 你的 bot 账号
       name: "bot-name"                         # 显示名（只用于日志）
@@ -14,6 +15,7 @@ memory:
       memory_chars: 2500                       # 可覆盖全局值
       people: "./data/bot-name.people.md"      # 人物画像（由 diary 自动生成，可留空）
       people_chars: 800                        # 人物画像注入上限
+      digest: "./data/bot-name.digest.md"      # 每日摘要（由下面的 digest 段生成，留空则不注入）
 
 # ── 认知层：记忆生成 ──
 diary:
@@ -47,6 +49,27 @@ diary:
   max_input_chars: 14000
   max_tokens: 900
   # max_batches: 40                              # 单次运行最多处理几批（默认 40 批 = 40×batch 条）
+
+# ── 认知层：每日摘要（分层记忆的骨架）──
+# 滑动窗口只覆盖最近几小时。一个活跃群一天能写一万多字日记，2500 字预算只够
+# 四五个小时 —— bot 每天醒来都「忘了昨天」。这里为每个「已过完的日期」生成
+# 一句概括，注入时和原文一起进 prompt。每个日期只会调一次 LLM。
+digest:
+  enabled: true
+  targets:
+    - name: "bot-name"
+      diary: "./data/bot-name.md"              # 源：日记文件
+      output: "./data/bot-name.digest.md"      # 产物：每日摘要（memory.bots[].digest 指向它）
+  llm:
+    api_base: "https://api.example.com/v1"
+    api_key_env: "MINDSCAPE_API_KEY"           # 或 api_key_file
+    model: "your-model"
+  min_entries: 3                               # 少于这么多条的一天不生成
+  max_chars: 260                               # 每条摘要字数上限
+  max_input_chars: 24000                       # 一天的条目太多时均匀抽样到这个长度
+  max_tokens: 400
+  keep_days: 30                                # 只保留最近这么多天
+  max_per_run: 3                               # 单次最多补几天（首次回填会分几次跑完）
 
 # ── 表达层：素材采集与调度 ──
 stickers:

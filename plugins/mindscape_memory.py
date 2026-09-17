@@ -19,7 +19,9 @@ import mindscape_config as cfg
 DEFAULT_MAX_CHARS = 2500
 DEFAULT_MIN_CHARS = 50
 DEFAULT_PEOPLE_CHARS = 800
+DEFAULT_DIGEST_CHARS = 1200
 SECTION_TITLE = "## 你的长期记忆"
+SECTION_DIGEST = "### 你还记得的最近几天（每天一句）"
 HEADER_MARK = "## "
 
 
@@ -180,7 +182,17 @@ class MemoryMixin:
                 if isinstance(x, str) and x.strip():
                     extras.append(_resolve(x))
             mem = read_many(extras + [path] if extras else [path], max_chars)
-            if len(mem) < min_chars:
+
+            # 骨架层：前几天各一句（mindscape_digest 产的）。滑动窗口只够覆盖
+            # 几小时，没有这一层，bot 每天都「忘了昨天」—— 细节可以让它去
+            # recall，但「记不记得昨天发生过什么」必须是常驻的。
+            dig = ""
+            dig_path = _resolve(bot.get("digest"))
+            if dig_path:
+                d_chars = int(bot.get("digest_chars")
+                              or self.m_cfg.get("digest_chars") or DEFAULT_DIGEST_CHARS)
+                dig = read_recent(dig_path, d_chars)
+            if len(mem) < min_chars and not dig:
                 return
 
             old = getattr(request, "system_prompt", "") or ""
@@ -192,8 +204,10 @@ class MemoryMixin:
                 "\n\n" + SECTION_TITLE + "\n"
                 "以下是你自己记下来的往事，是你亲身经历的，可以自然地提起，"
                 "但不要照本宣科地念，也不要说「根据我的记忆」这种话。\n\n"
-                + mem
             )
+            if dig:
+                block += SECTION_DIGEST + "\n" + dig + "\n\n"
+            block += mem
 
             # 人物画像（可选）：让 bot 认得群里的人
             people_path = bot.get("people")
@@ -211,7 +225,7 @@ class MemoryMixin:
                 )
 
             request.system_prompt = old + block
-            logger.info("[mindscape_memory] %s 注入 %d 字记忆 / %d 字人物",
-                        label, len(mem), len(people))
+            logger.info("[mindscape_memory] %s 注入 %d 字记忆 / %d 字摘要 / %d 字人物",
+                        label, len(mem), len(dig), len(people))
         except Exception as e:
             logger.warning("[mindscape_memory] 注入失败: %s", str(e)[:120])

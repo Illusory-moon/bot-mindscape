@@ -23,7 +23,7 @@ DEFAULT_MAX_MB = 2.0
 DEFAULT_LOG = "./data/janitor.log"
 
 
-def _abs(path):
+def jn_abs(path):
     if not path:
         return ""
     if os.path.isabs(path):
@@ -95,16 +95,16 @@ def clean(db, table, column, max_mb, log_path=None):
     return (n_img, n_big, before / 1048576.0, after / 1048576.0)
 
 
-def main():
+def jn_main():
     c = cfg.section("janitor")
     if not c:
         print("[mindscape_janitor] 未找到 janitor 配置，跳过")
         return
-    db = _abs(c.get("db"))
+    db = jn_abs(c.get("db"))
     table = c.get("table") or "conversations"
     column = c.get("column") or "content"
     max_mb = float(c.get("max_mb") or DEFAULT_MAX_MB)
-    log_path = _abs(c.get("log") or DEFAULT_LOG)
+    log_path = jn_abs(c.get("log") or DEFAULT_LOG)
 
     n_img, n_big, before, after = clean(db, table, column, max_mb, log_path)
     if n_img or n_big:
@@ -116,7 +116,7 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        jn_main()
     except Exception as e:
         print("[mindscape_janitor] 失败: %s" % str(e)[:200])
         sys.exit(1)

@@ -34,7 +34,7 @@ def _NS():
     return _INSTANCE
 
 
-def _abs(path):
+def su_abs(path):
     """相对路径按「配置文件所在目录」解析。"""
     return abs_path(path, os.path.dirname(cfg.config_path()))
 
@@ -64,8 +64,8 @@ class StickerUseMixin:
     def setup(self, context):
 
         self.u_c = cfg.section("stickers")
-        self.dir = _abs(self.u_c.get("dir") or "./data/stickers")
-        self.index_path = _abs(self.u_c.get("index") or os.path.join(self.dir, "index.json"))
+        self.dir = su_abs(self.u_c.get("dir") or "./data/stickers")
+        self.index_path = su_abs(self.u_c.get("index") or os.path.join(self.dir, "index.json"))
         self.send_cfg = self.u_c.get("send") or {}
         # 队形检测：记录各群最近的图片指纹（不下载图片，只用框架给的标识）
         self._recent_imgs = {}
