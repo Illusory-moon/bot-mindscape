@@ -89,6 +89,38 @@ def st_abs(path):
     return abs_path(path, os.path.dirname(cfg.config_path()))
 
 
+def shrink_for_judge(path, max_px=512, quality=80):
+    """判定只需要「看得出画的是什么」，不需要原图。
+
+    实测（deepseek-flash）：99 KB 的图 2.3 秒，而把 6 MB 的原图整个 base64
+    塞上去要 20 秒以上 —— 慢在上行体积和视觉 token 上。按最长边缩到 max_px
+    再转 JPEG，判定结论不变，耗时掉一个数量级。
+
+    缩不了就原样返回（宁可慢，不可判不了）；连读都读不到才返回空。
+    """
+    try:
+        import io as _io
+        from PIL import Image as _Img
+        im = _Img.open(path)
+        im.seek(0)                      # 动图只取第一帧
+        im = im.convert("RGB")
+        if max(im.size) > max_px:
+            im.thumbnail((max_px, max_px), _Img.LANCZOS)
+        buf = _io.BytesIO()
+        im.save(buf, "JPEG", quality=quality)
+        return buf.getvalue(), "image/jpeg"
+    except Exception:
+        pass
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except Exception:
+        return b"", ""
+    low = path.lower()
+    mime = "image/gif" if low.endswith(".gif") else ("image/png" if low.endswith(".png") else "image/jpeg")
+    return raw, mime
+
+
 class StickersMixin:
     def setup(self, context):
 
@@ -98,6 +130,7 @@ class StickersMixin:
         self.seen_path = st_abs(self.s_c.get("seen") or os.path.join(self.dir, "seen.json"))
         os.makedirs(self.dir, exist_ok=True)
         self.seen = self._load_seen()
+        self._bg = set()            # 后台采集任务，留引用防被 GC 掉
         logger.info(
             "[mindscape_stickers] loaded | prob=%.2f | 已见 %d 张",
             float(self.s_c.get("sample_prob", 0.10)), len(self.seen),
@@ -161,10 +194,25 @@ class StickersMixin:
             for comp in comps:
                 if not isinstance(comp, Image):
                     continue
-                await self._handle(comp, category)
+                # 绝不能 await：下载 + 视觉判定要 10~25 秒，一 await 就把整条消息
+                # 流水线一起堵住（实测回复从 2 秒被拖到 27 秒）。丢后台跑 ——
+                # 判定晚几秒入库无所谓，回复不能等它。
+                import asyncio
+                task = asyncio.create_task(self._handle(comp, category))
+                self._bg.add(task)
+                task.add_done_callback(self._bg_done)
                 return
         except Exception as e:
             logger.warning("[mindscape_stickers] 采集失败: %s", str(e)[:140])
+
+    def _bg_done(self, task):
+        """后台任务收尾：扔掉引用 + 把异常捞出来（不然会被静默吞掉）。"""
+        self._bg.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            logger.warning("[mindscape_stickers] 后台采集出错: %s", str(exc)[:140])
 
     async def _handle(self, comp, category):
         import asyncio
@@ -192,12 +240,14 @@ class StickersMixin:
         # 传上去。（判据用分辨率而不是体积，理由见 img_size 的注释。）
         max_side = int((self.s_c.get("judge") or {}).get("max_side") or 0)
         if max_side > 0:
-            w, h = img_size(path)
-            if w and h and max(w, h) > max_side:
+            # 变量名不能叫 h：上面 h 已经是 md5，下面还要拿它拼文件名。
+            # 复用的代价是 'int' object is not subscriptable —— 通过闸门的图全存不进去。
+            w, ih = img_size(path)
+            if w and ih and max(w, ih) > max_side:
                 self.seen.add(key)      # 记下：同一张不必反复下载重判
                 self._save_seen()
                 logger.info("[mindscape_stickers] 跳过 %dx%d（超过 %d，疑似截图/壁纸）",
-                            w, h, max_side)
+                            w, ih, max_side)
                 return
 
         verdict = await self._judge(path)
@@ -244,11 +294,10 @@ class StickersMixin:
         prompt = (j.get("prompt") or DEFAULT_PROMPT).replace(
             "{persona}", j.get("persona") or "二次元角色"
         )
-        with open(path, "rb") as f:
-            raw = f.read()
+        raw, mime = shrink_for_judge(path)
+        if not raw:
+            return None
         b64 = base64.b64encode(raw).decode()
-        low = path.lower()
-        mime = "image/gif" if low.endswith(".gif") else ("image/png" if low.endswith(".png") else "image/jpeg")
         try:
             async with httpx.AsyncClient(timeout=120) as cli:
                 resp = await cli.post(

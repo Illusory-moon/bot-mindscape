@@ -638,6 +638,78 @@ def check_regressions():
     except Exception as e:
         bad("R21 分辨率闸门", str(e)[:140])
 
+    # R22: 采集入库要能真的落盘 —— 端到端跑一遍，不是看源码里有没有关键字。
+    #      病根：闸门那段把 h 从 md5 复用成了图片高度，于是后面 h[:10] 炸成
+    #      'int' object is not subscriptable；异常被 collect 吞成一条 WARN，
+    #      日志里看着像「偶尔失败」，其实是**每一张通过闸门的图都存不进去**。
+    #      变量再被顶掉一次，这条就会红。
+    #      顺带看住两件事：采集必须丢后台（await 会堵死消息流水线），
+    #      判定前必须缩图（原图 base64 上行把 2 秒拖成 25 秒）。
+    try:
+        import asyncio as _aio
+        import struct as _st2
+        import mindscape_stickers as MS2
+        importlib.reload(MS2)
+
+        work = os.path.join(HERE, "_sc_stickers")
+        if os.path.isdir(work):
+            for n in os.listdir(work):
+                os.remove(os.path.join(work, n))
+        os.makedirs(work, exist_ok=True)
+        img = os.path.join(work, "t.png")
+        with open(img, "wb") as fp:
+            fp.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+                     + _st2.pack(">II", 500, 500) + b"\x00" * 32)
+
+        class _Comp:
+            async def convert_to_file_path(self):
+                return img
+
+        class _Self:
+            pass
+
+        def _mk(max_side):
+            s = _Self()
+            s.s_c = {"judge": {"max_side": max_side}}
+            s.seen = set()
+            s.dir = work
+            s.index_path = os.path.join(work, "index.json")
+            s._save_seen = lambda: None
+            s.added = []
+            s._add_index = lambda fname, cat, v: s.added.append(fname)
+
+            async def _j(p):
+                return {"related": True, "name": "测试图",
+                        "desc": "一张测试图", "tags": ["测试"]}
+            s._judge = _j
+            return s
+
+        s = _mk(1200)
+        _aio.run(MS2.StickersMixin._handle(s, _Comp(), "catA"))
+        saved = sorted(n for n in os.listdir(work) if n != "t.png")
+        saved_ok = (len(saved) == 1 and len(saved[0]) == 14
+                    and saved[0].endswith(".png") and s.added == saved)
+
+        s2 = _mk(100)          # 闸门要挡得住
+        _aio.run(MS2.StickersMixin._handle(s2, _Comp(), "catA"))
+        gate_ok = (s2.added == []
+                   and sorted(n for n in os.listdir(work) if n != "t.png") == saved)
+
+        src2 = open(os.path.join(PLUGINS, "mindscape_stickers.py"),
+                    encoding="utf-8").read()
+        bg_ok = ("create_task" in src2 and "_bg.add" in src2
+                 and "await self._handle" not in src2)
+        shrink_ok = ("def shrink_for_judge" in src2
+                     and "shrink_for_judge(path)" in src2)
+        (ok if (saved_ok and gate_ok and bg_ok and shrink_ok) else bad)(
+            "R22 采集入库端到端",
+            "落盘=%s 闸门=%s 后台=%s 缩图=%s" % (saved_ok, gate_ok, bg_ok, shrink_ok))
+        for n in os.listdir(work):
+            os.remove(os.path.join(work, n))
+        os.rmdir(work)
+    except Exception as e:
+        bad("R22 采集入库", str(e)[:140])
+
     # R05: 同一秒内更大序号的消息不能被漏读
     try:
         import mindscape_diary as MD
