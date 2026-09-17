@@ -6,6 +6,26 @@
 
 ---
 
+## 快速开始
+
+```bash
+git clone https://github.com/Illusory-moon/bot-mindscape.git
+cd bot-mindscape
+pip install -r requirements.txt
+cp config/config.example.yaml config/config.yaml
+# 编辑 config.yaml，填入你的 bot 信息
+python scripts/run_selfcheck.py    # 自检环境
+python scripts/config_gui.py       # 生成配置
+```
+
+> **两种管理界面随你挑**：
+> - 桌面版：`python scripts/config_gui.py`（tkinter，零依赖）
+> - 网页版：`python scripts/web_ui.py`（标准库 http.server，访问 http://127.0.0.1:8777）
+>
+> 各层怎么对接 bot 框架，见 [部署指南](docs/deploy.md)。
+
+---
+
 ## 为什么需要它
 
 现在的群聊 bot 普遍有三个毛病：
@@ -104,8 +124,6 @@
 
 ---
 
----
-
 ## 效果预览
 
 ### 表情包库（本地预览页）
@@ -116,24 +134,6 @@
 不同 bot 的素材按 `category` 隔离，互不串味。
 
 > 预览页由 `scripts/web_ui.py` 提供（零依赖，只监听本机）。
-
----
-
-## 快速开始
-
-```bash
-git clone https://github.com/Illusory-moon/bot-mindscape.git
-cd bot-mindscape
-pip install -r requirements.txt
-cp config/config.example.yaml config/config.yaml
-# 编辑 config.yaml，填入你的 bot 信息
-python scripts/run_selfcheck.py    # 自检环境
-python scripts/config_gui.py         # 生成配置
-```
-
-> **两种管理界面随你挑**：
-> - 桌面版：`python scripts/config_gui.py`（tkinter，零依赖）
-> - 网页版：`python scripts/web_ui.py`（标准库 http.server，访问 http://127.0.0.1:8777）
 
 ---
 
