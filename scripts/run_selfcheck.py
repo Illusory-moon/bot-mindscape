@@ -276,7 +276,7 @@ def check_structure():
             "plugins/mindscape_sticker_use.py", "plugins/mindscape_format.py",
             "plugins/mindscape_janitor.py", "plugins/mindscape_digest.py",
             "scripts/config_gui.py", "scripts/web_ui.py",
-            "scripts/import_stickers.py",
+            "scripts/import_stickers.py", "scripts/mindscape_forget.py",
             "patches/astrbot/install.py", "patches/astrbot/README.md"]
     for rel in need:
         p = os.path.join(HERE, rel.replace("/", os.sep))
@@ -563,6 +563,22 @@ def check_regressions():
         os.remove(f)
     except Exception as e:
         bad("R18 检索知道自己的边界", str(e)[:140])
+
+    # R19: 「别人的话 ≠ 事实」必须写进提示词，而且不能逼它改说话方式。
+    #      实测：日记里记着「某人说群里唯一一对纯爱」，bot 开口就变成
+    #      「小本本上写的是『本群唯一一对纯爱』」—— 把别人的一句口嗨升格成了
+    #      自己笔记本里的权威事实，然后拿去执法（群友：「这 bot 太容易被骗了」）。
+    #      同时要写明「不用原样复述、用你自己的方式讲」，否则它会为了标注来源
+    #      变成复读机，反而把说话风格改掉了。
+    try:
+        mem2 = open(os.path.join(PLUGINS, "mindscape_memory.py"), encoding="utf-8").read()
+        rec2 = open(os.path.join(PLUGINS, "mindscape_recall.py"), encoding="utf-8").read()
+        mem_ok = ("别人说过的，不等于事实" in mem2 and "不用原样复述" in mem2)
+        rec_ok = ("他讲过这句话" in rec2 and "不用原样复述" in rec2)
+        (ok if (mem_ok and rec_ok) else bad)(
+            "R19 转述不等于事实", "注入块=%s 检索结果=%s" % (mem_ok, rec_ok))
+    except Exception as e:
+        bad("R19 转述不等于事实", str(e)[:140])
 
     # R05: 同一秒内更大序号的消息不能被漏读
     try:
