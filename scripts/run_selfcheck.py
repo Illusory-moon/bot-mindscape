@@ -710,6 +710,49 @@ def check_regressions():
     except Exception as e:
         bad("R22 采集入库", str(e)[:140])
 
+    # R23: save_sticker 必须能看见「引用消息」里的图。
+    #      病根：只扫 event.message_obj.message 的顶层，而 aiocqhttp 适配器是把被
+    #      引用消息的完整链塞进 Reply.chain（它会 call_action("get_msg")）。
+    #      于是「引用一张图说加进表情库」永远回「没看到图片」，
+    #      而模型那条路看得见同一张图 —— 表现为左右脑互搏。
+    try:
+        import ast as _ast
+        src3 = open(os.path.join(PLUGINS, "mindscape_sticker_use.py"),
+                    encoding="utf-8").read()
+        tree3 = _ast.parse(src3)
+        fn3 = [n for n in tree3.body
+               if isinstance(n, _ast.FunctionDef) and n.name == "pick_image"]
+        ns3 = {}
+        if fn3:
+            exec(compile(_ast.Module(body=[fn3[0]], type_ignores=[]), "<x>", "exec"), ns3)
+        pick = ns3.get("pick_image")
+
+        class _Img:
+            pass
+
+        class _Rpl:
+            def __init__(self, chain):
+                self.chain = chain
+
+        plain = object()
+        top_ok = quote_ok = none_ok = loop_ok = False
+        if pick:
+            top_ok = isinstance(pick([plain, _Img()], _Img, _Rpl), _Img)
+            inner = _Img()
+            quote_ok = pick([_Rpl([plain, inner]), plain], _Img, _Rpl) is inner
+            none_ok = pick([_Rpl([plain]), plain], _Img, _Rpl) is None
+            loop = _Rpl([])
+            loop.chain = [loop]          # 自己引用自己，不能死循环
+            loop_ok = pick([loop], _Img, _Rpl) is None
+        wired = ("pick_image(comps, Image, Reply)" in src3
+                 and "import Image, Reply" in src3)
+        (ok if (top_ok and quote_ok and none_ok and loop_ok and wired) else bad)(
+            "R23 save_sticker 认得引用里的图",
+            "顶层=%s 引用=%s 空=%s 防环=%s 接线=%s"
+            % (top_ok, quote_ok, none_ok, loop_ok, wired))
+    except Exception as e:
+        bad("R23 引用图片", str(e)[:140])
+
     # R05: 同一秒内更大序号的消息不能被漏读
     try:
         import mindscape_diary as MD

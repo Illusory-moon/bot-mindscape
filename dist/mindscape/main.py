@@ -1263,6 +1263,30 @@ def su_abs(path):
     return abs_path(path, os.path.dirname(cfg.config_path()))
 
 
+def pick_image(comps, image_cls, reply_cls, depth=0, max_depth=3):
+    """在组件链里找第一张图，**会往被引用消息里钻**。
+
+    为什么必须钻：aiocqhttp 适配器收到 reply 段时会 `call_action("get_msg")`，
+    把被引用消息的完整组件链塞进 `Reply.chain` —— 也就是说图**本来就在事件里**，
+    只是不在顶层。只扫顶层的话，「引用一张图说『加进表情库』」永远得到
+    「这条消息里没看到图片」，而模型那条路却能看见同一张图（所以显得像左右脑互搏）。
+
+    类由调用方传进来（本模块要能在 AstrBot 之外被测试）；深度防环。
+    """
+    if not comps or depth > max_depth:
+        return None
+    for c in comps:
+        if isinstance(c, image_cls):
+            return c
+    for c in comps:
+        if isinstance(c, reply_cls):
+            got = pick_image(getattr(c, "chain", None), image_cls, reply_cls,
+                             depth + 1, max_depth)
+            if got is not None:
+                return got
+    return None
+
+
 DEFAULT_PICK_PROMPT = (
     "你正在群聊里说话。\n\n"
     "你刚回复了这段话：\n「{reply}」\n\n"
@@ -1845,7 +1869,7 @@ class StickerUseMixin:
         import asyncio
         import hashlib
         import shutil
-        from astrbot.core.message.components import Image
+        from astrbot.core.message.components import Image, Reply
         name = str(kwargs.get("name") or "").strip()[:12] or "私藏"
         raw = str(kwargs.get("tags") or "").strip()
         tags = [x.strip()[:10] for x in raw.replace("，", ",").split(",") if x.strip()][:6]
@@ -1859,12 +1883,11 @@ class StickerUseMixin:
             comps.extend(getattr(event.message_obj, "message", None) or [])
         except Exception:
             pass
-        img = None
-        for c in comps:
-            if isinstance(c, Image):
-                img = c
-                break
+        img = pick_image(comps, Image, Reply)
         if img is None:
+            # 万一还是捞不到，把链的形状记下来 —— 一眼看得出图到底在不在事件里
+            logger.info("[mindscape_stickers] save_sticker 没找到图，链= %s",
+                        [type(c).__name__ for c in comps][:10])
             return "这条消息里没看到图片，你把它单独发一次？"
         try:
             path = await asyncio.wait_for(img.convert_to_file_path(), timeout=20)
