@@ -1,0 +1,111 @@
+# ============================================================
+#  bot-mindscape 配置示例
+#  复制为 config.yaml 后按需修改
+# ============================================================
+
+# ── 认知层：长期记忆 ──
+memory:
+  max_chars: 2500          # 每轮请求注入的记忆字数上限（越小越省 token）
+  min_chars: 50            # 少于此长度就不注入
+  bots:
+    - self_id: "20000000"                      # 你的 bot 账号
+      name: "bot-name"                         # 显示名（只用于日志）
+      diary: "./data/bot-name.md"              # 长期记忆文件（diary 模块写入）
+      memory_chars: 2500                       # 可覆盖全局值
+      people: "./data/bot-name.people.md"      # 人物画像（由 diary 自动生成，可留空）
+      people_chars: 800                        # 人物画像注入上限
+
+# ── 认知层：记忆生成 ──
+diary:
+  source:
+    db: "./data/messages.db"                   # 消息库路径
+    table: "messages"                          # 表名
+    where: "event_name='group_message'"        # 可选：过滤条件
+    fields:
+      time: "timestamp"                        # 时间字段（Unix 秒）
+      seq: "sequence"                          # 自增序号（用于增量）
+      data: "data"                             # JSON 内容字段
+  targets:
+    - self_id: "20000000"
+      name: "bot-name"
+      groups: ["20000001"]                     # 只记这些群（留空=全部）
+      output: "./data/bot-name.md"
+      state: "./data/bot-name.state.json"
+      # persona: 决定日记用什么口吻写（留空则用内置默认，内置默认会同时产出 diary 和 people）
+      persona: "你在翻阅自己所在群聊的记录。只记发生了什么有趣的事，不要总结任何人的说话风格。只输出 JSON：{\"diary\":[\"条目1\"],\"people\":{\"昵称\":\"一句话描述\"}}"
+  llm:
+    api_base: "https://api.example.com/v1"     # OpenAI 兼容接口
+    api_key_env: "MINDSCAPE_API_KEY"           # 从环境变量读 key
+    # api_key_file: "./secrets/key.txt"        # 或者从文件读
+    model: "your-model"
+  batch: 40
+  max_input_chars: 14000
+  max_tokens: 900
+
+# ── 表达层：素材采集与调度 ──
+stickers:
+  dir: "./data/stickers"
+  index: "./data/stickers/index.json"
+  sample_prob: 0.10                            # 采样概率（越高越费 API）
+  targets:
+    - self_id: "20000000"
+      category: "bot-name"                     # 本 bot 独占的图库分类
+  judge:
+    api_base: "https://api.example.com/v1"
+    api_key_env: "MINDSCAPE_API_KEY"
+    model: "your-vision-model"                 # 需要支持图片输入
+    persona: "一名温柔的学生少女"
+    max_tokens: 2000
+  send:
+    force_prob: 0.10                           # 强制配图概率（治「不发图惯性」）
+    candidates: 12                             # 每次给模型看的候选数
+    formation:                                 # 队形：群里在斗图时跟着发
+      enabled: true
+      window: 90                               # 判定窗口（秒）
+      need_same: 2                             # 同图出现几次算「在斗图」
+      prob: 0.35                               # 斗图时的跟进概率（比平时高）
+
+# ── 沉浸层：报错拦截 ──
+guard:
+  # 这里的 patterns 是【追加】到内置默认规则之上的（不会替换掉默认规则）。
+  # 也就是说：留空 = 只用内置默认；写几条 = 默认 + 你写的这几条。
+  patterns:
+    - "API Error"
+    - "Request timed out"
+    - "Traceback (most recent call last)"
+  regex: "(?:[A-Za-z_]*Error|[A-Za-z_]*Exception|Timeout|Failed)\\s*[:：]"
+
+# ── 沉浸层：输出规范 ──
+format:
+  targets: ["20000000"]
+  join_with: "，"
+  drop_last_if_short: false
+  short_len: 8
+
+# ── 运维层：会话清理 ──
+janitor:
+  db: "./data/conversations.db"
+  table: "conversations"
+  column: "content"
+  max_mb: 2.0
+  log: "./data/janitor.log"
+
+# ── 唤醒层：什么时候该回应 ──
+# 注意：原生框架一般只支持「前缀唤醒」和「@唤醒」。
+#       「提到名字必回 + 低概率冒泡 + 每 bot 独立配置」需要框架层支持，
+#       本项目的做法见 patches/ 目录（含自动安装脚本）。
+waking:
+  sample_prob: 0.02          # 全局默认：没被提到时的冒泡概率
+  min_interval: 600          # 全局默认：两次冒泡的最小间隔（秒）
+  bots:
+    - self_id: "20000000"
+      enabled: true
+      names:                 # 提到这些词 = 必回（大小写敏感按框架实现）
+        - "bot-name"
+        - "小名"
+      exclude:               # 提到这些词则不触发（防误唤醒）
+        - "别人的名字"
+      reply_on_at: true      # 被 @ 时必回
+      sample_prob: 0.02      # 本 bot 的冒泡概率（覆盖全局）
+      min_interval: 600      # 本 bot 的冒泡间隔（覆盖全局）
+      groups: ["20000001"]   # 只在这些群活动（留空=全部）

@@ -1,0 +1,4 @@
+name: mindscape_guard
+desc: 沉浸层 · 拦截 LLM 报错，防止「API Error」这类文本发给用户暴露 AI 身份
+author: bot-mindscape
+version: 0.1.0

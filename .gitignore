@@ -1,0 +1,21 @@
+# 配置（含密钥）
+config/config.yaml
+secrets/
+
+# 运行时数据（记忆 / 图库 / 日志）
+data/
+*.state.json
+
+# 审查用的合并文档（含完整源码副本，不随仓库分发）
+docs/review-bundle.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store

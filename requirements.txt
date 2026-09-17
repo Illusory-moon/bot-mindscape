@@ -1,0 +1,9 @@
+# bot-mindscape 运行依赖
+#
+# 说明：若把 plugins/ 装进 AstrBot 等框架，框架通常已自带这些库。
+#
+# 全部模块唯一的外部依赖就是下面两个：
+PyYAML>=6.0        # 配置读写（plugins/ 与所有脚本都依赖）
+httpx>=0.24        # 视觉判定 / 选图请求（plugins/mindscape_stickers*.py）
+
+# GUI 与 Web 管理台都只用标准库（tkinter / http.server），无需额外安装。
