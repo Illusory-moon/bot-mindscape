@@ -18,6 +18,7 @@ import time
 import urllib.request
 from astrbot.api import llm_tool, logger
 from astrbot.api import llm_tool, logger, star
+from astrbot.api import logger
 from astrbot.api import logger, star
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.core.message.components import Image
@@ -353,6 +354,21 @@ SECTION_TITLE = "## 你的长期记忆"
 HEADER_MARK = "## "
 
 
+def _tail_lines(text, budget):
+    """块本身超预算时，从尾部按行取到预算内（不切半行）。"""
+    if budget <= 0:
+        return ""
+    out = []
+    used = 0
+    for ln in reversed(text.splitlines()):
+        add = len(ln) + (1 if out else 0)
+        if used + add > budget:
+            break
+        out.insert(0, ln)
+        used += add
+    return "\n".join(out)
+
+
 def read_recent(path, max_chars):
     """取最近的记忆，严格不超过 max_chars（从最新条目向前累计）。
 
@@ -396,7 +412,14 @@ def read_recent(path, max_chars):
             continue
         add = len(text) + (1 if picked else 0)
         if used + add > max_chars:
-            # 单块就超预算：整块丢弃（宁缺勿断）
+            if not picked:
+                # 最新一块自己就超预算时，「整块丢弃」会让记忆变成全空 —— 实测中
+                # 一份 2385 字的成长记录配上 2000 字预算就是这个结果（返回 0 字，
+                # bot 表现为「完全不记得任何人」）。退一步：取这一块的尾部（较新
+                # 的部分），按行截断，宁可少记也不能全忘。
+                keep = _tail_lines(text, max_chars)
+                if keep:
+                    picked.append(keep)
             break
         picked.insert(0, text)
         used += add
@@ -425,7 +448,36 @@ def read_people(path, max_chars):
     except Exception:
         return ""
     out = "\n".join(lines)
+    # ponytail: 这里按从头截断，而画像文件是按昵称排序的 —— 一旦文件超过
+    # max_chars，排序靠后的群友会整批消失（实测：2175 字的画像配 800 字预算，
+    # 正好把「重要的人」切掉，bot 于是完全不认得这个人）。当前对策是把
+    # people_chars 配足装下整份文件；画像再长大时应改为按「最近出现」挑选条目，
+    # 而不是按字母序切。
     return out[:max_chars]
+
+
+def read_many(paths, max_chars):
+    """按顺序读多个记忆文件，总量硬上限 max_chars（各文件先平分预算）。
+
+    用途：一个 bot 的记忆可能分散在多份文件里 —— 例如日常记的日记，
+    外加一份人格/成长档案。两份都要进 prompt，但总量不能失控。
+    """
+    paths = [p for p in paths if p]
+    if not paths or max_chars <= 0:
+        return ""
+    share = max(200, int(max_chars / len(paths)))
+    parts = []
+    used = 0
+    for p in paths:
+        seg = read_recent(p, share).strip()
+        if not seg:
+            continue
+        add = len(seg) + (1 if parts else 0)
+        if used + add > max_chars:
+            break
+        parts.append(seg)
+        used += add
+    return "\n".join(parts)
 
 
 DEFAULT_LIMIT = 15
@@ -892,6 +944,18 @@ def flatten(text, join_with="，", drop_last_if_short=False, short_len=8):
     return out
 
 
+DEFAULT_TEXT = "……（刚才走神了，你再说一遍？）"
+
+
+def _abs(path):
+    if not path:
+        return ""
+    if os.path.isabs(path):
+        return path
+    base = os.path.dirname(cfg.config_path()) if cfg else "."
+    return os.path.join(base, path)
+
+
 DEFAULT_MAX_MB = 2.0
 
 
@@ -1063,7 +1127,12 @@ class MemoryMixin:
             max_chars = int(bot.get("memory_chars") or self.m_cfg.get("max_chars") or DEFAULT_MAX_CHARS)
             min_chars = int(self.m_cfg.get("min_chars") or DEFAULT_MIN_CHARS)
 
-            mem = read_recent(path, max_chars)
+            # 支持额外记忆文件（extra_diaries），例如人格文件里的关系与约定
+            extras = []
+            for x in (bot.get("extra_diaries") or []):
+                if isinstance(x, str) and x.strip():
+                    extras.append(_resolve(x))
+            mem = read_many(extras + [path] if extras else [path], max_chars)
             if len(mem) < min_chars:
                 return
 
@@ -1558,10 +1627,94 @@ class FormatMixin:
                     comp.text = new
         except Exception as e:
             logger.warning("[mindscape_format] 处理失败: %s", str(e)[:120])
+
+
+class RescueMixin:
+    def setup(self, context):
+        self.r_cfg = cfg.section("rescue") or {}
+        self.r_done = set()          # 防止同一条回复反复救援
+        logger.info("[mindscape_rescue] loaded | %s",
+                    "启用" if self.r_cfg.get("enabled", True) else "关闭")
+
+    @staticmethod
+    def _is_empty_result(result):
+        """完全没有文字、也没有图片，才算「空回复」。"""
+        try:
+            if (result.get_plain_text() or "").strip():
+                return False
+        except Exception:
+            return False
+        try:
+            for c in (getattr(result, "chain", None) or []):
+                if isinstance(c, Image):
+                    return False
+        except Exception:
+            pass
+        return True
+
+    @filter.on_decorating_result(priority=800)
+    async def rescue_empty(self, event: AstrMessageEvent):
+        if not self.r_cfg.get("enabled", True):
+            return
+        try:
+            result = event.get_result()
+            if result is None or not result.is_llm_result():
+                return
+            if not self._is_empty_result(result):
+                return
+            text = await self._ask_once(event)
+            if text:
+                from astrbot.core.message.components import Plain
+                result.chain.append(Plain(text))
+                logger.info("[mindscape_rescue] 空回复已补: %s", text[:40])
+        except Exception as e:
+            logger.warning("[mindscape_rescue] 救援失败: %s", str(e)[:120])
+
+    async def _ask_once(self, event):
+        import httpx
+        api_base = (self.r_cfg.get("api_base") or "").rstrip("/")
+        key = os.environ.get(self.r_cfg.get("api_key_env") or "", "")
+        if not api_base or not key:
+            return ""
+        persona = self.r_cfg.get("persona") or "一个自然的聊天伙伴"
+        last = ""
+        try:
+            data = getattr(event, "message_obj", None)
+            last = str(getattr(data, "message_str", "") or "")[:200]
+        except Exception:
+            last = ""
+        prompt = (
+            "你是" + persona + "。刚才群友说了：\n"
+            + (last or "（一条消息）")
+            + "\n\n请用一句话自然回应（不超过30字），不要解释、不要客套、不要提及你是 AI。"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=float(self.r_cfg.get("timeout") or 20)) as cli:
+                resp = await cli.post(
+                    api_base + "/chat/completions",
+                    headers={"Authorization": "Bearer " + key},
+                    json={"model": self.r_cfg.get("model") or "gpt-4o-mini",
+                          "messages": [{"role": "user", "content": prompt}],
+                          "max_tokens": int(self.r_cfg.get("max_tokens") or 120)},
+                )
+            if resp.status_code != 200:
+                return ""
+            msg = resp.json()["choices"][0]["message"]
+            txt = (msg.get("content") or "").strip()
+            if not txt:
+                txt = (msg.get("reasoning_content") or "").strip()
+            # 极简清洗：去掉可能的引号和前缀
+            txt = txt.strip().strip('"').strip("“”").strip()
+            if txt and len(txt) > 60:
+                txt = txt[:60]
+            return txt
+        except Exception as e:
+            logger.warning("[mindscape_rescue] 补话失败: %s", str(e)[:100])
+            return ""
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
 # ==================================================================
-class MindscapePlugin(GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, FormatMixin, star.Star):
+class MindscapePlugin(GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, star.Star):
     def __init__(self, context):
         self.context = context
         self.name = "mindscape"
@@ -1571,4 +1724,5 @@ class MindscapePlugin(GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, F
         StickersMixin.setup(self, context)
         StickerUseMixin.setup(self, context)
         FormatMixin.setup(self, context)
-        logger.info("[mindscape] 插件已加载（5 个模块）")
+        RescueMixin.setup(self, context)
+        logger.info("[mindscape] 插件已加载（6 个模块）")

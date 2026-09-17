@@ -331,6 +331,25 @@ def check_regressions():
     except Exception as e:
         bad("R09 滑动窗口", str(e)[:140])
 
+    # R11: 单个块超过预算时不能返回空。实测：一份 2385 字的「成长记录」整段
+    #      就是一个块，配上 2000 字预算会整块丢弃 → 返回 0 字，bot 表现为
+    #      「完全不记得任何人」（这正是某个 bot忘了重要的人的机制性原因）。
+    try:
+        import mindscape_memory as MM3
+        importlib.reload(MM3)
+        f = os.path.join(HERE, "_sc_bigblock.md")
+        with open(f, "w", encoding="utf-8") as fp:
+            fp.write("## 我的成长记录" + chr(10))
+            for i in range(60):
+                fp.write("- 第 %d 条：重要的人是姐姐" % i + chr(10))
+        r = MM3.read_recent(f, 300)
+        good = bool(r) and ("重要的人" in r) and len(r) <= 300
+        (ok if good else bad)("R11 超大块不丢记忆",
+                              "%d 字，含关键词=%s" % (len(r), "重要的人" in r))
+        os.remove(f)
+    except Exception as e:
+        bad("R11 超大块不丢记忆", str(e)[:140])
+
     # R05: 同一秒内更大序号的消息不能被漏读
     try:
         import mindscape_diary as MD

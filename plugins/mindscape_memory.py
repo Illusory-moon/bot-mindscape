@@ -23,6 +23,21 @@ SECTION_TITLE = "## 你的长期记忆"
 HEADER_MARK = "## "
 
 
+def _tail_lines(text, budget):
+    """块本身超预算时，从尾部按行取到预算内（不切半行）。"""
+    if budget <= 0:
+        return ""
+    out = []
+    used = 0
+    for ln in reversed(text.splitlines()):
+        add = len(ln) + (1 if out else 0)
+        if used + add > budget:
+            break
+        out.insert(0, ln)
+        used += add
+    return "\n".join(out)
+
+
 def read_recent(path, max_chars):
     """取最近的记忆，严格不超过 max_chars（从最新条目向前累计）。
 
@@ -66,7 +81,14 @@ def read_recent(path, max_chars):
             continue
         add = len(text) + (1 if picked else 0)
         if used + add > max_chars:
-            # 单块就超预算：整块丢弃（宁缺勿断）
+            if not picked:
+                # 最新一块自己就超预算时，「整块丢弃」会让记忆变成全空 —— 实测中
+                # 一份 2385 字的成长记录配上 2000 字预算就是这个结果（返回 0 字，
+                # bot 表现为「完全不记得任何人」）。退一步：取这一块的尾部（较新
+                # 的部分），按行截断，宁可少记也不能全忘。
+                keep = _tail_lines(text, max_chars)
+                if keep:
+                    picked.append(keep)
             break
         picked.insert(0, text)
         used += add
@@ -95,7 +117,36 @@ def read_people(path, max_chars):
     except Exception:
         return ""
     out = "\n".join(lines)
+    # ponytail: 这里按从头截断，而画像文件是按昵称排序的 —— 一旦文件超过
+    # max_chars，排序靠后的群友会整批消失（实测：2175 字的画像配 800 字预算，
+    # 正好把「重要的人」切掉，bot 于是完全不认得这个人）。当前对策是把
+    # people_chars 配足装下整份文件；画像再长大时应改为按「最近出现」挑选条目，
+    # 而不是按字母序切。
     return out[:max_chars]
+
+
+def read_many(paths, max_chars):
+    """按顺序读多个记忆文件，总量硬上限 max_chars（各文件先平分预算）。
+
+    用途：一个 bot 的记忆可能分散在多份文件里 —— 例如日常记的日记，
+    外加一份人格/成长档案。两份都要进 prompt，但总量不能失控。
+    """
+    paths = [p for p in paths if p]
+    if not paths or max_chars <= 0:
+        return ""
+    share = max(200, int(max_chars / len(paths)))
+    parts = []
+    used = 0
+    for p in paths:
+        seg = read_recent(p, share).strip()
+        if not seg:
+            continue
+        add = len(seg) + (1 if parts else 0)
+        if used + add > max_chars:
+            break
+        parts.append(seg)
+        used += add
+    return "\n".join(parts)
 
 
 class MemoryMixin:
@@ -123,7 +174,12 @@ class MemoryMixin:
             max_chars = int(bot.get("memory_chars") or self.m_cfg.get("max_chars") or DEFAULT_MAX_CHARS)
             min_chars = int(self.m_cfg.get("min_chars") or DEFAULT_MIN_CHARS)
 
-            mem = read_recent(path, max_chars)
+            # 支持额外记忆文件（extra_diaries），例如人格文件里的关系与约定
+            extras = []
+            for x in (bot.get("extra_diaries") or []):
+                if isinstance(x, str) and x.strip():
+                    extras.append(_resolve(x))
+            mem = read_many(extras + [path] if extras else [path], max_chars)
             if len(mem) < min_chars:
                 return
 

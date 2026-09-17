@@ -26,12 +26,12 @@ ORDER = [
     "mindscape_core", "mindscape_config",
     "mindscape_guard", "mindscape_memory", "mindscape_recall",
     "mindscape_diary", "mindscape_stickers", "mindscape_sticker_use",
-    "mindscape_format", "mindscape_janitor",
+    "mindscape_format", "mindscape_rescue", "mindscape_janitor",
 ]
 
 # 这些模块里的类是 Mixin，需要被主类继承（按此顺序）
 MIXIN_ORDER = ["GuardMixin", "MemoryMixin", "StickersMixin",
-               "StickerUseMixin", "FormatMixin"]
+               "StickerUseMixin", "FormatMixin", "RescueMixin"]
 
 
 def _seg(src_lines, node):
@@ -49,7 +49,7 @@ def _seg(src_lines, node):
 
 
 def split_module(path):
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:   # utf-8-sig 自动吃掉 BOM
         src = f.read()
     tree = ast.parse(src)
     src_lines = src.splitlines()
