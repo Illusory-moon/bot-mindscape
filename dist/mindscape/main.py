@@ -489,6 +489,9 @@ def read_many(paths, max_chars):
 DEFAULT_LIMIT = 15
 
 
+FULL_CAP = 80          # full 模式的上限：要数数就得多给，但也不能把 prompt 撑爆
+
+
 SCAN_LINE_CAP = 200000
 
 
@@ -540,16 +543,30 @@ def score_line(text, kw, min_ratio=0.6, min_chars=2):
     return base + bonus
 
 
-def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP):
-    """在记忆中检索相关条目，按相关度排序返回（混合检索：精确 + 模糊）。
+def split_terms(keyword):
+    """把查询词拆成一组近义词：空格、逗号、顿号、斜杠都算分隔。"""
+    return [x.strip() for x in re.split(r"[\s,，、/|]+", keyword or "") if x.strip()]
 
-    返回 [时间] 内容 形式的字符串列表，相关度高的在前。
+
+def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP,
+                 full=False):
+    """在记忆中检索相关条目（混合检索：精确 + 模糊）。
+
+    返回 (行列表, 真实命中总数)。
+
+    为什么要单独返回总数：模型只看到「给了它几条」，就会把这几条当成全部。
+    实测群里问「现在有几对纯爱」，它只翻到最近的一条就答「一对」——
+    而「情侣」在日记里命中 37 条。把总数单独告诉它，它才知道自己没看全。
+
+    为什么要接受多个词：提问用的词往往不是记日记时用的词。实测同一件事，
+    「纯爱」只命中 4 条，「情侣」命中 37 条。所以关键词允许给一组近义词，
+    命中任意一个都算。
     """
     if not path or not os.path.exists(path):
-        return []
-    kw = (keyword or "").strip()
-    if not kw:
-        return []
+        return [], 0
+    terms = split_terms(keyword)
+    if not terms:
+        return [], 0
     scored = []
     head = ""
     n = 0
@@ -565,14 +582,17 @@ def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP):
             if not line.startswith("-"):
                 continue
             body = line.lstrip("- ").strip()
-            sc = score_line(head + " " + body, kw)
+            text = head + " " + body
+            sc = max(score_line(text, t) for t in terms)
             if sc > 0:
                 scored.append((sc, n, "[%s] %s" % (head, body)))
     if not scored:
-        return []
+        return [], 0
     # 先按分数降序；同分时越新越靠前
     scored.sort(key=lambda x: (-x[0], -x[1]))
-    return [s[2] for s in scored[:limit]]
+    total = len(scored)
+    picked = scored[:FULL_CAP] if full else scored[:limit]
+    return [s[2] for s in picked], total
 
 
 def _first_str(args):
@@ -582,16 +602,30 @@ def _first_str(args):
     return ""
 
 
+def _as_bool(v):
+    """模型给的布尔值可能是字符串（"true" / "是"），bool("false") 会是 True。"""
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("1", "true", "yes", "y", "on", "是", "对", "要")
+
+
 @llm_tool(name="recall_memory")
 async def recall_memory(*args, **kwargs):
     """翻自己的长期记忆，回忆过去发生过的事。
 
-    当有人问你「几天前」「上次」「之前」「还记得吗」的事情，
-    或者你自己觉得应该知道却想不起来时，用这个工具查一查。
+    你眼前只有**最近一小段**记忆，不是全部 —— 手头没有，不等于没发生过。
+    所以要「数数/汇总」（几对、几个、都有谁、一共几次、谁最……）、要「追溯」
+    （以前、上次、第一次、这几天、有没有过），或者你打算回答「只有」「就这些」
+    「没有」的时候，都必须先用这个工具查一遍再开口。
+
     返回的是你当时记下的原话，可以自然地讲出来，别照本宣科念。
 
     Args:
-        keyword(string): 搜索关键词，比如人名、事件、话题
+        keyword(string): 搜索关键词。可以给**一组近义词**，用空格或逗号分开
+            （比如「纯爱 情侣 登记」）—— 你记日记时用的词，和对方问话时用的词
+            经常不一样，多给几个才不会漏
+        full(boolean): 数数/汇总时必须设为 true —— 默认只给最相关的十几条，
+            数数一定漏；设为 true 会返回全部命中
     """
     kw = str(kwargs.get("keyword") or _first_str(args)).strip()
     if not kw:
@@ -610,15 +644,29 @@ async def recall_memory(*args, **kwargs):
     path = _diary_for(sid)
     if not path:
         return "我还没有长期记忆文件。"
-    hits = search_diary(path, kw)
+    full = _as_bool(kwargs.get("full"))
+    hits, total = search_diary(path, kw, full=full)
     if not hits:
         # 找不到就明确说找不到 —— 这是防幻觉的第一道闸
         return ("翻了翻记忆，没有找到跟「%s」有关的记录。"
-                "如果对方坚持说有，就直接说你想不起来了，不要编。") % kw
-    # 第二道闸：给出记录的同时约束「只能用这些」
-    return ("以下是记忆里与「%s」有关的记录（按相关度排序，共 %d 条）：\n%s\n\n"
-            "⚠️ 只依据上面的记录回答。记录里没提到的人或事，就说想不起来，"
-            "绝对不要凭印象补充细节。") % (kw, len(hits), "\n".join(hits))
+                "可以换个更接近你当时记法的词再查一次（人名、别称，"
+                "或者那件事里的另一个说法）；如果还是没有，就直接说你想不起来了，"
+                "不要编。") % kw
+    if full:
+        head = ("以下是记忆里**全部** %d 条与「%s」有关的记录（按相关度排序）："
+                % (total, kw))
+    elif total > len(hits):
+        # 关键的一句：让模型知道自己没看全，而不是把「看到的」当成「全部」
+        head = ("以下是记忆里与「%s」有关的记录（共命中 %d 条，这里只给你最相关的 %d 条）："
+                % (kw, total, len(hits)))
+    else:
+        head = "以下是记忆里与「%s」有关的记录（共 %d 条，已全部列出）：" % (kw, total)
+    tail = ("\n\n⚠️ 只依据上面的记录回答。记录里没提到的人或事，就说想不起来，"
+            "绝对不要凭印象补充细节。")
+    if not full and total > len(hits):
+        tail += ("\n⚠️ 上面不是全部（共命中 %d 条）。如果对方问的是「几对/几个/都有谁」"
+                 "这种要数数的，用 full=true 再查一次，否则一定数漏。" % total)
+    return head + "\n" + "\n".join(hits) + tail
 
 
 DEFAULT_SEG_SYMBOLS = {
@@ -1253,10 +1301,23 @@ class MemoryMixin:
                 return
 
             label = bot.get("name") or "你"
+            # 光给记忆不够 —— 实测：问「今天有几对纯爱」，它只在窗口里找到一个
+            # 就答「一对」，而那天日记里记着好几对。它把「我上下文里只有这些」
+            # 当成了「总共就这些」。所以这里必须做两件事：
+            #   1. 明说这只是最近一部分，不是全部
+            #   2. 给出「什么情况下必须先查」的触发条件
+            # 光靠工具描述不够：它压根没意识到自己需要查。
             block = (
                 "\n\n" + SECTION_TITLE + "\n"
                 "以下是你自己记下来的往事，是你亲身经历的，可以自然地提起，"
                 "但不要照本宣科地念，也不要说「根据我的记忆」这种话。\n\n"
+                "**注意：下面只是你最近记下的一部分，不是你的全部记忆。**"
+                "更早的事你能用 recall_memory 翻出来 —— 手头没有，不等于没发生过，"
+                "别拿眼前这一点就当成了全部。\n\n"
+                "**遇到下面这几种，先查再答**：\n"
+                "- 要**数**或**汇总**的：几对、几个、都有谁、一共几次、最……的是谁\n"
+                "- 要**追溯**的：以前、之前、上次、第一次、这几天、有没有过\n"
+                "- 你准备说「只有」「就这些」「没有」的时候\n"
             )
             if dig:
                 block += SECTION_DIGEST + "\n" + dig + "\n\n"

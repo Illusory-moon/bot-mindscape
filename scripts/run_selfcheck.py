@@ -519,6 +519,38 @@ def check_regressions():
     except Exception as e:
         bad("R17 模块全局名自洽", str(e)[:140])
 
+    # R18: 检索必须「知道自己只看了多少」。
+    #      实测：群里问「现在有几对纯爱」，bot 只在最近窗口里找到一个就答
+    #      「一对」，日记里其实记着好几对 —— 它把「上下文里有的」当成了「全部」。
+    #      修法两半：(1) 注入的记忆块写明「这只是最近一部分」+ 何时必须先查；
+    #      (2) 检索返回真实命中总数，并给 full 模式供数数用。
+    try:
+        import mindscape_recall as RC
+        importlib.reload(RC)
+        f = os.path.join(HERE, "_sc_recall.md")
+        with open(f, "w", encoding="utf-8") as fp:
+            for i in range(40):
+                fp.write("## 2026-01-%02d" % (i % 28 + 1) + chr(10)
+                         + "- 第 %d 对纯爱在群里登记了" % i + chr(10))
+        hits, total = RC.search_diary(f, "纯爱")
+        capped = (len(hits) == RC.DEFAULT_LIMIT and total == 40)
+        allhits, total2 = RC.search_diary(f, "纯爱", full=True)
+        full_ok = (len(allhits) == 40 and total2 == 40)
+        # 提问用的词常常不是记日记用的词：允许给一组近义词，命中任意一个都算
+        syn = RC.split_terms("纯爱 情侣,登记")
+        multi, mtotal = RC.search_diary(f, "完全对不上的词 纯爱")
+        multi_ok = (syn == ["纯爱", "情侣", "登记"] and mtotal == 40)
+        mem_src = open(os.path.join(PLUGINS, "mindscape_memory.py"),
+                       encoding="utf-8").read()
+        told = ("不是你的全部记忆" in mem_src and "先查再答" in mem_src)
+        (ok if (capped and full_ok and told and multi_ok) else bad)(
+            "R18 检索知道自己的边界",
+            "总数=%d 默认返回=%d full返回=%d 多词=%s 注入有提醒=%s"
+            % (total, len(hits), len(allhits), multi_ok, told))
+        os.remove(f)
+    except Exception as e:
+        bad("R18 检索知道自己的边界", str(e)[:140])
+
     # R05: 同一秒内更大序号的消息不能被漏读
     try:
         import mindscape_diary as MD
