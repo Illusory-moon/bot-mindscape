@@ -540,13 +540,26 @@ def check_regressions():
         syn = RC.split_terms("纯爱 情侣,登记")
         multi, mtotal = RC.search_diary(f, "完全对不上的词 纯爱")
         multi_ok = (syn == ["纯爱", "情侣", "登记"] and mtotal == 40)
+        # 结果文案不能谎报「全部」—— full 模式被 FULL_CAP 截断时也必须说清。
+        # 曾经这里写「全部 87 条」而只列了 80 条，等于自己又犯了「把看到的
+        # 当成全部」这个毛病。
+        t_full_trunc = RC.format_hits("x", ["- a"] * 80, 87, True)
+        t_full_all = RC.format_hits("x", ["- a"] * 40, 40, True)
+        t_part = RC.format_hits("x", ["- a"] * 15, 41, False)
+        honest = ("全部" not in t_full_trunc.split(chr(10))[0]
+                  and "还有 7 条没列出来" in t_full_trunc
+                  and "已全部列出" in t_full_all
+                  # 命中条数不等于个数：同一对会在多天被反复记到，得会归并
+                  and "命中条数不等于个数" in t_full_all
+                  and "命中条数不等于个数" in t_full_trunc
+                  and "不是全部" in t_part and "full=true" in t_part)
         mem_src = open(os.path.join(PLUGINS, "mindscape_memory.py"),
                        encoding="utf-8").read()
         told = ("不是你的全部记忆" in mem_src and "先查再答" in mem_src)
-        (ok if (capped and full_ok and told and multi_ok) else bad)(
+        (ok if (capped and full_ok and told and multi_ok and honest) else bad)(
             "R18 检索知道自己的边界",
-            "总数=%d 默认返回=%d full返回=%d 多词=%s 注入有提醒=%s"
-            % (total, len(hits), len(allhits), multi_ok, told))
+            "总数=%d 默认返回=%d full返回=%d 多词=%s 文案不谎报=%s 注入有提醒=%s"
+            % (total, len(hits), len(allhits), multi_ok, honest, told))
         os.remove(f)
     except Exception as e:
         bad("R18 检索知道自己的边界", str(e)[:140])

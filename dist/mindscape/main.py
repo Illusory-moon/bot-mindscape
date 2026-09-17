@@ -602,6 +602,40 @@ def _first_str(args):
     return ""
 
 
+def format_hits(kw, hits, total, full):
+    """组织给模型看的检索结果。
+
+    唯一不能含糊的事：**给了几条 / 一共命中几条**。
+    曾经这里写「以下是……共 %d 条」，模型就把这个数当成了全部 —— 它只拿到
+    15 条，真实命中 41 条，于是回答「一对」。现在只要没给全就明说，
+    连 full 模式被 FULL_CAP 截断时也要说清（曾经写成「全部 87 条」而只列了 80 条，
+    等于自己又犯了同一个毛病）。
+    """
+    short = total > len(hits)
+    tail_extra = ""
+    if short and full:
+        head = ("以下是记忆里与「%s」有关的记录（共命中 %d 条，"
+                "这里按相关度列出前 %d 条）：" % (kw, total, len(hits)))
+    elif short:
+        head = ("以下是记忆里与「%s」有关的记录（共命中 %d 条，"
+                "这里只给你最相关的 %d 条）：" % (kw, total, len(hits)))
+    else:
+        head = "以下是记忆里与「%s」有关的记录（共 %d 条，已全部列出）：" % (kw, total)
+        if full:
+            tail_extra = ("\n⚠️ **命中条数不等于个数** —— 同一件事会在好几天被反复记到，"
+                          "回答「一共几对/几个」时要自己归并，别把条数直接当答案。")
+    tail = tail_extra + ("\n\n⚠️ 只依据上面的记录回答。记录里没提到的人或事，就说想不起来，"
+                         "绝对不要凭印象补充细节。")
+    if short and not full:
+        tail += ("\n⚠️ 上面不是全部（共命中 %d 条）。如果对方问的是「几对/几个/都有谁」"
+                 "这种要数数的，用 full=true 再查一次，否则一定数漏。" % total)
+    elif short:
+        tail += ("\n⚠️ 还有 %d 条没列出来。另外：**命中条数不等于个数** ——"
+                 "同一件事会在好几天被反复记到，回答「一共几对/几个」时要自己归并，"
+                 "别把条数直接当答案。" % (total - len(hits)))
+    return head + "\n" + "\n".join(hits) + tail
+
+
 def _as_bool(v):
     """模型给的布尔值可能是字符串（"true" / "是"），bool("false") 会是 True。"""
     if isinstance(v, bool):
@@ -652,21 +686,7 @@ async def recall_memory(*args, **kwargs):
                 "可以换个更接近你当时记法的词再查一次（人名、别称，"
                 "或者那件事里的另一个说法）；如果还是没有，就直接说你想不起来了，"
                 "不要编。") % kw
-    if full:
-        head = ("以下是记忆里**全部** %d 条与「%s」有关的记录（按相关度排序）："
-                % (total, kw))
-    elif total > len(hits):
-        # 关键的一句：让模型知道自己没看全，而不是把「看到的」当成「全部」
-        head = ("以下是记忆里与「%s」有关的记录（共命中 %d 条，这里只给你最相关的 %d 条）："
-                % (kw, total, len(hits)))
-    else:
-        head = "以下是记忆里与「%s」有关的记录（共 %d 条，已全部列出）：" % (kw, total)
-    tail = ("\n\n⚠️ 只依据上面的记录回答。记录里没提到的人或事，就说想不起来，"
-            "绝对不要凭印象补充细节。")
-    if not full and total > len(hits):
-        tail += ("\n⚠️ 上面不是全部（共命中 %d 条）。如果对方问的是「几对/几个/都有谁」"
-                 "这种要数数的，用 full=true 再查一次，否则一定数漏。" % total)
-    return head + "\n" + "\n".join(hits) + tail
+    return format_hits(kw, hits, total, full)
 
 
 DEFAULT_SEG_SYMBOLS = {
