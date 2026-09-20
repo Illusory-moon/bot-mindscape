@@ -101,10 +101,14 @@ class SilenceMixin:
             if event.get_extra("cron_job"):
                 if SI_CRON_NOTE.splitlines()[0] not in old:
                     request.system_prompt = old + "\n\n" + SI_CRON_NOTE
+                logger.info("[mindscape_silence] 冒泡轮：不给令牌（不调工具即沉默）| bot=%s",
+                            event.get_self_id())
                 return
             if self.si_token in old:
                 return
             request.system_prompt = old + "\n\n" + self.si_prompt
+            logger.info("[mindscape_silence] 回复轮：已授予沉默权 | bot=%s",
+                        event.get_self_id())
         except Exception as e:
             logger.warning("[mindscape_silence] 注入失败: %s", str(e)[:120])
 
