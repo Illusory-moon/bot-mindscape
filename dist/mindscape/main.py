@@ -1757,8 +1757,9 @@ class MemoryMixin:
                 )
 
             request.system_prompt = old + block
-            logger.info("[mindscape_memory] %s 注入 %d 字记忆 / %d 字摘要 / %d 字账本 / %d 字人物",
-                        label, len(mem), len(dig), len(notes), len(people))
+            logger.info("[mindscape_memory] %s 注入 %d 字记忆 / %d 字摘要 / %d 字账本"
+                        " / %d 字风格 / %d 字人物",
+                        label, len(mem), len(dig), len(notes), len(sty), len(people))
         except Exception as e:
             logger.warning("[mindscape_memory] 注入失败: %s", str(e)[:120])
 
