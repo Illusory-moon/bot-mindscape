@@ -829,6 +829,90 @@ def check_regressions():
     except Exception as e:
         bad("R24 去重表自愈", str(e)[:140])
 
+    # R25: 风格学习（mindscape_learn）必须「默认关闭 + 不耦合 + 不碰别人」。
+    #      这是个**离线管道**，不挂运行时钩子：只写文件，注入与否由各自 bot 的
+    #      memory 配置决定。三条约束任何一条破了都会伤到「不想用它」的 bot。
+    try:
+        import json as _js2
+        import sqlite3 as _sq
+        import mindscape_diary as MD
+        import mindscape_learn as ML
+        importlib.reload(MD)
+        importlib.reload(ML)
+
+        # (1) 默认关闭：enabled 不为真，一行都不跑
+        _saved_section = ML.cfg.section
+        _orig_run = ML.ln_run_target
+        called = []
+        ML.ln_run_target = lambda d, t: (called.append(1), (0, 0))[1]
+        off_ok = True
+        for flag in (False, None, 0, ""):
+            called[:] = []
+            ML.cfg.section = lambda n, _f=flag: (
+                {"enabled": _f, "targets": [{"user_id": "1", "output": "p"}]}
+                if n == "learn" else {})
+            ML.ln_main()
+            if called:
+                off_ok = False
+        called[:] = []
+        ML.cfg.section = lambda n: (
+            {"enabled": True, "targets": [{"user_id": "1", "output": "p"}]}
+            if n == "learn" else {})
+        ML.ln_main()
+        on_ok = bool(called)
+        ML.cfg.section = _saved_section
+        ML.ln_run_target = _orig_run
+
+        # (2) only_user：只取目标用户的消息；不传时保持原语义（排除 self_id）
+        db = os.path.join(HERE, "_sc_learn.db")
+        if os.path.exists(db):
+            os.remove(db)
+        con = _sq.connect(db)
+        con.execute("CREATE TABLE messages (timestamp INT, sequence INT, data TEXT)")
+        def _row(ts, seq, uid, text):
+            return (ts, seq, _js2.dumps({
+                "user_id": uid, "group_id": "9", "group_name": "g",
+                "sender": {"nickname": uid},
+                "message": [{"type": "text", "data": {"text": text}}]},
+                ensure_ascii=False))
+        con.executemany("INSERT INTO messages VALUES (?,?,?)", [
+            _row(1, 1, "AAA", "我的第一句"),
+            _row(2, 2, "BBB", "别人的一句"),
+            _row(3, 3, "AAA", "我的第二句"),
+        ])
+        con.commit()
+        con.close()
+        src = {"db": db, "where": "1=1"}
+        got = MD.fetch(src, {"user_id": "AAA"}, 0, 0, only_user="AAA")
+        only_ok = (len(got) == 2 and all(r["uid"] == "AAA" for r in got))
+        got2 = MD.fetch(src, {"self_id": "AAA"}, 0, 0)
+        default_ok = (len(got2) == 1 and got2[0]["uid"] == "BBB")
+        os.remove(db)
+
+        # (3) call_llm 要能换顶层键（日记 diary / 风格 observations）
+        import inspect as _insp
+        key_ok = "expect_key" in _insp.signature(MD.call_llm).parameters
+
+        # (4) 风格层必须存在、按「账本之后、摘要之前」注入，且没配就完全不进 block
+        mem_src = open(os.path.join(PLUGINS, "mindscape_memory.py"),
+                       encoding="utf-8").read()
+        has_layer = ("SECTION_STYLE" in mem_src and 'bot.get("style")' in mem_src
+                     and "DEFAULT_STYLE_CHARS" in mem_src)
+        seg = mem_src[mem_src.find("SECTION_NOTES + "):]
+        order_ok = (seg.find("SECTION_STYLE + ") > 0
+                    and 0 < seg.find("SECTION_STYLE + ") < seg.find("SECTION_DIGEST + "))
+        guard_ok = "if sty:" in mem_src and "not sty" in mem_src
+
+        (ok if (off_ok and on_ok and only_ok and default_ok and key_ok
+                and has_layer and order_ok and guard_ok) else bad)(
+            "R25 风格学习默认关闭且独立",
+            "默认关=%s 开了会跑=%s 只取目标=%s 原语义不变=%s 键可换=%s "
+            "风格层=%s 顺序=%s 未配不进=%s"
+            % (off_ok, on_ok, only_ok, default_ok, key_ok,
+               has_layer, order_ok, guard_ok))
+    except Exception as e:
+        bad("R25 风格学习", str(e)[:140])
+
     # R05: 同一秒内更大序号的消息不能被漏读
     try:
         import mindscape_diary as MD

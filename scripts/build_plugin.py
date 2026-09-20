@@ -25,7 +25,7 @@ OUT_DIR = os.path.join(HERE, "dist", "mindscape")
 ORDER = [
     "mindscape_core", "mindscape_config",
     "mindscape_guard", "mindscape_memory", "mindscape_recall", "mindscape_notes",
-    "mindscape_diary", "mindscape_stickers", "mindscape_sticker_use",
+    "mindscape_diary", "mindscape_learn", "mindscape_stickers", "mindscape_sticker_use",
     "mindscape_format", "mindscape_rescue", "mindscape_janitor",
 ]
 

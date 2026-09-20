@@ -79,8 +79,12 @@ def save_state(path, st):
         json.dump(st, f, ensure_ascii=False)
 
 
-def fetch(src, target, since_ts, since_seq):
-    """从 SQLite 增量读取消息（表名/字段名来自配置）。"""
+def fetch(src, target, since_ts, since_seq, only_user=None):
+    """从 SQLite 增量读取消息（表名/字段名来自配置）。
+
+    only_user：只取这个 user_id 的消息（mindscape_learn 用它学某人的风格）。
+    不传时保持原语义 —— 排除 self_id（日记只记别人）。
+    """
     db = dy_abs(src.get("db"))
     if not db or not os.path.exists(db):
         return []
@@ -111,7 +115,10 @@ def fetch(src, target, since_ts, since_seq):
             except Exception:
                 continue
             uid = str(d.get("user_id", ""))
-            if uid and uid == self_id:
+            if only_user is not None:
+                if uid != str(only_user):
+                    continue
+            elif uid and uid == self_id:
                 continue
             gid = str(d.get("group_id", ""))
             if groups and gid not in groups:
@@ -132,7 +139,8 @@ def fetch(src, target, since_ts, since_seq):
     return rows
 
 
-def call_llm(llm, persona, msgs, max_input_chars, max_tokens, relations=None):
+def call_llm(llm, persona, msgs, max_input_chars, max_tokens, relations=None,
+             expect_key="diary"):
     api_base = (llm.get("api_base") or "").rstrip("/")
     if not api_base:
         raise RuntimeError("diary.llm.api_base 未配置")
@@ -158,7 +166,8 @@ def call_llm(llm, persona, msgs, max_input_chars, max_tokens, relations=None):
             {"role": "system", "content": system},
             {"role": "user", "content": user[:max_input_chars]},
         ],
-        "temperature": 0.7,
+        # 提炼类任务温度别太高；某些口径（如风格学习）需要更保守
+        "temperature": float(llm.get("temperature", 0.7)),
         "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
     }).encode("utf-8")
@@ -175,9 +184,10 @@ def call_llm(llm, persona, msgs, max_input_chars, max_tokens, relations=None):
         # 解析失败 ≠ 没有值得记的事 —— 返回 None 让调用方中断并重试，
         # 否则这批消息会被标记为「已处理」，永久丢失。
         return None
-    if not isinstance(parsed, dict) or "diary" not in parsed:
+    # expect_key：不同口径要的顶层键不一样（日记是 diary，风格学习是 observations）
+    if not isinstance(parsed, dict) or expect_key not in parsed:
         return None
-    entries = parsed.get("diary")
+    entries = parsed.get(expect_key)
     if not isinstance(entries, list):
         return None
     return parsed

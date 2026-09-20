@@ -21,6 +21,11 @@ memory:
       #        生成的、检索只读 —— bot 能承诺却没地方落笔，于是同一件细节问几次
       #        能答出几个样。给它一本账，细节才有稳定答案。
       notes: "./data/bot-name.notes.md"
+      # style: 「说话风格」文件（由下面的 learn 段学出来）。
+      #        留空 = 不注入，这个 bot 完全不受影响 —— 想给哪个 bot 开就写哪个。
+      #        单独成层是因为它回答的是「怎么说」，而日记回答「发生了什么」。
+      # style: "./data/bot-name.style.md"
+      # style_chars: 800                         # 风格层注入上限
       # rules: 这个 bot 自己的行为规矩，随记忆一起注入。
       #        写在这里而不是代码里 —— 通用框架不该硬编码某个人设特有的规矩。
       # rules:
@@ -79,6 +84,43 @@ digest:
   max_tokens: 400
   keep_days: 30                                # 只保留最近这么多天
   max_per_run: 3                               # 单次最多补几天（首次回填会分几次跑完）
+
+# ── 认知层：风格学习 / 人格蒸馏（**默认关闭**）──
+# 从「某个人」的真实语料里学他**怎么说话**，产物喂给 memory.bots[].style。
+# 典型场景：用自己的人格搭 bot，让 bot 对齐自己的语气。
+#
+# 三条约束：
+#   1. 默认关闭 —— enabled 不为真就一行都不跑
+#   2. 不耦合   —— 「学什么」由 targets[].persona 决定，通用框架不预设人设
+#   3. 不碰别人 —— 本模块只写文件；谁读它完全由各自 bot 的 memory 配置决定
+learn:
+  enabled: false                               # ← 要显式打开
+  source:                                      # 和 diary.source 同结构
+    db: "./data/messages.db"
+    table: "messages"
+    where: "event_name='group_message'"
+    fields:
+      time: "timestamp"
+      seq: "sequence"
+      data: "data"
+  batch: 20                                    # 每批多少条交给 LLM
+  max_batches: 40                              # 单次运行最多几批（防首次回填烧钱）
+  max_input_chars: 12000
+  max_tokens: 1200
+  llm:
+    api_base: "https://api.example.com/v1"
+    api_key_env: "MINDSCAPE_API_KEY"
+    model: "your-model"
+    temperature: 0.4                           # 提炼类任务别太放飞
+  targets:
+    - name: "bot-name"
+      user_id: "20000000"                      # 学**谁**（通常是你自己）
+      output: "./data/bot-name.style.md"       # 风格产物 → memory.bots[].style
+      notes: "./data/bot-name.style-notes.md"  # 事实产物（可另行注入或检索）
+      # persona: 决定「学什么」。不写则用内置兜底 prompt。
+      #          这是本模块唯一需要针对具体人定制的地方。
+      # persona: |
+      #   你是「说话风格研究员」，正在观察 <某人> 的群消息……
 
 # ── 表达层：素材采集与调度 ──
 stickers:

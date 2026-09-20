@@ -24,6 +24,11 @@ DEFAULT_NOTES_CHARS = 800
 SECTION_TITLE = "## 你的长期记忆"
 SECTION_DIGEST = "### 你还记得的最近几天（每天一句）"
 SECTION_NOTES = "### 你记下的账（自己用 save_note 维护的，比流水账可靠）"
+# 风格层：从「本人语料」学来的说话方式（mindscape_learn 产的）。
+# 单独成层，是因为它回答的是「怎么说」，而其它层回答「发生了什么」；
+# 而且要能只给某一个 bot 开 —— 没配 style 的 bot 完全不受影响。
+SECTION_STYLE = "### 你的说话风格（从本人语料学来的，用来对齐语气）"
+DEFAULT_STYLE_CHARS = 800
 SECTION_RULES = "**你自己的规矩**"
 HEADER_MARK = "## "
 
@@ -206,7 +211,14 @@ class MemoryMixin:
                               or self.m_cfg.get("notes_chars") or DEFAULT_NOTES_CHARS)
                 notes = read_recent(nt_path, n_chars)
 
-            if len(mem) < min_chars and not dig and not notes:
+            sty = ""
+            st_path = _resolve(bot.get("style"))
+            if st_path:
+                s_chars = int(bot.get("style_chars")
+                              or self.m_cfg.get("style_chars") or DEFAULT_STYLE_CHARS)
+                sty = read_recent(st_path, s_chars)
+
+            if len(mem) < min_chars and not dig and not notes and not sty:
                 return
 
             old = getattr(request, "system_prompt", "") or ""
@@ -247,6 +259,8 @@ class MemoryMixin:
                 block += SECTION_RULES + "\n" + "\n".join("- " + r for r in rules) + "\n\n"
             if notes:
                 block += SECTION_NOTES + "\n" + notes + "\n\n"
+            if sty:
+                block += SECTION_STYLE + "\n" + sty + "\n\n"
             if dig:
                 block += SECTION_DIGEST + "\n" + dig + "\n\n"
             block += mem
