@@ -28,10 +28,30 @@ python patches/astrbot/install.py
 python patches/astrbot/install.py --revert
 ```
 
-补丁会往 `waking_check/stage.py` 插入两个代码块，并用标记包裹：
+补丁会往 `waking_check/stage.py` 插入三个代码块：
 
-- `# ══ bot-mindscape auto-wake BEGIN/END ══` —— 配置加载
-- `# ── bot-mindscape: 唤醒判定 ──` —— 判定逻辑
+| 块 | 位置 | 作用 |
+|---|---|---|
+| `_waking_config_block.py` | `__init__` 内 | 配置加载（标记 `══ bot-mindscape auto-wake BEGIN/END ══`） |
+| `_waking_judge_block.py` | `if not is_wake:` 之前 | 唤醒判定（标记 `── bot-mindscape: 唤醒判定 ──`） |
+| `_waking_ctx_block.py` | 模块级 | 群聊上下文缓冲：渲染消息链 + 落盘 |
+
+### 上下文缓冲解决什么
+
+未被唤醒的群消息**不进 LLM 上下文**，于是 bot 回复时「上下文不全」
+（群友 A 说「我吃了 KFC」没被唤醒，B 说「带我去吃呗」被唤醒，
+bot 只看到后半句，回一句「吃什么？」）。
+
+这个块把**所有**群消息落一份到 `/opt/astrbot/data/group_ctx_buffer.jsonl`，
+再由 `group_context_buffers` 插件注入 —— 框架层和插件层各管一段，
+因为唤醒阶段比插件执行更早，插件看不到未唤醒的消息。
+
+### ⚠️ 为什么要自己渲染消息链，不用 `event.message_str`
+
+`event.message_str` 在构建时会把 **「@ 本 bot」那一段去掉**。
+于是缓冲里那句只剩「发送者: 内容」—— bot 根本看不出这句话是直接对它说的。
+`_ms_render_chain()` 自己遍历消息链，把 At 段还原成 `@昵称`，
+这样「被 @ 了」这件事才真的进得了上下文。
 
 ## 配置
 
@@ -66,6 +86,21 @@ python patches/astrbot/install.py --revert
 | `per_bot_names` | 按 bot 账号指定触发词 |
 | `per_bot` | 按 bot 账号覆盖概率/间隔/开关 |
 | `restricted_groups` | 按 bot 限定活动群 |
+
+## ⚠️ 权威性：容器内的 `.venv` 不在挂载里
+
+实测（2026-09-18）：`qqbot-astrbot` 只挂了 `/opt/astrbot/data`，
+**`/opt/astrbot/.venv` 在容器镜像的可写层里**。也就是说：
+
+- 宿主机上那份 `/opt/astrbot/.venv/...` 与容器内的是**两份不同的文件**，
+  宿主机那份会**过期**（实测 291 行 vs 容器 374 行）。
+- 改容器内的代码：改完 `docker restart` 生效；
+  **容器被删除重建（升级镜像）就会丢**，必须重跑 `install.py`。
+- 排查问题时，**永远以容器内的文件为准**：
+
+  ```bash
+  docker exec qqbot-astrbot wc -l /opt/astrbot/.venv/lib/python3.13/site-packages/astrbot/core/pipeline/waking_check/stage.py
+  ```
 
 ## 风险与恢复
 

@@ -40,8 +40,8 @@ def read_block(name):
 
 
 def already_patched(text):
-    # R07: 两个代码块都要在，才算完整安装
-    return (MARK_BEGIN in text) and ("bot-mindscape: 唤醒判定" in text)
+    # R07: 三个代码块都要在，才算完整安装
+    return (MARK_BEGIN in text) and ("bot-mindscape: 唤醒判定" in text) and ("_ms_render_chain" in text)
 
 
 def patch(path):
@@ -53,6 +53,16 @@ def patch(path):
 
     cfg_block = read_block("_waking_config_block.py")
     judge_block = read_block("_waking_judge_block.py")
+    ctx_block = read_block("_waking_ctx_block.py")
+
+    # 0) 模块级：群聊上下文缓冲（渲染消息链 + 落盘）
+    #    必须先插，因为下面两处调用点要用到它。
+    if "_ms_render_chain" not in text:
+        m0 = re.search(r"^@register_stage", text, re.M)
+        if not m0:
+            print("[失败] 找不到模块级插入点：@register_stage")
+            return False
+        text = text[:m0.start()] + ctx_block + "\n\n\n" + text[m0.start():]
 
     # 1) 在 __init__ 里、group_auto_wake 那行后面插入配置块
     m = re.search(r"^(\s*)self\.group_auto_wake\s*=.*$", text, re.M)
@@ -79,6 +89,22 @@ def patch(path):
         (ind + ln) if ln.strip() else ln for ln in judge_block.splitlines()
     )
     text = text[:m2.start()] + j_indented + "\n" + text[m2.start():]
+
+    # 3) 落盘调用点：每条走到这里的群消息都记一份（含未唤醒的）
+    anchor = 'event.set_extra("activated_handlers", activated_handlers)'
+    if anchor in text and "_ms_record_ctx(event)" not in text:
+        text = text.replace(
+            anchor,
+            '_ms_record_ctx(event)  # 未唤醒的消息也要进上下文缓冲' + "\n        " + anchor,
+            1,
+        )
+    stop_anchor = "        if not is_wake:"
+    if stop_anchor in text and text.count("_ms_record_ctx(event)") < 2:
+        text = text.replace(
+            stop_anchor + "\n            event.stop_event()",
+            stop_anchor + "\n            _ms_record_ctx(event)\n            event.stop_event()",
+            1,
+        )
 
     # R07: 先编译检查生成结果，通过后才备份并落盘
     try:
