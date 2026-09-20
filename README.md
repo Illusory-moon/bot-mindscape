@@ -1,8 +1,18 @@
 # bot-mindscape · 灵魂景观
 
-> **为 AI bot 注入持久认知与无缝沉浸的通用增强框架。**
+> **为 AI bot 注入持久认知与无缝沉浸的通用增强框架** —— 治金鱼记忆、文字机器、机械出戏、不叫不动。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/Illusory-moon/bot-mindscape?style=flat)](https://github.com/Illusory-moon/bot-mindscape/stargazers)
+[![Release](https://img.shields.io/github/v/release/Illusory-moon/bot-mindscape)](https://github.com/Illusory-moon/bot-mindscape/releases)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+
+<img src="assets/demo-2-memory.png" width="600" alt="三天前的事它还记着">
+
+> **「说一件三天前令你印象最深的事」**
+> —— 它答得上来，而且是**具体那一件事**，不是一句泛泛的客套话。
+
+**其他语言：** [English](README_EN.md)
 
 ---
 
@@ -171,6 +181,18 @@ python scripts/config_gui.py       # 生成配置
 ---
 
 ## 效果预览
+
+### 认知层 · 它记得一个人
+
+群里有人问「记得我吗」，它翻的是**自己的小账本**，不是当天的聊天记录：
+
+<img src="assets/demo-3-notes.png" width="500" alt="它记得一个人">
+
+### 表达层 · 它有自己的语气和表情
+
+同一个人设，同一句话，换个 bot 就是另一种味道 —— 这是**风格层 + 表情包调度**在起作用：
+
+<img src="assets/demo-1-expression.png" width="500" alt="表达层：语气 + 表情包">
 
 ### 表情包库（本地预览页）
 
