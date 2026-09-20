@@ -1,4 +1,4 @@
-# bot-mindscape · 灵魂景观 (Mindscape)
+# bot-mindscape · 心灵景观 (Mindscape)
 
 **A universal augmentation layer that gives AI chat bots persistent cognition and seamless immersion.**
 
