@@ -1,6 +1,6 @@
 # bot-mindscape · 心灵景观
 
-> **为 AI bot 注入持久认知与无缝沉浸的通用增强框架** —— 治金鱼记忆、文字机器、机械出戏、不叫不动。
+> **在认知、表达、沉浸、唤醒四个层面的通用增强框架** —— 治金鱼记忆、文字机器、机械出戏、不叫不动。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Illusory-moon/bot-mindscape?style=flat)](https://github.com/Illusory-moon/bot-mindscape/stargazers)
