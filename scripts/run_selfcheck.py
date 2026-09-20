@@ -990,6 +990,9 @@ def check_regressions():
             "那是同一件事，不是两件", "以「最近的变化」为准",
             "别把它们当往事提起"))
         # 生成器写在文件头的给人看的注释，不能进 prompt
+        # 自主冒泡轮：记忆照给，但要明说「可以完全不依赖」
+        cron_ok = ('event.get_extra("cron_job")' in m_src
+                   and "可以完全不依赖它们" in m_src)
         # 稳定层是**文档**（从头读），近期层是**追加流**（取尾）—— 搞反会切掉口癖
         clean_ok = ("def _clean_style" in m_src
                     and "_clean_style(read_head(st_path" in m_src
@@ -998,12 +1001,12 @@ def check_regressions():
 
         (ok if (parse_ok and cat_ok and win_ok and ovw_ok and off_ok and on_ok
                 and slot_ok and order_ok and guard_ok and clean_ok
-                and exc_ok and san_ok and sysw_ok) else bad)(
+                and exc_ok and san_ok and sysw_ok and cron_ok) else bad)(
             "R26 风格分层无认知 bug",
             "解析=%s 只收风格=%s 窗口=%s 覆盖写=%s 默认关=%s 开了会跑=%s "
-            "双槽=%s 顺序=%s 四守卫=%s 去注释=%s 禁词=%s 产出再剔=%s 提示词=%s"
+            "双槽=%s 顺序=%s 四守卫=%s 去注释=%s 禁词=%s 产出再剔=%s 提示词=%s 冒泡轮=%s"
             % (parse_ok, cat_ok, win_ok, ovw_ok, off_ok, on_ok,
-               slot_ok, order_ok, guard_ok, clean_ok, exc_ok, san_ok, sysw_ok))
+               slot_ok, order_ok, guard_ok, clean_ok, exc_ok, san_ok, sysw_ok, cron_ok))
     except Exception as e:
         bad("R26 风格分层", str(e)[:140])
 
