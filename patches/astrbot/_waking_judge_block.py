@@ -14,10 +14,14 @@ _ms_text = event.message_str or ""
 import re as _ms_re
 _ms_bare = _ms_re.sub(r"@[^@\s]*?\(\d+\)", " ", _ms_text)
 _ms_bare = _ms_re.sub(r"@\S+", " ", _ms_bare)
+# ⚠️ 上面这行会把「@<bot名>」连名字一起剃掉 —— 可那恰恰是在叫 bot。
+#    所以再单独认一次带 @ 前缀的完整名字；只认**完整**名字，
+#    因此「@爱<bot名>的某某」不会被误判成在叫 bot。
+_ms_by_at = any(("@" + _n) in _ms_text for _n in _ms_names)
 _ms_enabled = bool(_ms_pb.get("enabled", True))
 _ms_group_ok = (not _ms_groups) or (str(event.get_group_id()) in _ms_groups)
 _ms_mentioned = (_ms_group_ok
-                 and any(_n in _ms_bare for _n in _ms_names)
+                 and (_ms_by_at or any(_n in _ms_bare for _n in _ms_names))
                  and not any(_e in _ms_bare for _e in _ms_excl))
 _ms_prob = float(_ms_pb.get("sample_prob")
                  if _ms_pb.get("sample_prob") is not None

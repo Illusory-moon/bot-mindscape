@@ -1121,6 +1121,41 @@ def check_regressions():
     except Exception as e:
         bad("R27 沉默权", str(e)[:140])
 
+    # R28: 唤醒的名字匹配 —— 「@小星」必须叫得醒，
+    #      但「@爱小星的某某」不能被误判成在叫 bot（这个坑真踩过）。
+    try:
+        import re as _rex
+        ja = open(os.path.join(HERE, "patches", "astrbot",
+                               "_waking_judge_block.py"), encoding="utf-8").read()
+        jl = ja.splitlines()
+        i0 = next(i for i, l in enumerate(jl) if l.strip().startswith("_ms_bare ="))
+        i1 = next(i for i, l in enumerate(jl) if l.strip().startswith("_ms_mentioned ="))
+        i2 = next(i for i in range(i1, len(jl)) if "_ms_excl))" in jl[i])
+        jblock = chr(10).join(jl[i0:i2 + 1])
+
+        class _FakeEv:
+            def get_group_id(self):
+                return "1"
+
+        def _wake(text, names=("小星", "火花"), excl=("小白",)):
+            ns = {"_ms_re": _rex, "_ms_group_ok": True, "_ms_text": text,
+                  "_ms_names": list(names), "_ms_excl": list(excl),
+                  "_ms_pb": {}, "_ms_groups": [], "event": _FakeEv()}
+            exec(jblock, ns)
+            return bool(ns["_ms_mentioned"])
+
+        at_ok = _wake("@小星 快来欢迎新人")
+        qq_ok = _wake("@小星(123456) 在吗")
+        plain_ok = _wake("错错错，小星是笨蛋机器人")
+        nick_ok = not _wake("@爱小星的某某 你好")
+        quiet_ok = not _wake("今天天气不错")
+        (ok if (at_ok and qq_ok and plain_ok and nick_ok and quiet_ok) else bad)(
+            "R28 @名字能叫醒且不误唤醒",
+            "@名字=%s @名字(qq)=%s 纯文本提到=%s 昵称含名字不误判=%s 无关不唤醒=%s"
+            % (at_ok, qq_ok, plain_ok, nick_ok, quiet_ok))
+    except Exception as e:
+        bad("R28 名字匹配", str(e)[:140])
+
     # R05: 同一秒内更大序号的消息不能被漏读
     try:
         import mindscape_diary as MD
