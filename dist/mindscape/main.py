@@ -364,10 +364,28 @@ SECTION_DIGEST = "### 你还记得的最近几天（每天一句）"
 SECTION_NOTES = "### 你记下的账（自己用 save_note 维护的，比流水账可靠）"
 
 
-SECTION_STYLE = "### 你的说话风格（从本人语料学来的，用来对齐语气）"
+SECTION_STYLE = "### 你的说话习惯（长期观察出来的，用来对齐语气）"
+
+
+SECTION_STYLE_STABLE = "#### 长期稳定的部分"
+
+
+SECTION_STYLE_RECENT = "#### 最近的变化"
 
 
 DEFAULT_STYLE_CHARS = 800
+
+
+DEFAULT_STYLE_RECENT_CHARS = 400
+
+
+STYLE_GUARD = (
+    "**这两段都是「你说话的方式」，不是记忆、也不是事实。**\n"
+    "- 别宣告它们（不要说「我平时喜欢用『沃』」），直接用出来就行。\n"
+    "- 两段可能重复 —— 那是同一件事，不是两件，别当成两个特征。\n"
+    "- 两段对不上时以「最近的变化」为准（说话习惯本来就在变）。\n"
+    "- 别把它们当往事提起 —— 那是记忆的事，不归这里管。\n"
+)
 
 
 SECTION_RULES = "**你自己的规矩**"
@@ -446,6 +464,38 @@ def read_recent(path, max_chars):
         picked.insert(0, text)
         used += add
     return "\n".join(picked)
+
+
+def read_head(path, max_chars):
+    """从头读固定字数 —— **文档型**文件用这个。
+
+    read_recent 取的是**尾部**，那是给「追加式」文件（日记、账本）设计的：
+    越新的越该进 prompt。但稳定层是每次**覆盖写**的一份完整文档，
+    取尾部等于把开头的「口癖」整段切掉、只留后半截 —— 正好切掉最有价值的部分。
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except Exception:
+        return ""
+    if len(text) <= max_chars:
+        return text.strip()
+    cut = text[:max_chars]
+    nl = cut.rfind("\n")
+    if nl > 0:
+        cut = cut[:nl]
+    return cut.strip()
+
+
+def _clean_style(text):
+    """去掉生成器留在文件头的 HTML 注释。
+
+    那是**给人看的**（「每次覆盖写，请勿手改」），进 prompt 只是噪声。
+    用纯行过滤而不是 re：这里只需要跳过以 <!-- 开头的行。
+    """
+    out = [ln for ln in (text or "").splitlines()
+           if not ln.strip().startswith("<!--")]
+    return "\n".join(out).strip()
 
 
 def _resolve(path):
@@ -1692,9 +1742,21 @@ class MemoryMixin:
             if st_path:
                 s_chars = int(bot.get("style_chars")
                               or self.m_cfg.get("style_chars") or DEFAULT_STYLE_CHARS)
-                sty = read_recent(st_path, s_chars)
+                # 稳定层是文档 → 从头读；近期层是追加流 → 取尾
+                sty = _clean_style(read_head(st_path, s_chars))
 
-            if len(mem) < min_chars and not dig and not notes and not sty:
+            # 近期层：最新口癖（mindscape_style 产的 recent）。与稳定层配对，
+            # 没有它就退回「只有长期习惯」，没有稳定层就退回「只有最近」——
+            # 两者都缺才完全不注入。
+            sty2 = ""
+            sr_path = _resolve(bot.get("style_recent"))
+            if sr_path:
+                sr_chars = int(bot.get("style_recent_chars")
+                               or self.m_cfg.get("style_recent_chars")
+                               or DEFAULT_STYLE_RECENT_CHARS)
+                sty2 = _clean_style(read_recent(sr_path, sr_chars))
+
+            if len(mem) < min_chars and not dig and not notes and not sty and not sty2:
                 return
 
             old = getattr(request, "system_prompt", "") or ""
@@ -1735,8 +1797,13 @@ class MemoryMixin:
                 block += SECTION_RULES + "\n" + "\n".join("- " + r for r in rules) + "\n\n"
             if notes:
                 block += SECTION_NOTES + "\n" + notes + "\n\n"
-            if sty:
-                block += SECTION_STYLE + "\n" + sty + "\n\n"
+            if sty or sty2:
+                block += SECTION_STYLE + "\n"
+                if sty:
+                    block += SECTION_STYLE_STABLE + "\n" + sty + "\n\n"
+                if sty2:
+                    block += SECTION_STYLE_RECENT + "\n" + sty2 + "\n\n"
+                block += STYLE_GUARD
             if dig:
                 block += SECTION_DIGEST + "\n" + dig + "\n\n"
             block += mem

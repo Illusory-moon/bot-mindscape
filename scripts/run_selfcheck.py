@@ -913,6 +913,100 @@ def check_regressions():
     except Exception as e:
         bad("R25 风格学习", str(e)[:140])
 
+    # R26: 风格分层（稳定层 + 近期层）不能写出「认知 bug」。
+    #      四类风险：同一件事说两遍 / 两段冲突 / 把风格当记忆 / 宣告自己的口癖。
+    #      另外两条硬要求：只收「怎么说」类条目、稳定层必须**覆盖写**。
+    try:
+        import mindscape_style as SC
+        importlib.reload(SC)
+
+        raw_t = (
+            "## 2026-09-19 观察\n- 用'沃'代替'我'\n- 说话简短\n"
+            "## 2026-09-19 兴趣\n- 在玩魔女狼人杀\n"
+            "## 2026-09-19 值得记的\n- 某件私事\n"
+            "## 2026-09-20 新词\n- 惹\n"
+            "## 2026-09-20 原声示例\n- 想被姐姐揉揉\n"
+        )
+        secs = SC.sc_parse(raw_t)
+        parse_ok = (len(secs) == 5
+                    and [(x["date"], x["cat"]) for x in secs][0] == ("2026-09-19", "观察"))
+
+        # 只收「怎么说」：兴趣 / 值得记的 必须被排除
+        allines = SC.sc_style_lines(secs)
+        cat_ok = (len(allines) == 4
+                  and not any(("兴趣" in x) or ("值得记" in x) for x in allines))
+
+        # 日期窗口
+        rec = SC.sc_style_lines(secs, cutoff="2026-09-20")
+        win_ok = (len(rec) == 2 and all(x.startswith("2026-09-20") for x in rec))
+
+        # 禁词：喂给 LLM 之前就剔除（人名被误读成自称变体的逃生口）
+        secs2 = SC.sc_parse("## 2026-09-20 新词\n- 阿明\n- 惹\n"
+                            "## 2026-09-20 观察\n- 他自称阿明\n")
+        ex = SC.sc_style_lines(secs2, exclude=["阿明"])
+        exc_ok = (len(ex) == 1 and "阿明" not in ex[0] and "惹" in ex[0])
+
+        # 产出再剔一遍：只删词、不删行（同行的有用内容要留住）
+        san = SC.sc_sanitize("- 自称变体：窝、沃、阿明\n- 阿明\n- 别的", ["阿明"])
+        san_ok = ("窝" in san and "沃" in san and "阿明" not in san
+                  and "别的" in san and "\n- \n" not in san)
+        sysw_ok = "不要把别人的昵称" in SC.DEFAULT_SYSTEM
+
+        # 覆盖写：写两次，第二次必须把第一次顶掉
+        p = os.path.join(HERE, "_sc_style.md")
+        SC.sc_write(p, "<!-- h -->", "AAAA")
+        SC.sc_write(p, "<!-- h -->", "BBBB")
+        body = open(p, encoding="utf-8").read()
+        ovw_ok = ("AAAA" not in body) and ("BBBB" in body)
+        os.remove(p)
+
+        # 默认关闭
+        _saved = SC.cfg.section
+        _orig = SC.sc_run_target
+        called = []
+        SC.sc_run_target = lambda td: (called.append(1), (0, 0))[1]
+        SC.cfg.section = lambda n: (
+            {"enabled": False, "targets": [{"name": "x"}]} if n == "style" else {})
+        SC.sc_main()
+        off_ok = not called
+        SC.cfg.section = lambda n: (
+            {"enabled": True, "targets": [{"name": "x"}]} if n == "style" else {})
+        SC.sc_main()
+        on_ok = bool(called)
+        SC.cfg.section = _saved
+        SC.sc_run_target = _orig
+
+        # 记忆层：两段都要有、顺序对、四道守卫都在
+        m_src = open(os.path.join(PLUGINS, "mindscape_memory.py"),
+                     encoding="utf-8").read()
+        slot_ok = ('bot.get("style_recent")' in m_src
+                   and "DEFAULT_STYLE_RECENT_CHARS" in m_src)
+        blk = m_src[m_src.find("if sty or sty2:"):]
+        order_ok = (0 <= blk.find("SECTION_STYLE_STABLE")
+                    < blk.find("SECTION_STYLE_RECENT")
+                    < blk.find("STYLE_GUARD"))
+        guard_ok = all(k in m_src for k in (
+            "不是记忆、也不是事实", "别宣告它们",
+            "那是同一件事，不是两件", "以「最近的变化」为准",
+            "别把它们当往事提起"))
+        # 生成器写在文件头的给人看的注释，不能进 prompt
+        # 稳定层是**文档**（从头读），近期层是**追加流**（取尾）—— 搞反会切掉口癖
+        clean_ok = ("def _clean_style" in m_src
+                    and "_clean_style(read_head(st_path" in m_src
+                    and "_clean_style(read_recent(sr_path" in m_src
+                    and "def read_head" in m_src)
+
+        (ok if (parse_ok and cat_ok and win_ok and ovw_ok and off_ok and on_ok
+                and slot_ok and order_ok and guard_ok and clean_ok
+                and exc_ok and san_ok and sysw_ok) else bad)(
+            "R26 风格分层无认知 bug",
+            "解析=%s 只收风格=%s 窗口=%s 覆盖写=%s 默认关=%s 开了会跑=%s "
+            "双槽=%s 顺序=%s 四守卫=%s 去注释=%s 禁词=%s 产出再剔=%s 提示词=%s"
+            % (parse_ok, cat_ok, win_ok, ovw_ok, off_ok, on_ok,
+               slot_ok, order_ok, guard_ok, clean_ok, exc_ok, san_ok, sysw_ok))
+    except Exception as e:
+        bad("R26 风格分层", str(e)[:140])
+
     # R05: 同一秒内更大序号的消息不能被漏读
     try:
         import mindscape_diary as MD

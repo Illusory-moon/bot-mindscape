@@ -24,8 +24,10 @@ memory:
       # style: 「说话风格」文件（由下面的 learn 段学出来）。
       #        留空 = 不注入，这个 bot 完全不受影响 —— 想给哪个 bot 开就写哪个。
       #        单独成层是因为它回答的是「怎么说」，而日记回答「发生了什么」。
-      # style: "./data/bot-name.style.md"
-      # style_chars: 800                         # 风格层注入上限
+      # style: "./data/bot-name.style-stable.md"  # 稳定层（全周期压缩，见 style 段）
+      # style_chars: 800                         # 稳定层注入上限
+      # style_recent: "./data/bot-name.style-recent.md"  # 近期层（最近几天的原始条目）
+      # style_recent_chars: 400                  # 近期层注入上限
       # rules: 这个 bot 自己的行为规矩，随记忆一起注入。
       #        写在这里而不是代码里 —— 通用框架不该硬编码某个人设特有的规矩。
       # rules:
@@ -121,6 +123,39 @@ learn:
       #          这是本模块唯一需要针对具体人定制的地方。
       # persona: |
       #   你是「说话风格研究员」，正在观察 <某人> 的群消息……
+
+# ── 认知层：风格压缩（把 learn 的原文压成 稳定层 + 近期层）──
+# learn 产出的是追加式原文，一天三千多字，越滚越长；而记忆每轮只能注入固定字数，
+# 于是 prompt 里看到的**永远是「当天的尾巴」**，15 天里反复出现的稳定特质挤不进去。
+#
+#   稳定层：对【全周期】条目均匀抽样后压一遍，**每次覆盖写**。
+#           覆盖是关键 —— 追加会越滚越旧，覆盖永远是最新共识。
+#   近期层：最近 N 天的风格条目原样留下，捕捉「口癖在变」。
+#
+# ⚠️ 只收「观察 / 新词 / 原声示例」三类，**不收 兴趣 / 值得记的** ——
+#    那些是事实，混进风格层会让 bot 把它们当成自己的记忆说出来。
+style:
+  enabled: false
+  llm:
+    api_base: "https://api.example.com/v1"
+    api_key_env: "MINDSCAPE_API_KEY"
+    model: "your-model"
+    temperature: 0.3                           # 压缩要稳，别放飞
+  max_input_chars: 24000                       # 全周期条目均匀抽样到这个长度
+  max_tokens: 900
+  max_stable_chars: 1000                       # 稳定层硬上限（在行边界截断）
+  targets:
+    - name: "bot-name"
+      source: "./data/bot-name.style.md"                 # learn 的产物（追加式原文）
+      stable: "./data/bot-name.style-stable.md"          # 产物：稳定层（覆盖写）
+      recent: "./data/bot-name.style-recent.md"          # 产物：近期层（覆盖写）
+      recent_days: 2                                     # 近期层回看几天
+      # exclude: 不许出现在风格层里的词 —— 只可能是**别人的昵称**。
+      #   学习端偶尔会把别人的昵称误读成「自称变体」（比如群里有人被这么叫），
+      #   压缩端还可能把「自称或他人」这种含糊观察里的 hedge 丢掉。
+      #   靠 prompt 约束不可靠，所以给一个确定性逃生口：喂给 LLM 之前就剔除，
+      #   产出之后再剔一遍（只删词不删行，一行里往往还有别的有用信息）。
+      # exclude: ["某人的昵称", "另一个"]
 
 # ── 表达层：素材采集与调度 ──
 stickers:
