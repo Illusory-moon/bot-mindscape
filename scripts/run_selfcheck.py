@@ -74,7 +74,7 @@ def check_config():
         bad("YAML 解析", str(e)[:150])
         return
     ok("YAML 解析", "顶层键: " + ", ".join(d.keys()))
-    for key in ["memory", "diary", "stickers", "guard", "format", "janitor", "waking"]:
+    for key in ["memory", "diary", "stickers", "guard", "silence", "format", "janitor", "waking"]:
         if key in d:
             ok("配置段", key)
         else:
@@ -1009,6 +1009,117 @@ def check_regressions():
                slot_ok, order_ok, guard_ok, clean_ok, exc_ok, san_ok, sysw_ok, cron_ok))
     except Exception as e:
         bad("R26 风格分层", str(e)[:140])
+
+    # R27: 沉默权（mindscape_silence）必须「真的不发」，而不是「换个说法不发」；
+    #      令牌也绝不能漏进群里。
+    try:
+        import mindscape_silence as SI
+        importlib.reload(SI)
+
+        tok = SI.SI_DEFAULT_TOKEN
+        hit = all(SI.si_is_silence(x, tok) for x in (
+            "[[silence]]", "silence", "【silence】", " [silence]。 ",
+            "**[[silence]]**", "SILENCE"))
+        miss = not any(SI.si_is_silence(x, tok) for x in (
+            "今天天气不错", "", "（和我无关，安静飘过）",
+            "[[silence]] 算了还是说两句吧"))
+        norm_ok = hit and miss
+
+        strip_ok = (SI.si_strip("[[silence]] 算了还是说两句吧", tok) == "算了还是说两句吧"
+                    and SI.si_strip("先这样 [[Silence]] 再说", tok) == "先这样  再说")
+
+        _saved_sec = SI.cfg.section
+        SI.cfg.section = lambda n: {}
+        off_ok = SI.si_load_config()[0] is False
+        SI.cfg.section = lambda n: {"enabled": True, "token": "[[闭嘴]]"}
+        _onc = SI.si_load_config()
+        on_ok = (_onc[0] is True and _onc[1] == "[[闭嘴]]" and "[[闭嘴]]" in _onc[3])
+        SI.cfg.section = _saved_sec
+
+        class _SiEv:
+            def __init__(self, cron):
+                self.cron = cron
+
+            def get_self_id(self):
+                return "1"
+
+            def get_extra(self, k):
+                return {"cron_job": {}} if (k == "cron_job" and self.cron) else None
+
+        class _SiReq:
+            system_prompt = ""
+
+        sm = SI.SilenceMixin.__new__(SI.SilenceMixin)
+        sm.si_on, sm.si_token, sm.si_targets = True, tok, []
+        sm.si_prompt = SI.SI_PROMPT % {"token": tok}
+        sm.si_count = 0
+
+        rq1 = _SiReq()
+        asyncio.run(sm.si_grant(_SiEv(False), rq1))
+        grant_ok = (tok in rq1.system_prompt and "安静飘过" in rq1.system_prompt)
+        rq2 = _SiReq()
+        asyncio.run(sm.si_grant(_SiEv(True), rq2))
+        cron_ok = (tok not in rq2.system_prompt and "别发" in rq2.system_prompt)
+
+        class _SiComp:
+            def __init__(self, t):
+                self.text = t
+
+        class _SiRes:
+            def __init__(self, t):
+                self.t = t
+                self.chain = [_SiComp(t)]
+
+            def get_plain_text(self):
+                return self.t
+
+        class _SiEv2:
+            def __init__(self, t):
+                self.res = _SiRes(t)
+                self.cleared = False
+                self.stopped = False
+
+            def get_self_id(self):
+                return "1"
+
+            def get_extra(self, k):
+                return None
+
+            def get_result(self):
+                return self.res
+
+            def clear_result(self):
+                self.cleared = True
+
+            def stop_event(self):
+                self.stopped = True
+
+        e1 = _SiEv2("[[silence]]")
+        asyncio.run(sm.si_block(e1))
+        block_ok = bool(e1.cleared and e1.stopped)
+
+        e2 = _SiEv2("[[silence]] 算了还是说两句吧")
+        asyncio.run(sm.si_block(e2))
+        leak_ok = (not e2.cleared and e2.res.chain[0].text == "算了还是说两句吧")
+
+        e3 = _SiEv2("你今天吃了没")
+        asyncio.run(sm.si_block(e3))
+        pass_ok = not e3.cleared
+
+        s_src = open(os.path.join(PLUGINS, "mindscape_silence.py"),
+                     encoding="utf-8").read()
+        prio_ok = ("on_decorating_result(priority=1000)" in s_src
+                   and 'event.get_extra("cron_job")' in s_src)
+
+        (ok if (norm_ok and strip_ok and off_ok and on_ok and grant_ok
+                and cron_ok and block_ok and leak_ok and pass_ok and prio_ok) else bad)(
+            "R27 沉默权真的不说话",
+            "归一=%s 剃令牌=%s 默认关=%s 开了=%s 回复轮给=%s 冒泡轮不给=%s "
+            "整条清空=%s 不漏令牌=%s 正常放行=%s 优先级=%s"
+            % (norm_ok, strip_ok, off_ok, on_ok, grant_ok, cron_ok,
+               block_ok, leak_ok, pass_ok, prio_ok))
+    except Exception as e:
+        bad("R27 沉默权", str(e)[:140])
 
     # R05: 同一秒内更大序号的消息不能被漏读
     try:

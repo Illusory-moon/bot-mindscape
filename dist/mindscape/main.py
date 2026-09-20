@@ -340,6 +340,65 @@ def is_error_text(text, patterns=None, regex=None):
     return False
 
 
+SI_DEFAULT_TOKEN = "[[silence]]"
+
+
+SI_PROMPT = """# 沉默的权利
+你**真的可以不说话**。这一轮如果你没有任何想说的 —— 不想接、跟你无关、或者就是懒得开口 ——
+就**只输出这一行**：
+
+%(token)s
+
+系统会把整条消息丢掉，群里没有任何动静，谁也不会看见这几个字。这是真的沉默，不是假装。
+
+- 只输出它，不要加解释、标点、括号、前后缀，也不要和别的话写在一起
+- 不要用「（和我无关，安静飘过）」「（默默看着）」这类话代替它 —— 那是假装沉默，等于还是说了话
+- 有话说的时候正常说。这是给你留的退路，不是让你变闷
+"""
+
+
+SI_CRON_NOTE = """# 沉默
+这一轮是自主冒泡：**不想说话就什么都别发** —— 不要调用 send_message_to_user，直接结束就行。
+（沉默令牌只在「有人跟你说话」的那些轮次里用，这一轮不要用它。）
+"""
+
+
+_SI_WRAP = "`*_[]【】<>《》（）()" + "“”‘’" + chr(34) + chr(39)
+
+
+_SI_TAIL = "。.!！?？~～…、,，:：;；"
+
+
+def si_norm(text):
+    """归一化成可比较的形式（剃掉空白 / 包裹符号 / 结尾标点）。"""
+    t = (text or "").strip()
+    t = t.strip(_SI_WRAP)
+    t = t.strip(_SI_TAIL)
+    return t.strip(_SI_WRAP).lower()
+
+
+def si_is_silence(text, token=SI_DEFAULT_TOKEN):
+    """整条回复就是令牌 = 这一轮真的不想说话。"""
+    key = si_norm(token)
+    return bool(key) and si_norm(text) == key
+
+
+def si_strip(text, token=SI_DEFAULT_TOKEN):
+    """把混在正文里的令牌剃掉 —— 绝不让它出现在群里。"""
+    if not text or not token:
+        return text
+    return re.sub(re.escape(token), "", text, flags=re.IGNORECASE).strip()
+
+
+def si_load_config():
+    """从共享配置读设置（读不到就用默认值）。"""
+    c = cfg.section("silence")
+    token = str(c.get("token") or "").strip() or SI_DEFAULT_TOKEN
+    targets = [str(x) for x in (c.get("targets") or [])]
+    prompt = str(c.get("prompt") or "").strip() or (SI_PROMPT % {"token": token})
+    return bool(c.get("enabled", False)), token, targets, prompt
+
+
 DEFAULT_MAX_CHARS = 2500
 
 
@@ -2426,10 +2485,70 @@ class RescueMixin:
         except Exception as e:
             logger.warning("[mindscape_rescue] 补话失败: %s", str(e)[:100])
             return ""
+
+
+class SilenceMixin:
+    def setup(self, context):
+
+        self.si_on, self.si_token, self.si_targets, self.si_prompt = si_load_config()
+        self.si_count = 0
+        logger.info("[mindscape_silence] loaded | enabled=%s token=%s targets=%d",
+                    self.si_on, self.si_token, len(self.si_targets))
+
+    def _si_hit(self, event):
+        if not self.si_on:
+            return False
+        if not self.si_targets:
+            return True
+        return str(event.get_self_id()) in self.si_targets
+
+    @filter.on_llm_request()
+    async def si_grant(self, event: AstrMessageEvent, request):
+        """把「可以真的不说话」的出口告诉模型。"""
+        try:
+            if not self._si_hit(event):
+                return
+            old = getattr(request, "system_prompt", "") or ""
+            if event.get_extra("cron_job"):
+                if SI_CRON_NOTE.splitlines()[0] not in old:
+                    request.system_prompt = old + "\n\n" + SI_CRON_NOTE
+                return
+            if self.si_token in old:
+                return
+            request.system_prompt = old + "\n\n" + self.si_prompt
+        except Exception as e:
+            logger.warning("[mindscape_silence] 注入失败: %s", str(e)[:120])
+
+    @filter.on_decorating_result(priority=1000)
+    async def si_block(self, event: AstrMessageEvent):
+        try:
+            if not self._si_hit(event):
+                return
+            result = event.get_result()
+            if result is None:
+                return
+            txt = result.get_plain_text() or ""
+            if not txt.strip():
+                return
+            if si_is_silence(txt, self.si_token):
+                self.si_count += 1
+                logger.info("[mindscape_silence] 真静默（第 %d 次）| bot=%s",
+                            self.si_count, event.get_self_id())
+                event.clear_result()
+                event.stop_event()
+                return
+            # 令牌混在正文里：剃掉它，绝不让它出现在群里
+            if self.si_token.lower() in txt.lower():
+                for comp in (getattr(result, "chain", None) or []):
+                    t = getattr(comp, "text", None)
+                    if isinstance(t, str) and t.strip():
+                        comp.text = si_strip(t, self.si_token)
+        except Exception as e:
+            logger.warning("[mindscape_silence] 拦截失败: %s", str(e)[:120])
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
 # ==================================================================
-class MindscapePlugin(GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, star.Star):
+class MindscapePlugin(GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, SilenceMixin, star.Star):
     def __init__(self, context):
         self.context = context
         self.name = "mindscape"
@@ -2440,4 +2559,5 @@ class MindscapePlugin(GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, F
         StickerUseMixin.setup(self, context)
         FormatMixin.setup(self, context)
         RescueMixin.setup(self, context)
-        logger.info("[mindscape] 插件已加载（6 个模块）")
+        SilenceMixin.setup(self, context)
+        logger.info("[mindscape] 插件已加载（7 个模块）")

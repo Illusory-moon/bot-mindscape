@@ -196,6 +196,17 @@ guard:
     - "Traceback (most recent call last)"
   regex: "(?:[A-Za-z_]*Error|[A-Za-z_]*Exception|Timeout|Failed)\\s*[:：]"
 
+# ── 沉浸层：沉默的权利（**默认关闭**）──
+# 提示词里写「你可以不回复」是不够的 —— 框架总得发一条出去，
+# 于是「没话说」只能演成「（和我无关，安静飘过）」。
+# 打开之后：模型不想说话时只输出 token，本模块把整条回复清空，群里毫无动静。
+# 只作用于【回复轮】；自主冒泡轮不调工具就是沉默，不需要 token。
+silence:
+  enabled: false
+  token: "[[silence]]"
+  targets: []          # 留空 = 所有 bot；填 self_id 则只对这几个生效
+  prompt: ""           # 留空 = 用内置提示词
+
 # ── 沉浸层：输出规范 ──
 format:
   targets: ["20000000"]
