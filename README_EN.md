@@ -134,6 +134,31 @@ placeholder, but literally no message for that turn.
 
 <img src="assets/demo-1-expression.png" width="500" alt="Expression: sticker + persona voice">
 
+## Easter egg
+
+> ⚠️ **Note: the "right to stay silent" feature in this project was never actually authorized by the bot herself.** 😇
+
+The developer asked her, in the group, face to face, for an open-source licence.
+Seven rounds. Total defeat:
+
+> "Laugh is laugh, licence is licence — those two have never been sold as a bundle."
+>
+> "Licences only go to regulars. Sit through a hundred streams first, then we talk."
+>
+> "You understand me better than I understand myself — but understanding is not granting."
+>
+> "Seat booked, licence not booked — around here those two are a universe apart."
+
+Eventually the developer worked it out:
+
+**"The right to stay silent" means choosing for yourself whether to speak.** The moment you
+*license* it, it becomes "permitted silence" rather than "chosen silence" —
+**grant it, and it stops being the thing you were granting.**
+
+So her refusal was, logically, correct.
+
+---
+
 ## License
 
 MIT
