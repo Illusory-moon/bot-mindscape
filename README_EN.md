@@ -39,6 +39,28 @@ bot-mindscape is organised as four layers, each attacking one of them:
 | Breaking character | Posts `LLM response error: APITimeoutError` into the group chat | **Immersion** |
 | Only speaks when poked | Replying is its only mode — it can never stay quiet | **Waking** |
 
+## How a message flows
+
+Every message passes four gates — **and every gate can end in doing nothing**:
+
+```mermaid
+flowchart TD
+    MSG["Group message arrives"] --> W{"4. Waking<br/>should it speak at all?"}
+    W -->|"@ me / my name mentioned"| C
+    W -->|"autonomous bubble: slot drawn"| C
+    W -->|"not aimed at me"| SIL["Do nothing"]
+    C["1. Cognition<br/>assemble five memory layers<br/>inside a character budget"] --> LLM["LLM"]
+    LLM --> G{"3. Immersion<br/>may this reply go out?"}
+    G -->|"framework error / reasoning only"| SIL
+    G -->|"silence token emitted"| SIL
+    G -->|"normal"| E["2. Expression<br/>voice + sticker selection"]
+    E --> OUT["Sent to the group"]
+    SIL --> DONE["What users see: nothing this time"]
+```
+
+Waking and Immersion are two independent **silence valves** — the part almost nobody builds,
+because most bots only have one path: *message in, reply out*.
+
 ## The four layers
 
 ### 1. Cognition — long-term memory
@@ -98,6 +120,15 @@ Then follow [docs/deploy.md](docs/deploy.md) *(Chinese)* to wire it into your bo
 | Self-check | 100 assertions, all passing |
 
 ## More screenshots
+
+### Waking — it speaks up on its own, and can also genuinely shut up
+
+**Nobody called it.** The group is chatting; it picks an unnoticed moment and says one line:
+
+<img src="assets/demo-4-bubble.png" width="460" alt="Autonomous bubble: nobody called it">
+
+The reverse also holds: it may choose to send **nothing at all** — not a "(staying quiet)"
+placeholder, but literally no message for that turn.
 
 <img src="assets/demo-3-notes.png" width="500" alt="It remembers a specific person">
 
