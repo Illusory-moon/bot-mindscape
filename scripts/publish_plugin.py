@@ -53,7 +53,8 @@ def main():
         return 1
 
     # 1) 构建（构建脚本自己会做语法检查）
-    code, out = _run([sys.executable, os.path.join(HERE, "scripts", "build_plugin.py")], HERE)
+    code, out = _run([sys.executable, os.path.join(HERE, "scripts", "build_plugin.py"),
+                "--market"], HERE)
     if code != 0:
         print("[失败] 构建失败:\n" + out)
         return 1

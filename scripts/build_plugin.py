@@ -84,13 +84,20 @@ HEADER = ('# -*- coding: utf-8 -*-\n'
           '源码: plugins/    重新生成: python scripts/build_plugin.py\n"""')
 
 
-def main():
+# 只在自建部署里带的模块：会直接改框架数据库，不适合进插件市场
+LOCAL_ONLY = ["mindscape_janitor"]
+
+
+def main(exclude=()):
     all_imports = {}
     mixin_src = {}
     plain_classes = []
     other_src = []
 
     for name in ORDER:
+        if name in exclude:
+            print("  [跳过] " + name + "（市场版不含：会直接改框架数据库）")
+            continue
         p = os.path.join(SRC, name + ".py")
         if not os.path.exists(p):
             print("  [跳过] " + name)
@@ -185,4 +192,9 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import argparse
+    _ap = argparse.ArgumentParser()
+    _ap.add_argument("--market", action="store_true",
+                    help="生成插件市场版：排除会直接改框架数据库的模块")
+    _a = _ap.parse_args()
+    sys.exit(main(exclude=tuple(LOCAL_ONLY) if _a.market else ()))

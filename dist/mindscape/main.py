@@ -14,7 +14,6 @@ import re
 import shutil
 import sqlite3
 import struct
-import sys
 import time
 import urllib.request
 from astrbot.api import llm_tool, logger
@@ -211,11 +210,34 @@ def save_index(path, idx):
     os.replace(tmp, path)
 
 
+try:                                   # 插件内：日志必须从框架走（插件市场规范）
+    from astrbot.api import logger
+except Exception:                      # 命令行脚本：没有框架，跳过日志
+    logger = None
+
+
 _CONFIG_CACHE = None
 
 
+PLUGIN_NAME = "astrbot_plugin_mindscape"
+
+
+def data_dir():
+    """插件数据目录（插件市场的规范位置）。
+
+    在 AstrBot 里运行时用 StarTools 拿 data/plugin_data/<插件名>/；
+    命令行脚本里没有框架，回退到仓库的 config/ 目录。
+    """
+    try:
+        from astrbot.api.star import StarTools
+        return str(StarTools.get_data_dir(PLUGIN_NAME))
+    except Exception:
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(here, "config")
+
+
 def config_path():
-    return os.environ.get("MINDSCAPE_CONFIG") or os.path.expanduser("~/.mindscape/config.yaml")
+    return os.environ.get("MINDSCAPE_CONFIG") or os.path.join(data_dir(), "config.yaml")
 
 
 def load(reload=False):
@@ -233,12 +255,8 @@ def load(reload=False):
         except Exception as e:
             # S03: 至少留一条线索，方便定位「配置为什么没生效」
             # 只记路径 + 异常类型，不输出可能含密钥的 YAML 内容
-            try:
-                import logging
-                logging.getLogger("mindscape").warning(
-                    "配置读取失败 path=%s type=%s", path, type(e).__name__)
-            except Exception:
-                pass
+            if logger is not None:
+                logger.warning("配置读取失败 path=%s type=%s", path, type(e).__name__)
             data = {}
     _CONFIG_CACHE = data if isinstance(data, dict) else {}
     return _CONFIG_CACHE
@@ -284,7 +302,7 @@ SCAN_LEN = 200
 
 def _load_config():
     """从共享配置读取拦截规则（读不到就用默认值）。"""
-    path = os.environ.get("MINDSCAPE_CONFIG", os.path.expanduser("~/.mindscape/config.yaml"))
+    path = cfg.config_path()   # 统一走共享配置（数据目录由 mindscape_config 决定）
     if not os.path.exists(path):
         return DEFAULT_PATTERNS, DEFAULT_REGEX
     try:
@@ -1596,111 +1614,6 @@ def flatten(text, join_with="，", drop_last_if_short=False, short_len=8):
         else:
             out += join_with + nxt
     return out
-
-
-DEFAULT_MAX_MB = 2.0
-
-
-DEFAULT_LOG = "./data/janitor.log"
-
-
-def jn_abs(path):
-    if not path:
-        return ""
-    if os.path.isabs(path):
-        return path
-    return os.path.join(os.path.dirname(cfg.config_path()), path)
-
-
-def log(msg, path=None):
-    line = "[%s] %s" % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg)
-    try:
-        print(line, flush=True)
-    except Exception:
-        pass
-    if path:
-        try:
-            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-        except Exception:
-            pass
-
-
-IDENT_RE = None
-
-
-def _safe_ident(name, fallback):
-    """只允许字母数字下划线，避免把奇怪的表名/字段名拼进 SQL。"""
-    import re as _re
-    n = str(name or "")
-    return n if _re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", n) else fallback
-
-
-def clean(db, table, column, max_mb, log_path=None):
-    """清理含图片的会话 + 超大行。返回 (删图片数, 删超大数, 清理前MB, 清理后MB)。"""
-    if not db or not os.path.exists(db):
-        log("数据库不存在，跳过: %s" % db, log_path)
-        return (0, 0, 0.0, 0.0)
-    table = _safe_ident(table, "conversations")
-    column = _safe_ident(column, "content")
-    con = sqlite3.connect(db, timeout=30)
-    con.execute("PRAGMA busy_timeout = 30000")
-    cur = con.cursor()
-    before = list(cur.execute(
-        "SELECT COALESCE(SUM(length(CAST(%s AS BLOB))),0) FROM %s" % (column, table)
-    ))[0][0]
-
-    cur.execute(
-        "DELETE FROM %s WHERE %s LIKE '%%data:image%%'" % (table, column)
-    )
-    n_img = cur.rowcount
-    cur.execute(
-        "DELETE FROM %s WHERE length(CAST(%s AS BLOB)) > ?" % (table, column),
-        (int(max_mb * 1048576),),
-    )
-    n_big = cur.rowcount
-    con.commit()
-
-    after = list(cur.execute(
-        "SELECT COALESCE(SUM(length(CAST(%s AS BLOB))),0) FROM %s" % (column, table)
-    ))[0][0]
-
-    if n_img or n_big:
-        try:
-            cur.execute("VACUUM")
-            con.commit()
-        except Exception as e:
-            log("VACUUM 失败: %s" % str(e)[:80], log_path)
-    con.close()
-    return (n_img, n_big, before / 1048576.0, after / 1048576.0)
-
-
-def jn_main():
-    c = cfg.section("janitor")
-    if not c:
-        print("[mindscape_janitor] 未找到 janitor 配置，跳过")
-        return
-    db = jn_abs(c.get("db"))
-    table = c.get("table") or "conversations"
-    column = c.get("column") or "content"
-    max_mb = float(c.get("max_mb") or DEFAULT_MAX_MB)
-    log_path = jn_abs(c.get("log") or DEFAULT_LOG)
-
-    n_img, n_big, before, after = clean(db, table, column, max_mb, log_path)
-    if n_img or n_big:
-        log("清理: 图片会话 %d | 超大行 %d | %.2f MB -> %.2f MB"
-            % (n_img, n_big, before, after), log_path)
-    else:
-        log("无需清理 | 当前 %.2f MB" % after, log_path)
-
-
-if __name__ == "__main__":
-    try:
-        jn_main()
-    except Exception as e:
-        print("[mindscape_janitor] 失败: %s" % str(e)[:200])
-        sys.exit(1)
 # ==================================================================
 # 命名空间：让 cfg.xxx() / core.xxx() 这类调用在合并后依然可用
 # ==================================================================

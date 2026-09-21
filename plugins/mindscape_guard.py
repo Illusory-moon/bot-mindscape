@@ -14,6 +14,8 @@ import re
 from astrbot.api import logger, star
 from astrbot.api.event import AstrMessageEvent, filter
 
+import mindscape_config as cfg
+
 # 默认拦截特征（可在配置里覆盖）
 DEFAULT_PATTERNS = [
     "LLM 响应错误",
@@ -43,7 +45,7 @@ SCAN_LEN = 200
 
 def _load_config():
     """从共享配置读取拦截规则（读不到就用默认值）。"""
-    path = os.environ.get("MINDSCAPE_CONFIG", os.path.expanduser("~/.mindscape/config.yaml"))
+    path = cfg.config_path()   # 统一走共享配置（数据目录由 mindscape_config 决定）
     if not os.path.exists(path):
         return DEFAULT_PATTERNS, DEFAULT_REGEX
     try:
