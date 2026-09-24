@@ -2392,7 +2392,9 @@ class RescueMixin:
             text = await self._ask_once(event)
             if text:
                 response.completion_text = text
-                logger.info("[mindscape_rescue] 空回复已补: %s", text[:40])
+                logger.info("[mindscape_rescue] 空回复已补（%s）: %s",
+                            "带人设快照" if str(event.get_extra("_ms_ctx_prompt") or "").strip()
+                            else "通用兜底", text[:40])
         except Exception as e:
             logger.warning("[mindscape_rescue] 救援失败: %s", str(e)[:120])
 
