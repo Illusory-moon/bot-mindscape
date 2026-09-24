@@ -221,6 +221,8 @@ rescue:
   api_key_env: "MINDSCAPE_API_KEY"     # 从环境变量读 key
   model: "deepseek-chat"               # ← 非推理模型！
   persona: "一个自然的聊天伙伴"          # 仅在拿不到人设快照时兜底
+  # 有意为之：救援补话时【允许】它选择沉默（输出沉默令牌）——
+  # 「这一轮该不该说话」最终由 bot 自己判断，救援只负责别卡成一条空回复。
   max_tokens: 120
   timeout: 20
 
