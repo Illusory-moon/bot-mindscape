@@ -81,6 +81,34 @@ class RescueMixin:
         except Exception as e:
             logger.warning("[mindscape_rescue] 救援失败: %s", str(e)[:120])
 
+    @filter.on_llm_request(priority=-10)
+    async def rc_snapshot(self, event: AstrMessageEvent, request):
+        """抓一份「这一轮真实用到的」人设 + 记忆 + 风格快照。
+
+        priority=-10 让它最后跑 —— 等 memory / silence 都往 system_prompt 里塞完了再取，
+        拿到的就是模型真正看到的那一段。救援补话时带上它，补出来才像这个 bot。
+        以前救援用的是配置里那句通用人设 —— 对味道重的人设来说补出来就是白开水。
+        """
+        try:
+            sp = getattr(request, "system_prompt", "") or ""
+            if sp:
+                event.set_extra("_ms_ctx_prompt", sp[-1400:])
+            rows = []
+            for m in (getattr(request, "contexts", None) or [])[-5:]:
+                if not isinstance(m, dict):
+                    continue
+                role = m.get("role")
+                c = m.get("content")
+                if isinstance(c, list):
+                    c = " ".join((x.get("text") or "") for x in c if isinstance(x, dict))
+                c = str(c or "").strip()
+                if role in ("user", "assistant") and c:
+                    rows.append(("对方" if role == "user" else "我") + "：" + c[:120])
+            if rows:
+                event.set_extra("_ms_ctx_recent", "\n".join(rows[-4:]))
+        except Exception:
+            pass
+
     @filter.on_using_llm_tool()
     async def rc_capture_sent(self, event: AstrMessageEvent, tool, tool_args):
         """记下这一轮真正发出去的话 —— 冒泡轮要用它替换任务黑话。"""
@@ -135,7 +163,10 @@ class RescueMixin:
         key = os.environ.get(self.r_cfg.get("api_key_env") or "", "")
         if not api_base or not key:
             return ""
-        persona = self.r_cfg.get("persona") or "一个自然的聊天伙伴"
+        # 优先用「这一轮真实的人设/记忆/风格」快照；配置里的 persona 只当兜底
+        persona = (str(event.get_extra("_ms_ctx_prompt") or "").strip()
+                   or self.r_cfg.get("persona") or "一个自然的聊天伙伴")
+        recent = str(event.get_extra("_ms_ctx_recent") or "").strip()
         last = ""
         try:
             data = getattr(event, "message_obj", None)
@@ -143,9 +174,12 @@ class RescueMixin:
         except Exception:
             last = ""
         prompt = (
-            "你是" + persona + "。刚才群友说了：\n"
-            + (last or "（一条消息）")
-            + "\n\n请用一句话自然回应（不超过30字），不要解释、不要客套、不要提及你是 AI。"
+            "下面是你的人设、记忆和说话风格（照着来，不要照抄原文）：\n"
+            + persona
+            + (("\n\n最近几轮对话：\n" + recent) if recent else "")
+            + "\n\n刚才对方说了：\n" + (last or "（一条消息）")
+            + "\n\n请用你自己的口吻补一句自然的回应（不超过30字）。"
+              "不要解释、不要客套、不要提及你是 AI，也不要提你刚才没说话。"
         )
         try:
             async with httpx.AsyncClient(timeout=float(self.r_cfg.get("timeout") or 20)) as cli:

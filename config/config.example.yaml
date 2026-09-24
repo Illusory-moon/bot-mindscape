@@ -207,6 +207,23 @@ silence:
   targets: []          # 留空 = 所有 bot；填 self_id 则只对这几个生效
   prompt: ""           # 留空 = 用内置提示词
 
+# ── 沉浸层：空回复救援（推理模型的通病）──
+# 推理模型（DeepSeek V4 / R1 这类）偶尔会「思考链正常、正文为空」，
+# 框架拿到空正文就跳过发送 —— 用户看到的是「叫它不理」。
+# 本模块检测到这种情况，用一次极轻量的调用补一句话，再发出去。
+#
+# ⚠️ 两个关键点：
+#   1. model 一定要选【非推理模型】—— 推理模型会重蹈覆辙，再给你一个空正文
+#   2. persona 只是兜底；正常情况下救援会带上这个 bot 本轮真实的人设 / 记忆 / 风格
+rescue:
+  enabled: true
+  api_base: "https://api.deepseek.com/v1"
+  api_key_env: "MINDSCAPE_API_KEY"     # 从环境变量读 key
+  model: "deepseek-chat"               # ← 非推理模型！
+  persona: "一个自然的聊天伙伴"          # 仅在拿不到人设快照时兜底
+  max_tokens: 120
+  timeout: 20
+
 # ── 沉浸层：输出规范 ──
 format:
   targets: ["20000000"]
