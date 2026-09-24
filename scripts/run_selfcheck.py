@@ -95,11 +95,12 @@ def stub():
     api.star = types.SimpleNamespace(Star=type("S", (), {}), Context=object)
     ev = types.ModuleType("astrbot.api.event")
     ev.AstrMessageEvent = object
-    ev.filter = types.SimpleNamespace(
-        on_llm_request=lambda **k: (lambda f: f),
-        on_decorating_result=lambda **k: (lambda f: f),
-        event_message_type=lambda *a, **k: (lambda f: f),
-    )
+    # 任意 filter 属性都能当装饰器用 —— 以后模块加新钩子不会再让自检崩掉
+    class _AnyFilter:
+        def __getattr__(self, _k):
+            return lambda *a, **kw: (lambda f: f)
+
+    ev.filter = _AnyFilter()
     pe = types.ModuleType("astrbot.core.provider.entities")
     pe.ProviderRequest = object
     mc = types.ModuleType("astrbot.core.message.components")
@@ -1180,6 +1181,23 @@ def check_regressions():
             % (zw_ok, dup, fallout, guard_ok))
     except Exception as e:
         bad("R29 沉默令牌容错", str(e)[:140])
+
+    # R30: 产物必须能【真的加载并实例化】。编译过 ≠ 能跑 ——
+    #      guard 里有个局部变量撞了模块级的 cfg，py_compile 毫无问题，
+    #      但一实例化就 UnboundLocalError，插件整个加载失败（真实事故）。
+    try:
+        import importlib.util as _ilu
+        _bp = os.path.join(HERE, "dist", "mindscape", "main.py")
+        _spec = _ilu.spec_from_file_location("_ms_bundle_check", _bp)
+        _mod = _ilu.module_from_spec(_spec)
+        sys.modules["_ms_bundle_check"] = _mod
+        _spec.loader.exec_module(_mod)
+        _inst = _mod.MindscapePlugin(object())   # __init__ 会依次跑每个 Mixin 的 setup
+        (ok if _inst is not None else bad)(
+            "R30 产物可真实加载并实例化",
+            "MindscapePlugin 已实例化（setup 全跑通）")
+    except Exception as e:
+        bad("R30 产物加载/实例化", "%s: %s" % (type(e).__name__, str(e)[:120]))
 
     # R05: 同一秒内更大序号的消息不能被漏读
     try:

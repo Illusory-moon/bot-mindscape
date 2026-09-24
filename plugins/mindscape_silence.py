@@ -48,6 +48,22 @@ _SI_INVIS = "\u200b\u200c\u200d\u2060\ufeff\u00ad"
 _SI_WRAP = "`*_[]【】<>《》（）()" + "“”‘’" + chr(34) + chr(39)
 _SI_TAIL = "。.!！?？~～…、,，:：;；"
 
+# 「假装沉默」的动作描写：整条只有这类话 = 它其实不想说话，只是不会用令牌。
+# （从旧的 soul_silence 插件合并过来 —— 那套已经停用，但这条正则值得留。）
+_SI_OOC_RE = re.compile(
+    r'(?:(?:这句我拿不准)?(?:我)?(?:先|就|继续)?(?:安静|默默|悄悄|静静)?地?'
+    r'(?:飘过|路过)(?:不冒头|不插话|不打扰|没接(?:这句)?|不接(?:这句)?)?'
+    r'|(?:我)?(?:这次|这句|这条)?(?:不冒头|不插话|不接这句|保持沉默|保持安静|不回复))'
+    r'(?:了|啦|吧|呢)?')
+
+
+def si_is_ooc_silence(text):
+    """整条回复只是「安静飘过」这类动作描写 —— 等价于想沉默，但用错了表达。"""
+    t = re.sub(r"[（）()\\[\\]【】《》\s]", "", text or "").strip()
+    if not t:
+        return False
+    return bool(_SI_OOC_RE.fullmatch(t)) or t.upper() == "NO_REPLY"
+
 
 def si_norm(text):
     """归一化成可比较的形式（先剃零宽字符，再剃空白 / 包裹符号 / 结尾标点）。"""
@@ -127,10 +143,12 @@ class SilenceMixin:
             txt = result.get_plain_text() or ""
             if not txt.strip():
                 return
-            if si_is_silence(txt, self.si_token):
+            if si_is_silence(txt, self.si_token) or si_is_ooc_silence(txt):
                 self.si_count += 1
-                logger.info("[mindscape_silence] 真静默（第 %d 次）| bot=%s",
-                            self.si_count, event.get_self_id())
+                logger.info("[mindscape_silence] 真静默（第 %d 次%s）| bot=%s",
+                            self.si_count,
+                            "" if si_is_silence(txt, self.si_token) else "，动作描写",
+                            event.get_self_id())
                 event.clear_result()
                 event.stop_event()
                 return

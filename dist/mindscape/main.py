@@ -390,6 +390,21 @@ _SI_WRAP = "`*_[]【】<>《》（）()" + "“”‘’" + chr(34) + chr(39)
 _SI_TAIL = "。.!！?？~～…、,，:：;；"
 
 
+_SI_OOC_RE = re.compile(
+    r'(?:(?:这句我拿不准)?(?:我)?(?:先|就|继续)?(?:安静|默默|悄悄|静静)?地?'
+    r'(?:飘过|路过)(?:不冒头|不插话|不打扰|没接(?:这句)?|不接(?:这句)?)?'
+    r'|(?:我)?(?:这次|这句|这条)?(?:不冒头|不插话|不接这句|保持沉默|保持安静|不回复))'
+    r'(?:了|啦|吧|呢)?')
+
+
+def si_is_ooc_silence(text):
+    """整条回复只是「安静飘过」这类动作描写 —— 等价于想沉默，但用错了表达。"""
+    t = re.sub(r"[（）()\\[\\]【】《》\s]", "", text or "").strip()
+    if not t:
+        return False
+    return bool(_SI_OOC_RE.fullmatch(t)) or t.upper() == "NO_REPLY"
+
+
 def si_norm(text):
     """归一化成可比较的形式（先剃零宽字符，再剃空白 / 包裹符号 / 结尾标点）。"""
     t = (text or "").translate({ord(c): None for c in _SI_INVIS})
@@ -2366,7 +2381,11 @@ class RescueMixin:
                         getattr(self, "r_ready", False))
             if not getattr(self, "r_ready", False):
                 return
-            if getattr(response, "result_chain", None):
+            # 有结果链不等于「有东西可发」：实测出现过「文字被清空、链里只剩
+            # 空壳组件」的情况 —— 那时 rescue 必须出手，否则就是一次静默的「叫它不理」。
+            _chain = getattr(getattr(response, "result_chain", None), "chain", None) or []
+            _media = ("Image", "Record", "Video", "File", "Node", "Nodes")
+            if any(type(_c).__name__ in _media for _c in _chain):
                 return
             if getattr(response, "tools_call_name", None):
                 return
@@ -2514,10 +2533,12 @@ class SilenceMixin:
             txt = result.get_plain_text() or ""
             if not txt.strip():
                 return
-            if si_is_silence(txt, self.si_token):
+            if si_is_silence(txt, self.si_token) or si_is_ooc_silence(txt):
                 self.si_count += 1
-                logger.info("[mindscape_silence] 真静默（第 %d 次）| bot=%s",
-                            self.si_count, event.get_self_id())
+                logger.info("[mindscape_silence] 真静默（第 %d 次%s）| bot=%s",
+                            self.si_count,
+                            "" if si_is_silence(txt, self.si_token) else "，动作描写",
+                            event.get_self_id())
                 event.clear_result()
                 event.stop_event()
                 return

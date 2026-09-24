@@ -66,7 +66,11 @@ class RescueMixin:
                         getattr(self, "r_ready", False))
             if not getattr(self, "r_ready", False):
                 return
-            if getattr(response, "result_chain", None):
+            # 有结果链不等于「有东西可发」：实测出现过「文字被清空、链里只剩
+            # 空壳组件」的情况 —— 那时 rescue 必须出手，否则就是一次静默的「叫它不理」。
+            _chain = getattr(getattr(response, "result_chain", None), "chain", None) or []
+            _media = ("Image", "Record", "Video", "File", "Node", "Nodes")
+            if any(type(_c).__name__ in _media for _c in _chain):
                 return
             if getattr(response, "tools_call_name", None):
                 return
