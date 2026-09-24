@@ -1156,6 +1156,31 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R29: 沉默令牌必须容忍「模型多吐零宽字符」—— 否则会退化成一条空回复：
+    #      用户看到「叫它不理」，日志里却什么都没有（真踩过）。
+    try:
+        import re as _rex2
+        import mindscape_silence as SI3
+        importlib.reload(SI3)
+        _tk = SI3.SI_DEFAULT_TOKEN
+        _zw = "\u200b"
+        zw_ok = (SI3.si_is_silence(_tk + _zw, _tk)
+                 and SI3.si_is_silence(_zw + _tk + _zw, _tk)
+                 and SI3.si_is_silence(_tk + "\ufeff", _tk))
+        # 重复两次：直接比对认不出来 —— 必须靠「剃完只剩空白」那条兜底
+        dup = not SI3.si_is_silence(_tk * 2, _tk)
+        fallout = (SI3.si_strip(_tk * 2, _tk) == ""
+                   and SI3.si_norm(SI3.si_strip(_tk * 2, _tk)) == "")
+        _src = open(os.path.join(PLUGINS, "mindscape_silence.py"),
+                    encoding="utf-8").read()
+        guard_ok = "令牌带杂字" in _src
+        (ok if (zw_ok and dup and fallout and guard_ok) else bad)(
+            "R29 沉默令牌容忍零宽杂字",
+            "零宽可认=%s 重复认不出=%s 剃完为空=%s 有兜底=%s"
+            % (zw_ok, dup, fallout, guard_ok))
+    except Exception as e:
+        bad("R29 沉默令牌容错", str(e)[:140])
+
     # R05: 同一秒内更大序号的消息不能被漏读
     try:
         import mindscape_diary as MD

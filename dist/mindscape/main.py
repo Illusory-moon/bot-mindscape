@@ -308,8 +308,8 @@ def _load_config():
     try:
         import yaml  # type: ignore
         with open(path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-        g = (cfg.get("guard") or {})
+            conf = yaml.safe_load(f) or {}   # 注意别叫 cfg —— 会和模块级的配置命名空间撞名
+        g = (conf.get("guard") or {})
         # 用户自定义模式是「追加」而不是「替换」：
         # 否则配置里只写几条，反而会比内置默认拦得更少（真实踩过）。
         extra = [str(p) for p in (g.get("patterns") or []) if str(p).strip()]
@@ -381,6 +381,9 @@ SI_CRON_NOTE = """# 沉默
 """
 
 
+_SI_INVIS = "\u200b\u200c\u200d\u2060\ufeff\u00ad"
+
+
 _SI_WRAP = "`*_[]【】<>《》（）()" + "“”‘’" + chr(34) + chr(39)
 
 
@@ -388,8 +391,9 @@ _SI_TAIL = "。.!！?？~～…、,，:：;；"
 
 
 def si_norm(text):
-    """归一化成可比较的形式（剃掉空白 / 包裹符号 / 结尾标点）。"""
-    t = (text or "").strip()
+    """归一化成可比较的形式（先剃零宽字符，再剃空白 / 包裹符号 / 结尾标点）。"""
+    t = (text or "").translate({ord(c): None for c in _SI_INVIS})
+    t = t.strip()
     t = t.strip(_SI_WRAP)
     t = t.strip(_SI_TAIL)
     return t.strip(_SI_WRAP).lower()
@@ -2334,8 +2338,15 @@ class FormatMixin:
 class RescueMixin:
     def setup(self, context):
         self.r_cfg = cfg.section("rescue") or {}
-        logger.info("[mindscape_rescue] loaded | %s",
-                    "启用" if self.r_cfg.get("enabled", True) else "关闭")
+        env = self.r_cfg.get("api_key_env") or ""
+        self.r_ready = bool((self.r_cfg.get("api_base") or "").strip()
+                            and env and os.environ.get(env))
+        # 一定要把「就绪没就绪」喊出来：以前拿不到 key 就静默 return，
+        # 结果「空回复救援」一次都没生效过，日志里却一个字都没有。
+        logger.info("[mindscape_rescue] loaded | %s | %s",
+                    "启用" if self.r_cfg.get("enabled", True) else "关闭",
+                    "就绪" if self.r_ready
+                    else ("未就绪（缺 api_base 或环境变量 %s），空回复将无法兜住" % (env or "(未配置)")))
 
     @filter.on_llm_response()
     async def rescue_empty(self, event: AstrMessageEvent, response):
@@ -2347,6 +2358,14 @@ class RescueMixin:
             # 已经有文字 / 已经带了结果链（比如只发了图）/ 还要调工具，都不算空回复
             if (getattr(response, "completion_text", "") or "").strip():
                 return
+            # 走到这里 = 这一轮文字真的空了。先记一笔，方便日后定位；
+            # 以前这里什么都不留，出问题时只能看到一句「The message is empty」。
+            logger.info("[mindscape_rescue] 空文字回复 | chain=%s tools=%s ready=%s",
+                        bool(getattr(response, "result_chain", None)),
+                        bool(getattr(response, "tools_call_name", None)),
+                        getattr(self, "r_ready", False))
+            if not getattr(self, "r_ready", False):
+                return
             if getattr(response, "result_chain", None):
                 return
             if getattr(response, "tools_call_name", None):
@@ -2357,6 +2376,54 @@ class RescueMixin:
                 logger.info("[mindscape_rescue] 空回复已补: %s", text[:40])
         except Exception as e:
             logger.warning("[mindscape_rescue] 救援失败: %s", str(e)[:120])
+
+    @filter.on_using_llm_tool()
+    async def rc_capture_sent(self, event: AstrMessageEvent, tool, tool_args):
+        """记下这一轮真正发出去的话 —— 冒泡轮要用它替换任务黑话。"""
+        try:
+            if getattr(tool, "name", "") != "send_message_to_user":
+                return
+            if not isinstance(tool_args, dict):
+                return
+            parts = []
+            for m in (tool_args.get("messages") or []):
+                if isinstance(m, dict) and m.get("type") == "plain" and m.get("text"):
+                    parts.append(str(m["text"]))
+            if parts:
+                event.set_extra("_ms_sent_text", " ".join(parts)[:300])
+        except Exception:
+            pass
+
+    @filter.on_llm_response()
+    async def rc_clean_cron_meta(self, event: AstrMessageEvent, response):
+        """冒泡轮：把「任务黑话」的总结换成它真正说过的那句话。
+
+        AstrBot 的 cron 提示词要求模型「总结并输出你的动作和结果」，于是对话历史里
+        会存下这种句子：
+
+            [CronJob] bubble-xxx: 冒泡完成。动作：以<某人>身份在群里发了一句「…」，
+            没提任务/定时，没提问，没刷屏。
+
+        这些词（任务 / 定时 / 系统 / 身份）每轮都会被当作上下文喂回去，是出戏源头。
+        但它同时也是「我冒过泡、说了什么」的唯一留痕 —— 所以不是删掉，而是**改写成
+        第一人称**：人记住的是自己说过的话，不是「我完成了一个任务」。
+        """
+        try:
+            if not event.get_extra("cron_job"):
+                return
+            if response is None:
+                return
+            if "[CronJob]" not in (getattr(response, "completion_text", "") or ""):
+                return
+            sent = str(event.get_extra("_ms_sent_text") or "").strip()
+            if sent:
+                response.completion_text = sent
+                logger.info("[mindscape_rescue] 冒泡轮历史去任务化 -> %s", sent[:40])
+            else:
+                response.completion_text = ""
+                logger.info("[mindscape_rescue] 冒泡轮没发话，历史不留痕")
+        except Exception as e:
+            logger.warning("[mindscape_rescue] 冒泡轮清理失败: %s", str(e)[:120])
 
     async def _ask_once(self, event):
         import httpx
@@ -2460,6 +2527,15 @@ class SilenceMixin:
                     t = getattr(comp, "text", None)
                     if isinstance(t, str) and t.strip():
                         comp.text = si_strip(t, self.si_token)
+                # 剃完只剩空白 —— 那它本来就是想沉默（只是令牌形式没被上面认出来，
+                # 比如尾部多了零宽字符）。按真静默处理，否则会留下一条「空回复」：
+                # 用户看到的是「叫它不理」，日志里也什么都没有。
+                if not si_norm(result.get_plain_text() or ""):
+                    self.si_count += 1
+                    logger.info("[mindscape_silence] 真静默（第 %d 次，令牌带杂字）| bot=%s",
+                                self.si_count, event.get_self_id())
+                    event.clear_result()
+                    event.stop_event()
         except Exception as e:
             logger.warning("[mindscape_silence] 拦截失败: %s", str(e)[:120])
 # ==================================================================

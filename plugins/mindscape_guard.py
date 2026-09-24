@@ -51,8 +51,8 @@ def _load_config():
     try:
         import yaml  # type: ignore
         with open(path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-        g = (cfg.get("guard") or {})
+            conf = yaml.safe_load(f) or {}   # 注意别叫 cfg —— 会和模块级的配置命名空间撞名
+        g = (conf.get("guard") or {})
         # 用户自定义模式是「追加」而不是「替换」：
         # 否则配置里只写几条，反而会比内置默认拦得更少（真实踩过）。
         extra = [str(p) for p in (g.get("patterns") or []) if str(p).strip()]

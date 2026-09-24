@@ -42,13 +42,17 @@ SI_CRON_NOTE = """# 沉默
 """
 
 # 包裹符号 + 结尾标点：模型常多吐这些，比对前先剃掉
+# 零宽 / 不可见字符：模型时不时会吐出来，会让令牌「看起来一样却匹配不上」
+_SI_INVIS = "\u200b\u200c\u200d\u2060\ufeff\u00ad"
+
 _SI_WRAP = "`*_[]【】<>《》（）()" + "“”‘’" + chr(34) + chr(39)
 _SI_TAIL = "。.!！?？~～…、,，:：;；"
 
 
 def si_norm(text):
-    """归一化成可比较的形式（剃掉空白 / 包裹符号 / 结尾标点）。"""
-    t = (text or "").strip()
+    """归一化成可比较的形式（先剃零宽字符，再剃空白 / 包裹符号 / 结尾标点）。"""
+    t = (text or "").translate({ord(c): None for c in _SI_INVIS})
+    t = t.strip()
     t = t.strip(_SI_WRAP)
     t = t.strip(_SI_TAIL)
     return t.strip(_SI_WRAP).lower()
@@ -136,5 +140,14 @@ class SilenceMixin:
                     t = getattr(comp, "text", None)
                     if isinstance(t, str) and t.strip():
                         comp.text = si_strip(t, self.si_token)
+                # 剃完只剩空白 —— 那它本来就是想沉默（只是令牌形式没被上面认出来，
+                # 比如尾部多了零宽字符）。按真静默处理，否则会留下一条「空回复」：
+                # 用户看到的是「叫它不理」，日志里也什么都没有。
+                if not si_norm(result.get_plain_text() or ""):
+                    self.si_count += 1
+                    logger.info("[mindscape_silence] 真静默（第 %d 次，令牌带杂字）| bot=%s",
+                                self.si_count, event.get_self_id())
+                    event.clear_result()
+                    event.stop_event()
         except Exception as e:
             logger.warning("[mindscape_silence] 拦截失败: %s", str(e)[:120])
