@@ -1317,6 +1317,46 @@ def fetch(src, target, since_ts, since_seq, only_user=None):
     return rows
 
 
+def dy_render(msgs):
+    """把一批消息渲染成发给模型的那段文本。
+
+    单独抽出来，是因为**分批**和**发送**必须用同一套算法 ——
+    两边不一致就会出现「按 5000 字分好批、发出去却是 6000 字被砍」。
+    """
+    return "群聊记录：\n" + "\n".join(
+        "[" + m["time"] + "][" + m["gname"] + "] " + m["who"] + ": " + m["txt"]
+        for m in msgs)
+
+
+def chunk_by_budget(rows, batch, max_input_chars):
+    """先按条数切、再按【真实渲染长度】细分，保证每条消息都进得了某一次请求。
+
+    为什么要这么麻烦：以前是固定 batch 条一组，再在 call_llm 里把文本砍到
+    max_input_chars —— 砍掉的那截尾巴没人知道，而游标照样推到 chunk[-1]，
+    于是那几条消息**永久漏记**（把预算调小或把批次调大就能触发）。
+
+    单条自己就超预算时**抛 ValueError**：明确失败、停在原游标，绝不静默截断。
+    调用方接住它、打印、**不推进游标**。
+    """
+    out = []
+    for i in range(0, len(rows), batch):
+        cur = []
+        for r in rows[i:i + batch]:
+            trial = cur + [r]
+            if cur and len(dy_render(trial)) > max_input_chars:
+                out.append(cur)
+                cur = [r]
+            else:
+                cur = trial
+            if len(dy_render(cur)) > max_input_chars:
+                raise ValueError(
+                    "单条消息渲染后 %d 字 > max_input_chars=%d，装不进任何一批"
+                    % (len(dy_render(cur)), max_input_chars))
+        if cur:
+            out.append(cur)
+    return out
+
+
 def call_llm(llm, persona, msgs, max_input_chars, max_tokens, relations=None,
              expect_key="diary"):
     api_base = (llm.get("api_base") or "").rstrip("/")
@@ -1329,9 +1369,13 @@ def call_llm(llm, persona, msgs, max_input_chars, max_tokens, relations=None,
     if not key:
         raise RuntimeError("未找到 API key（检查 api_key_env / api_key_file）")
 
-    user = "群聊记录：\n" + "\n".join(
-        "[" + m["time"] + "][" + m["gname"] + "] " + m["who"] + ": " + m["txt"] for m in msgs
-    )
+    user = dy_render(msgs)
+    if len(user) > max_input_chars:
+        # 绝不再静默截断：截断 + 推进游标 = 被砍掉的那几条永久漏记。
+        # 调用方应当先用 chunk_by_budget 分好批。
+        raise RuntimeError(
+            "本批渲染后 %d 字，超过 max_input_chars=%d —— 调用方必须先分批"
+            % (len(user), max_input_chars))
     system = persona or DEFAULT_PERSONA
     if relations:
         # 没有这段，摘要会把「喜欢的人」写成「某个群友」—— 日记正文和人物画像
@@ -1342,7 +1386,7 @@ def call_llm(llm, persona, msgs, max_input_chars, max_tokens, relations=None,
         "model": llm.get("model") or "gpt-4o-mini",
         "messages": [
             {"role": "system", "content": system},
-            {"role": "user", "content": user[:max_input_chars]},
+            {"role": "user", "content": user},
         ],
         # 提炼类任务温度别太高；某些口径（如风格学习）需要更保守
         "temperature": float(llm.get("temperature", 0.7)),
@@ -1498,13 +1542,18 @@ def run_target(d):
             continue
         total_read += len(rows)
         all_people = {}
+        try:
+            batches = chunk_by_budget(rows, batch, max_in)
+        except ValueError as e:
+            # 分不出合法的批：停在原游标，等主人调大 max_input_chars
+            print("[mindscape_diary] 分批失败，本轮不动游标: %s" % str(e)[:140])
+            continue
         done = 0
-        for i in range(0, len(rows), batch):
+        for bi, chunk in enumerate(batches):
             if done >= max_batches:
-                print("[mindscape_diary] 已达单次上限 %d 批，剩余 %d 条留待下次"
-                      % (max_batches, len(rows) - i))
+                print("[mindscape_diary] 已达单次上限 %d 批，剩余 %d 批留待下次"
+                      % (max_batches, len(batches) - bi))
                 break
-            chunk = rows[i:i + batch]
             try:
                 res = call_llm(llm, target.get("persona"), chunk, max_in, max_tok, relations)
             except Exception as e:
@@ -1619,13 +1668,17 @@ def ln_run_target(d, target):
     if not rows:
         return 0, 0
 
+    try:
+        batches = chunk_by_budget(rows, batch, max_in)
+    except ValueError as e:
+        print("[mindscape_learn] 分批失败，本轮不动游标: %s" % str(e)[:140])
+        return 0, 0
     total_added = 0
-    for i in range(0, len(rows), batch):
-        if (i // batch) >= max_batches:
-            print("[mindscape_learn] 已达单次上限 %d 批，剩余 %d 条留待下次"
-                  % (max_batches, len(rows) - i))
+    for bi, chunk in enumerate(batches):
+        if bi >= max_batches:
+            print("[mindscape_learn] 已达单次上限 %d 批，剩余 %d 批留待下次"
+                  % (max_batches, len(batches) - bi))
             break
-        chunk = rows[i:i + batch]
         try:
             res = call_llm(llm, persona, chunk, max_in, max_tok,
                            expect_key="observations")

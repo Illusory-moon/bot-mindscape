@@ -20,7 +20,8 @@ import datetime
 import os
 
 import mindscape_config as cfg
-from mindscape_diary import call_llm, dy_abs, fetch, load_state, save_state
+from mindscape_diary import (call_llm, chunk_by_budget, dy_abs, fetch,
+                             load_state, save_state)
 
 # 默认的「研究员 prompt」。**只是兜底**：真正决定学什么的应该是使用者写的
 # targets[].persona —— 通用框架不该硬编码某个人是谁。
@@ -88,13 +89,17 @@ def ln_run_target(d, target):
     if not rows:
         return 0, 0
 
+    try:
+        batches = chunk_by_budget(rows, batch, max_in)
+    except ValueError as e:
+        print("[mindscape_learn] 分批失败，本轮不动游标: %s" % str(e)[:140])
+        return 0, 0
     total_added = 0
-    for i in range(0, len(rows), batch):
-        if (i // batch) >= max_batches:
-            print("[mindscape_learn] 已达单次上限 %d 批，剩余 %d 条留待下次"
-                  % (max_batches, len(rows) - i))
+    for bi, chunk in enumerate(batches):
+        if bi >= max_batches:
+            print("[mindscape_learn] 已达单次上限 %d 批，剩余 %d 批留待下次"
+                  % (max_batches, len(batches) - bi))
             break
-        chunk = rows[i:i + batch]
         try:
             res = call_llm(llm, persona, chunk, max_in, max_tok,
                            expect_key="observations")

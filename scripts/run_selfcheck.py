@@ -1261,6 +1261,97 @@ def check_regressions():
         os.remove(db)
     except Exception as e:
         bad("R05 同秒游标", str(e)[:140])
+    # R31: 日记分批必须【一条不漏】。以前是固定 batch 条一组、再在 call_llm 里
+    #      把文本砍到 max_input_chars —— 被砍掉的尾巴照样被游标跳过（永久漏记）。
+    try:
+        import json as _json
+        import urllib.request as _ur
+        import mindscape_diary as MD
+
+        db = os.path.join(HERE, "_sc_batch.db")
+        out = os.path.join(HERE, "_sc_batch.md")
+        statef = os.path.join(HERE, "_sc_batch.state.json")
+        extra = os.path.join(HERE, "_sc_batch.people.md")
+
+        def _mk(dbp, texts):
+            con = sqlite3.connect(dbp)
+            con.execute("CREATE TABLE messages (timestamp INT, sequence INT, data TEXT)")
+            for i, t in enumerate(texts):
+                payload = _json.dumps({"user_id": "9", "group_id": "1",
+                                       "message": [{"type": "text", "data": {"text": t}}]})
+                con.execute("INSERT INTO messages VALUES (?,?,?)", (100 + i, i + 1, payload))
+            con.commit()
+            con.close()
+
+        for p in (db, out, statef, extra):
+            if os.path.exists(p):
+                os.remove(p)
+        os.environ["_SC_DIARY_KEY"] = "k"
+        d = {"source": {"db": db, "table": "messages",
+                        "fields": {"time": "timestamp", "seq": "sequence", "data": "data"}},
+             "llm": {"api_base": "http://127.0.0.1:9/v1", "api_key_env": "_SC_DIARY_KEY",
+                     "model": "x"},
+             "batch": 40, "max_input_chars": 500, "max_tokens": 50, "max_batches": 40,
+             "targets": [{"output": out, "state": statef, "persona": "p"}]}
+
+        sent = []
+        real_open = _ur.urlopen
+
+        class _R:
+            def __init__(self, b):
+                self._b = b
+            def read(self):
+                return self._b
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        def _fake(req, timeout=None):
+            body = _json.loads(req.data.decode("utf-8"))
+            sent.append(body["messages"][1]["content"])
+            return _R(_json.dumps({"choices": [{"message": {"content": _json.dumps(
+                {"diary": ["一条"], "people": {}})}}]}).encode())
+
+        # 注：fetch 会把每条 txt 截到 200 字，所以标记要落在 200 字以内
+        marks = ["MK%d" % i + "x" * 196 for i in range(4)]
+        _mk(db, marks)
+        _ur.urlopen = _fake
+        try:
+            MD.run_target(d)
+        finally:
+            _ur.urlopen = real_open
+        blob = "\n".join(sent)
+        cnt = [blob.count(m) for m in marks]
+        st = _json.load(open(statef, encoding="utf-8")) if os.path.exists(statef) else {}
+        c1 = all(c == 1 for c in cnt) and st.get("since_seq") == 4
+
+        # 单条超过预算：必须显式失败、且【不推进游标】
+        # 预算压到 100 才能真的走到这条路径 —— fetch 把单条 txt 截到 200 字，
+        # 单条渲染后约 250 字，500 的预算下它永远装得下。
+        os.remove(db)
+        _mk(db, ["Z" * 5000])
+        for p in (statef, out):
+            if os.path.exists(p):
+                os.remove(p)
+        d["max_input_chars"] = 100
+        _ur.urlopen = _fake
+        try:
+            MD.run_target(d)
+        finally:
+            _ur.urlopen = real_open
+        st2 = _json.load(open(statef, encoding="utf-8")) if os.path.exists(statef) else {}
+        c2 = int(st2.get("since_seq") or 0) == 0
+
+        (ok if (c1 and c2) else bad)(
+            "R31 日记分批不漏记",
+            "每条出现次数=%s 批=%d 游标=%s | 超预算不动游标=%s"
+            % (cnt, len(sent), st.get("since_seq"), c2))
+        for p in (db, out, statef, extra):
+            if os.path.exists(p):
+                os.remove(p)
+    except Exception as e:
+        bad("R31 日记分批", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
     # R02: 路径穿越必须在入库前就被拒绝
     try:
