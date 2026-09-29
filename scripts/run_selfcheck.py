@@ -77,7 +77,7 @@ def check_config():
         bad("YAML 解析", str(e)[:150])
         return
     ok("YAML 解析", "顶层键: " + ", ".join(d.keys()))
-    for key in ["memory", "diary", "stickers", "guard", "silence", "format",
+    for key in ["memory", "groupctx", "diary", "stickers", "guard", "silence", "format",
                 "trace", "janitor", "waking"]:
         if key in d:
             ok("配置段", key)
@@ -1640,8 +1640,9 @@ def check_regressions():
             frag = _log[1][1] if len(_log) > 1 else ""
             normal = (len(_log) == 2
                       and _log[0][0] == "INFO" and "出站" in _log[0][1]
+                      and "上下文=1条" in _log[0][1]
                       and _log[1][0] == "INFO" and "完成" in frag
-                      and "sys=300字" in frag and "上下文=1条/100字" in frag
+                      and "sys=300字" in frag and "会话=0条/0字" in frag
                       and "工具=0" in frag and "耗时=" in frag
                       and "tok=100+50/20" in frag)
             # 阈值调到负数 → 同一条必须升级成 WARNING（线上就靠它 grep 慢轮）
@@ -1658,6 +1659,68 @@ def check_regressions():
             "常规=%s 超阈值升级=%s | %s" % (normal, loud, frag[:88]))
     except Exception as e:
         bad("R34 观测层", "%s: %s" % (type(e).__name__, str(e)[:120]))
+    # R35: 上下文补齐（群缓冲）——「只读尾部」必须与整读**等价**，定向性四种情形各自成句。
+    #      缓冲是追加流（写端 2MB 自截断），整读纯属浪费；但省 IO 不能省语义。
+    #      另外：这个模块**默认必须关** —— 它依赖框架补丁，没打补丁就打开会把
+    #      「这条不是对你说的」当结论注入，比不注入更糟。
+    try:
+        import json as _json
+        import time as _t
+        import importlib as _il3
+        import mindscape_groupctx as GC
+        _il3.reload(GC)
+        buf = os.path.join(HERE, "_sc_buf.jsonl")
+        now = _t.time()
+        with open(buf, "w", encoding="utf-8") as f:
+            for i in range(3000):
+                f.write(_json.dumps({
+                    "ts": now - (i % 900),
+                    "platform": "p",
+                    "group": "111" if i % 3 == 0 else "222",
+                    "who": "u%d" % i, "text": "t%d" % i,
+                }, ensure_ascii=False) + chr(10))
+        got = GC.gc_read_recent(buf, "p", "111", 15, 1800, 512 * 1024)
+        ref = [r for r in (_json.loads(x) for x in open(buf, encoding="utf-8") if x.strip())
+               if str(r.get("platform")) == "p" and str(r.get("group")) == "111"
+               and now - float(r.get("ts") or 0) <= 1800][-15:]
+        tail_ok = (got == ref) and len(got) == 15
+        os.remove(buf)
+
+        class At:
+            qq = "100000001"
+
+        class Reply:
+            sender_id = "100000001"
+
+        class _GE:
+            def __init__(self, msgs=(), extra=None):
+                self._m, self._x = list(msgs), dict(extra or {})
+
+            def get_messages(self):
+                return self._m
+
+            def get_self_id(self):
+                return "100000001"
+
+            def get_extra(self, k, d=None):
+                return self._x.get(k, d)
+
+        h_at = GC.gc_head(_GE([At()]))
+        h_reply = GC.gc_head(_GE([Reply()]))
+        h_mention = GC.gc_head(_GE(extra={"wake_reason": "mention"}))
+        h_other = GC.gc_head(_GE())
+        head_ok = ("@ 了你本人" in h_at and "引用了你说过的话" in h_reply
+                   and "提到了你的名字" in h_mention and "不是对你说的" in h_other)
+        inst = GC.GroupctxMixin()
+        inst.setup(None)
+        default_off = inst.gc_on is False
+        good = tail_ok and head_ok and default_off
+        (ok if good else bad)(
+            "R35 群上下文补齐（尾读等价 / 定向性四态 / 默认关）",
+            "尾读等价=%s(%d条) 定向性=%s 默认关=%s"
+            % (tail_ok, len(got), head_ok, default_off))
+    except Exception as e:
+        bad("R35 群上下文补齐", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
 
 # ── 6. 转义保真 ──

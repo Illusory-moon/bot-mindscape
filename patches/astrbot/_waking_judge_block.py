@@ -37,7 +37,7 @@ if (_ms_enabled and _ms_group_ok and not event.is_at_or_wake_command
     self._last_auto_wake_map[_ms_sid] = _ms_now
     event.is_wake = True
     event.is_at_or_wake_command = True
-    # 记下唤醒原因：group_context_buffers 靠它决定注入哪种「定向性」提示
+    # 记下唤醒原因：mindscape_groupctx 靠它决定注入哪种「定向性」提示
     event.set_extra("wake_reason", "mention" if _ms_mentioned else "sample")
     try:
         logger.info("[auto_wake:%s] self=%s group=%s"

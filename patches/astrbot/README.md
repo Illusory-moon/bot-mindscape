@@ -43,8 +43,8 @@ python patches/astrbot/install.py --revert
 bot 只看到后半句，回一句「吃什么？」）。
 
 这个块把**所有**群消息落一份到 `/opt/astrbot/data/group_ctx_buffer.jsonl`，
-再由 `group_context_buffers` 插件注入 —— 框架层和插件层各管一段，
-因为唤醒阶段比插件执行更早，插件看不到未唤醒的消息。
+再由插件里的 `mindscape_groupctx` 模块读出来注入（配置 `groupctx.enabled`，**默认关闭**）——
+框架层和插件层各管一段，因为唤醒阶段比插件执行更早，插件看不到未唤醒的消息。
 
 ### ⚠️ 为什么要自己渲染消息链，不用 `event.message_str`
 

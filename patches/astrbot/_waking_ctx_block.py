@@ -1,7 +1,7 @@
 # ── bot-mindscape: 群聊上下文缓冲（install.py 插在模块级）──
 # 注：这两个函数的命名由本补丁决定；线上容器若已有同名实现，install.py 会跳过。
 # 未唤醒的群消息不进 LLM 上下文，bot 回复时「上下文不全」。
-# 这里把【所有】群消息落一份到磁盘，由 group_context_buffers 插件注入。
+# 这里把【所有】群消息落一份到磁盘，由插件里的 mindscape_groupctx 模块读出来注入。
 
 
 def _ms_render_chain(event) -> str:

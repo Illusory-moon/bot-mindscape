@@ -15,6 +15,7 @@ event 不保证是同一个对象，只挂 extras 会静默丢记录（本鱼实
 
 只记**尺寸与耗时**，不记任何正文 —— 日志里不该出现聊天内容。
 """
+import json
 import time
 
 from astrbot.api import logger
@@ -29,7 +30,8 @@ TRACE_PRIORITY = -100
 TRACE_KEY = "_mindscape_trace_t0"
 TRACE_PENDING_MAX = 64        # 没等到响应的残留记录最多留这么多（防无限增长）
 DEFAULT_WARN_MS = 8000        # 慢于此 → 升级成 WARNING，方便 grep
-DEFAULT_WARN_CHARS = 12000    # system_prompt 超过这个字数 → 疑似异常注入
+DEFAULT_WARN_CHARS = 20000    # system_prompt 超过这个字数 → 疑似异常注入
+                              # （实测这个 bot 的常态是 ~13800：人格正文 + 记忆三层 + 15 条群记录）
 
 
 def tr_key(event):
@@ -63,6 +65,24 @@ def tr_tool_count(request):
         return len(ft.names())
     except Exception:
         return 0
+
+
+def tr_hist(request):
+    """会话历史的规模，返回 (条数, 字符数)。
+
+    ⚠️ 框架在 `on_llm_request` 这一刻**可能还没把历史并进 `contexts`**
+    （实测两个字段都是 0/空）—— 所以只用 `contexts` 当体积指标会一直是 0。
+    拿不到就返回 (0, 0)：量到 0 不代表没有历史，只代表此刻它还不在手上。
+    """
+    conv = getattr(request, "conversation", None)
+    raw = getattr(conv, "history", None) if conv is not None else None
+    if not isinstance(raw, str) or not raw:
+        return (0, 0)
+    try:
+        items = json.loads(raw)
+    except Exception:
+        return (0, len(raw))
+    return ((len(items) if isinstance(items, list) else 0), len(raw))
 
 
 def tr_usage(resp):
@@ -106,20 +126,23 @@ class TraceMixin:
         if not self.tr_on:
             return
         try:
+            hn, hc = tr_hist(request)
             info = {
                 "t": time.time(),
                 "sys": len(request.system_prompt or ""),
                 "ctx": len(request.contexts or []),
                 "ctx_chars": tr_ctx_chars(request.contexts),
+                "hist_n": hn,
+                "hist_c": hc,
                 "tools": tr_tool_count(request),
                 "user": len(request.prompt or ""),
             }
             self.tr_remember(tr_key(event), info)
             event.set_extra(TRACE_KEY, info)
             logger.info(
-                "[mindscape_trace] 出站 %s sys=%d字 上下文=%d条/%d字 工具=%d 输入=%d字",
-                self.tr_label(event), info["sys"], info["ctx"],
-                info["ctx_chars"], info["tools"], info["user"])
+                "[mindscape_trace] 出站 %s sys=%d字 会话=%d条/%d字 上下文=%d条 工具=%d 输入=%d字",
+                self.tr_label(event), info["sys"], info["hist_n"],
+                info["hist_c"], info["ctx"], info["tools"], info["user"])
         except Exception as e:
             logger.warning("[mindscape_trace] 记录请求失败: %s", str(e)[:120])
 
@@ -140,11 +163,11 @@ class TraceMixin:
             slow = ms >= self.tr_warn_ms
             fat = int(info.get("sys") or 0) >= self.tr_warn_chars
             line = ("[mindscape_trace] %s %s 耗时=%.2fs sys=%d字"
-                    " 上下文=%d条/%d字 工具=%d 输入=%d字%s")
+                    " 会话=%d条/%d字 工具=%d 输入=%d字%s")
             args = ("SLOW" if slow else ("FAT" if fat else "完成"),
                     self.tr_label(event), ms / 1000.0,
-                    info.get("sys") or 0, info.get("ctx") or 0,
-                    info.get("ctx_chars") or 0, info.get("tools") or 0,
+                    info.get("sys") or 0, info.get("hist_n") or 0,
+                    info.get("hist_c") or 0, info.get("tools") or 0,
                     info.get("user") or 0, tr_usage(response))
             if slow or fat:
                 logger.warning(line, *args)

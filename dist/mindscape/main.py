@@ -315,6 +315,100 @@ def bot_entries():
     return bots if isinstance(bots, list) else []
 
 
+DEFAULT_BUFFER = "/opt/astrbot/data/group_ctx_buffer.jsonl"
+
+
+DEFAULT_COUNT = 15          # 注入最近多少条
+
+
+DEFAULT_WINDOW = 30 * 60    # 只取 30 分钟内的（太旧的不算上下文）
+
+
+DEFAULT_TAIL = 512 * 1024   # 只读文件尾部这么多字节（够 800 行，即使每行接近上限长度）
+
+
+GC_KEEP_LINES = 800         # 再从中取最后这么多行（与整读的旧实现等价）
+
+
+GC_PRIORITY = 1             # 先于记忆注入：这条消息是「上下文」，记忆是「背景」
+
+
+def gc_buffer_path(conf):
+    """缓冲文件路径。相对路径按【配置文件所在目录】解析（全项目一致的规矩）。"""
+    raw = str(conf.get("buffer") or "").strip()
+    if not raw:
+        return DEFAULT_BUFFER
+    if os.path.isabs(raw):
+        return os.path.normpath(raw)
+    return os.path.normpath(os.path.join(os.path.dirname(cfg.config_path()), raw))
+
+
+def gc_tail_lines(path, tail_bytes, keep):
+    """只读文件尾部的若干行。
+
+    缓冲是追加流（写端 2MB 自截断），整读一遍纯属浪费 —— 实测 1.4MB / 7389 行，
+    而 30 分钟窗口 + 只取 15 条根本用不到那么多。
+    """
+    with open(path, "rb") as fp:
+        fp.seek(0, os.SEEK_END)
+        size = fp.tell()
+        start = max(0, size - tail_bytes)
+        fp.seek(start)
+        data = fp.read()
+    lines = data.decode("utf-8", "ignore").split(chr(10))
+    if start > 0:
+        lines = lines[1:]        # 首行大概率被截断，丢掉
+    return [ln for ln in lines if ln.strip()][-keep:]
+
+
+def gc_read_recent(path, platform, group, limit, window_sec, tail_bytes):
+    """从缓冲文件读该群最近的对话（窗口过滤 + 只留最后 limit 条）。"""
+    if not path or not os.path.exists(path):
+        return []
+    try:
+        lines = gc_tail_lines(path, tail_bytes, GC_KEEP_LINES)
+    except Exception:
+        return []
+    now = time.time()
+    out = []
+    for ln in lines:
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            rec = json.loads(ln)
+        except Exception:
+            continue
+        if str(rec.get("platform")) != platform:
+            continue
+        if str(rec.get("group")) != str(group):
+            continue
+        if now - float(rec.get("ts") or 0) > window_sec:
+            continue
+        out.append(rec)
+    return out[-limit:]
+
+
+def gc_head(event):
+    """本条消息的定向性 —— 四种情形各自一句。"""
+    msgs = event.get_messages() or []
+    me = str(event.get_self_id())
+    at_self = any(type(c).__name__ == "At"
+                  and str(getattr(c, "qq", "")) == me for c in msgs)
+    reply_self = any(type(c).__name__ == "Reply"
+                     and str(getattr(c, "sender_id", "")) == me for c in msgs)
+    reason = event.get_extra("wake_reason")
+    if at_self:
+        return "本条消息【@ 了你本人】—— 它就是对你说的。"
+    if reply_self:
+        return "本条消息【引用了你说过的话】—— 它是接着你的话说的。"
+    if reason == "mention":
+        return "本条消息【没有 @ 你，但提到了你的名字】—— 大概率是在说你，可以应。"
+    return ("本条消息【既没有 @ 你，也没有提到你的名字】—— 它多半是群友之间的对话，"
+            "不是对你说的。可以接一句轻量的补充，但不是必须；不要把它当成在问你，"
+            "也不要替别人回答。")
+
+
 BL_PRIORITY = 999
 
 
@@ -2013,7 +2107,7 @@ TRACE_PENDING_MAX = 64        # 没等到响应的残留记录最多留这么多
 DEFAULT_WARN_MS = 8000        # 慢于此 → 升级成 WARNING，方便 grep
 
 
-DEFAULT_WARN_CHARS = 12000    # system_prompt 超过这个字数 → 疑似异常注入
+DEFAULT_WARN_CHARS = 20000    # system_prompt 超过这个字数 → 疑似异常注入
 
 
 def tr_key(event):
@@ -2047,6 +2141,24 @@ def tr_tool_count(request):
         return len(ft.names())
     except Exception:
         return 0
+
+
+def tr_hist(request):
+    """会话历史的规模，返回 (条数, 字符数)。
+
+    ⚠️ 框架在 `on_llm_request` 这一刻**可能还没把历史并进 `contexts`**
+    （实测两个字段都是 0/空）—— 所以只用 `contexts` 当体积指标会一直是 0。
+    拿不到就返回 (0, 0)：量到 0 不代表没有历史，只代表此刻它还不在手上。
+    """
+    conv = getattr(request, "conversation", None)
+    raw = getattr(conv, "history", None) if conv is not None else None
+    if not isinstance(raw, str) or not raw:
+        return (0, 0)
+    try:
+        items = json.loads(raw)
+    except Exception:
+        return (0, len(raw))
+    return ((len(items) if isinstance(items, list) else 0), len(raw))
 
 
 def tr_usage(resp):
@@ -3119,6 +3231,55 @@ class VisionMixin:
             logger.warning("[mindscape_vision] 注入失败: %s", str(e)[:120])
 
 
+class GroupctxMixin:
+    def setup(self, context):
+        c = cfg.section("groupctx")
+        self.gc_on = bool(c.get("enabled"))
+        self.gc_path = gc_buffer_path(c)
+        self.gc_count = int(c.get("count") or DEFAULT_COUNT)
+        self.gc_window = int(c.get("window_sec") or DEFAULT_WINDOW)
+        self.gc_tail = int(c.get("tail_bytes") or DEFAULT_TAIL)
+        self.gc_mark = True if c.get("directness") is None else bool(c.get("directness"))
+        self.gc_targets = [str(x) for x in (c.get("targets") or [])]
+        logger.info(
+            "[mindscape_groupctx] loaded | enabled=%s | buffer=%s | 最近 %d 条/%ds | 定向性=%s",
+            self.gc_on, self.gc_path, self.gc_count, self.gc_window, self.gc_mark)
+        scope_warn(logger, "mindscape_groupctx", self.gc_targets, self.gc_on)
+
+    @filter.on_llm_request(priority=GC_PRIORITY)
+    async def gc_inject(self, event: AstrMessageEvent, request: ProviderRequest):
+        try:
+            if not self.gc_on or not scope_hit(self.gc_targets, event.get_self_id()):
+                return
+            gid = event.get_group_id()
+            if gid is None:
+                return
+            # 自主冒泡轮不要群缓冲 —— 那会让它退化成「接别人的话」，
+            # 而这一轮的意义是自己找话题。
+            if event.get_extra("cron_job"):
+                return
+            recs = gc_read_recent(self.gc_path, event.get_platform_name(),
+                                  str(gid), self.gc_count, self.gc_window,
+                                  self.gc_tail)
+            lines = []
+            if self.gc_mark:
+                lines += ["", "【本条消息的定向性】", gc_head(event)]
+            if recs:
+                lines.append("")
+                lines.append("【本群最近的真实聊天记录（用于理解上下文，不要逐条回应，也不要复述）】")
+                for r in recs:
+                    lines.append(str(r.get("who", "?"))[:16] + ": "
+                                 + str(r.get("text", ""))[:200])
+            if not lines:
+                return
+            request.system_prompt = ((request.system_prompt or "") + chr(10)
+                                     + chr(10).join(lines))
+            logger.info("[mindscape_groupctx] 注入 self=%s 群=%s 历史=%d 条",
+                        event.get_self_id(), gid, len(recs))
+        except Exception as exc:
+            logger.warning("[mindscape_groupctx] 注入失败: %s", str(exc)[:120])
+
+
 class TraceMixin:
     def setup(self, context):
         c = cfg.section("trace")
@@ -3149,20 +3310,23 @@ class TraceMixin:
         if not self.tr_on:
             return
         try:
+            hn, hc = tr_hist(request)
             info = {
                 "t": time.time(),
                 "sys": len(request.system_prompt or ""),
                 "ctx": len(request.contexts or []),
                 "ctx_chars": tr_ctx_chars(request.contexts),
+                "hist_n": hn,
+                "hist_c": hc,
                 "tools": tr_tool_count(request),
                 "user": len(request.prompt or ""),
             }
             self.tr_remember(tr_key(event), info)
             event.set_extra(TRACE_KEY, info)
             logger.info(
-                "[mindscape_trace] 出站 %s sys=%d字 上下文=%d条/%d字 工具=%d 输入=%d字",
-                self.tr_label(event), info["sys"], info["ctx"],
-                info["ctx_chars"], info["tools"], info["user"])
+                "[mindscape_trace] 出站 %s sys=%d字 会话=%d条/%d字 上下文=%d条 工具=%d 输入=%d字",
+                self.tr_label(event), info["sys"], info["hist_n"],
+                info["hist_c"], info["ctx"], info["tools"], info["user"])
         except Exception as e:
             logger.warning("[mindscape_trace] 记录请求失败: %s", str(e)[:120])
 
@@ -3183,11 +3347,11 @@ class TraceMixin:
             slow = ms >= self.tr_warn_ms
             fat = int(info.get("sys") or 0) >= self.tr_warn_chars
             line = ("[mindscape_trace] %s %s 耗时=%.2fs sys=%d字"
-                    " 上下文=%d条/%d字 工具=%d 输入=%d字%s")
+                    " 会话=%d条/%d字 工具=%d 输入=%d字%s")
             args = ("SLOW" if slow else ("FAT" if fat else "完成"),
                     self.tr_label(event), ms / 1000.0,
-                    info.get("sys") or 0, info.get("ctx") or 0,
-                    info.get("ctx_chars") or 0, info.get("tools") or 0,
+                    info.get("sys") or 0, info.get("hist_n") or 0,
+                    info.get("hist_c") or 0, info.get("tools") or 0,
                     info.get("user") or 0, tr_usage(response))
             if slow or fat:
                 logger.warning(line, *args)
@@ -3198,7 +3362,7 @@ class TraceMixin:
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
 # ==================================================================
-class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, SilenceMixin, VisionMixin, TraceMixin, star.Star):
+class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, SilenceMixin, VisionMixin, GroupctxMixin, TraceMixin, star.Star):
     def __init__(self, context):
         self.context = context
         self.name = "mindscape"
@@ -3212,5 +3376,6 @@ class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, StickersMixin, Sticke
         RescueMixin.setup(self, context)
         SilenceMixin.setup(self, context)
         VisionMixin.setup(self, context)
+        GroupctxMixin.setup(self, context)
         TraceMixin.setup(self, context)
-        logger.info("[mindscape] 插件已加载（10 个模块）")
+        logger.info("[mindscape] 插件已加载（11 个模块）")

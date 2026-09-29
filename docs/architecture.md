@@ -102,6 +102,7 @@ if result is None or not result.chain:
 | `mindscape_sticker_use` | 表达 | 选图发送 / 概率强制配图 / 斗图队形 / 存图工具 | core / config |
 | `mindscape_rescue` | 沉浸 | 空回复救援（推理模型只吐 reasoning 时补一次轻量调用） | core / config |
 | `mindscape_format` | 沉浸 | 把多段回复压平 | config |
+| `mindscape_groupctx` | 唤醒 | 上下文补齐：没被唤醒的群消息 + 本条消息的定向性（默认关闭，需配合补丁） | core / config |
 | `mindscape_trace` | 观测 | 每轮记录出站体积与端到端耗时（只记尺寸，不记正文） | config |
 | `mindscape_janitor` | 运维 | 会话防膨胀清理 | core / config（独立脚本） |
 

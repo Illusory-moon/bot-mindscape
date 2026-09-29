@@ -74,6 +74,32 @@ export MINDSCAPE_API_KEY="your-key-here"
 
 或用文件（`diary.llm.api_key_file`）。
 
+## 可选的框架集成：唤醒策略 + 上下文补齐
+
+只想要「记忆 + 表达 + 沉浸」，到第 4 步就够了。要让 bot **知道什么时候该开口**，
+还得给框架打一个补丁 —— 因为唤醒判定发生在**消息分发阶段**，插件来不及插手：
+
+```bash
+python patches/astrbot/install.py             # 打补丁（先备份；已打过会跳过）
+python patches/astrbot/install.py --revert    # 从备份还原
+```
+
+补丁做两件事：
+
+1. **唤醒策略** —— @必回 / 提到名字必回 / 低概率冒泡，且每个 bot 独立配置
+2. **落盘群消息** —— 把**所有**群消息写一份到 `<astrbot 数据目录>/group_ctx_buffer.jsonl`
+
+第 2 条的读者是插件的 `groupctx` 模块（**默认关闭**，要先打补丁再打开）：
+
+```yaml
+groupctx:
+  enabled: true
+  targets: ["all"]        # 或列出 bot 号
+```
+
+> ⚠️ **没打补丁就打开 `groupctx`，比不开更糟**：它拿不到补丁记的「唤醒原因」，
+> 会把「这条不是对你说的」当成结论注入。所以默认是关的。
+
 ## 定时任务（可选）
 
 这些是**独立脚本**，不进插件目录也能跑：

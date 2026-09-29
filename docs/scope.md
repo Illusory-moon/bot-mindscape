@@ -9,7 +9,7 @@
 |---|---|
 | 列出 bot 号 | 只对这些 bot 生效（**推荐**） |
 | 显式 `["all"]` | 所有 bot 生效。也认 `*` / `全部` / `所有`，大小写不敏感（**意思明确**） |
-| **留空 / 不写** | ⚠️ `silence` / `vision` / `format` 三个模块按「**全部 bot**」处理（历史语义，加载时会警告）；**其余模块按「谁都不生效」处理** |
+| **留空 / 不写** | ⚠️ `silence` / `vision` / `format` / `groupctx` 四个模块按「**全部 bot**」处理（历史语义，加载时会警告）；**其余模块按「谁都不生效」处理** |
 
 ## 逐模块
 
@@ -21,6 +21,7 @@
 | `silence.targets` | `self_id` 列表 | ⚠️ **空 = 全部 bot** | 清空整条回复 |
 | `vision.targets` | 同上 | ⚠️ **空 = 全部 bot** | 注入识图提醒 |
 | `format.targets` | 同上 | ⚠️ **空 = 全部 bot** | 压平回复 |
+| `groupctx.targets` | 同上 | ⚠️ **空 = 全部 bot** | 注入群上下文 + 定向性（还要 `enabled: true`） |
 | `stickers.targets[].category` | 按 `self_id` 查表 | 没配 → **谁都不采集** | 图片入库 |
 | `sticker_use`（复用 `stickers.targets`） | 同上 | 没配 → **谁都不发图** | 发送内容 |
 | `blocklist.targets[].users` | 按 `self_id` 查表 | 没配 → 不拦 | 拦截一切 |
