@@ -27,13 +27,13 @@ ORDER = [
     "mindscape_block", "mindscape_guard", "mindscape_silence", "mindscape_vision",
     "mindscape_memory", "mindscape_recall", "mindscape_notes",
     "mindscape_diary", "mindscape_learn", "mindscape_stickers", "mindscape_sticker_use",
-    "mindscape_format", "mindscape_rescue", "mindscape_janitor",
+    "mindscape_format", "mindscape_trace", "mindscape_rescue", "mindscape_janitor",
 ]
 
 # 这些模块里的类是 Mixin，需要被主类继承（按此顺序）
 MIXIN_ORDER = ["BlockMixin", "GuardMixin", "MemoryMixin", "StickersMixin",
                "StickerUseMixin", "FormatMixin", "RescueMixin",
-               "SilenceMixin", "VisionMixin"]
+               "SilenceMixin", "VisionMixin", "TraceMixin"]
 
 
 def _seg(src_lines, node):

@@ -1999,6 +1999,65 @@ def flatten(text, join_with="，", drop_last_if_short=False, short_len=8):
         else:
             out += join_with + nxt
     return out
+
+
+TRACE_PRIORITY = -100
+
+
+TRACE_KEY = "_mindscape_trace_t0"
+
+
+TRACE_PENDING_MAX = 64        # 没等到响应的残留记录最多留这么多（防无限增长）
+
+
+DEFAULT_WARN_MS = 8000        # 慢于此 → 升级成 WARNING，方便 grep
+
+
+DEFAULT_WARN_CHARS = 12000    # system_prompt 超过这个字数 → 疑似异常注入
+
+
+def tr_key(event):
+    """本轮的键：同一会话的请求与响应必须能对上。"""
+    return str(getattr(event, "unified_msg_origin", "") or event.get_self_id())
+
+
+def tr_ctx_chars(contexts):
+    """上下文里所有文本的字符总数（只数长度，不碰内容）。"""
+    total = 0
+    for m in (contexts or []):
+        if not isinstance(m, dict):
+            total += len(str(m))
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            total += len(c)
+        elif isinstance(c, list):
+            for part in c:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    total += len(part["text"])
+    return total
+
+
+def tr_tool_count(request):
+    """这一轮挂了多少个工具（工具 schema 本身就占 prompt）。"""
+    ft = getattr(request, "func_tool", None)
+    if ft is None:
+        return 0
+    try:
+        return len(ft.names())
+    except Exception:
+        return 0
+
+
+def tr_usage(resp):
+    """token 用量；框架没给就留空。"""
+    u = getattr(resp, "usage", None)
+    if not u:
+        return ""
+    try:
+        return " tok=%d+%d/%d" % (u.input_other, u.input_cached, u.output)
+    except Exception:
+        return ""
 # ==================================================================
 # 命名空间：让 cfg.xxx() / core.xxx() 这类调用在合并后依然可用
 # ==================================================================
@@ -3058,10 +3117,88 @@ class VisionMixin:
                         event.get_self_id())
         except Exception as e:
             logger.warning("[mindscape_vision] 注入失败: %s", str(e)[:120])
+
+
+class TraceMixin:
+    def setup(self, context):
+        c = cfg.section("trace")
+        self.tr_on = True if c.get("enabled") is None else bool(c.get("enabled"))
+        self.tr_warn_ms = int(c.get("warn_ms") or DEFAULT_WARN_MS)
+        self.tr_warn_chars = int(c.get("warn_chars") or DEFAULT_WARN_CHARS)
+        self.tr_pending = {}
+        logger.info(
+            "[mindscape_trace] loaded | enabled=%s | 慢于 %dms 或 system_prompt"
+            " 超过 %d 字时改成 WARNING",
+            self.tr_on, self.tr_warn_ms, self.tr_warn_chars)
+
+    def tr_label(self, event):
+        """日志里区分两个 bot 的那一列。"""
+        return "self=%s 群=%s" % (event.get_self_id(),
+                                  event.get_group_id() or "-")
+
+    def tr_remember(self, key, info):
+        self.tr_pending[key] = info
+        # 失败/中断的轮次永远等不到响应 —— 别让它把内存攒起来
+        if len(self.tr_pending) > TRACE_PENDING_MAX:
+            for k in list(self.tr_pending)[:-TRACE_PENDING_MAX // 2]:
+                self.tr_pending.pop(k, None)
+
+    @filter.on_llm_request(priority=TRACE_PRIORITY)
+    async def tr_measure_request(self, event: AstrMessageEvent,
+                                 request: ProviderRequest):
+        if not self.tr_on:
+            return
+        try:
+            info = {
+                "t": time.time(),
+                "sys": len(request.system_prompt or ""),
+                "ctx": len(request.contexts or []),
+                "ctx_chars": tr_ctx_chars(request.contexts),
+                "tools": tr_tool_count(request),
+                "user": len(request.prompt or ""),
+            }
+            self.tr_remember(tr_key(event), info)
+            event.set_extra(TRACE_KEY, info)
+            logger.info(
+                "[mindscape_trace] 出站 %s sys=%d字 上下文=%d条/%d字 工具=%d 输入=%d字",
+                self.tr_label(event), info["sys"], info["ctx"],
+                info["ctx_chars"], info["tools"], info["user"])
+        except Exception as e:
+            logger.warning("[mindscape_trace] 记录请求失败: %s", str(e)[:120])
+
+    @filter.on_llm_response()
+    async def tr_measure_response(self, event: AstrMessageEvent, response):
+        if not self.tr_on:
+            return
+        try:
+            info = self.tr_pending.pop(tr_key(event), None)
+            if not isinstance(info, dict):
+                info = event.get_extra(TRACE_KEY)
+            if not isinstance(info, dict) or not info.get("t"):
+                logger.warning(
+                    "[mindscape_trace] 收到响应但没找到本轮的请求记录（出站日志可能没打）| %s",
+                    self.tr_label(event))
+                return
+            ms = int((time.time() - float(info["t"])) * 1000)
+            slow = ms >= self.tr_warn_ms
+            fat = int(info.get("sys") or 0) >= self.tr_warn_chars
+            line = ("[mindscape_trace] %s %s 耗时=%.2fs sys=%d字"
+                    " 上下文=%d条/%d字 工具=%d 输入=%d字%s")
+            args = ("SLOW" if slow else ("FAT" if fat else "完成"),
+                    self.tr_label(event), ms / 1000.0,
+                    info.get("sys") or 0, info.get("ctx") or 0,
+                    info.get("ctx_chars") or 0, info.get("tools") or 0,
+                    info.get("user") or 0, tr_usage(response))
+            if slow or fat:
+                logger.warning(line, *args)
+            else:
+                logger.info(line, *args)
+        except Exception as e:
+            logger.warning("[mindscape_trace] 记录耗时失败: %s", str(e)[:120])
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
 # ==================================================================
-class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, SilenceMixin, VisionMixin, star.Star):
+class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, SilenceMixin, VisionMixin, TraceMixin, star.Star):
     def __init__(self, context):
         self.context = context
         self.name = "mindscape"
@@ -3075,4 +3212,5 @@ class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, StickersMixin, Sticke
         RescueMixin.setup(self, context)
         SilenceMixin.setup(self, context)
         VisionMixin.setup(self, context)
-        logger.info("[mindscape] 插件已加载（9 个模块）")
+        TraceMixin.setup(self, context)
+        logger.info("[mindscape] 插件已加载（10 个模块）")

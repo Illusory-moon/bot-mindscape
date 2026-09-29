@@ -77,7 +77,8 @@ def check_config():
         bad("YAML 解析", str(e)[:150])
         return
     ok("YAML 解析", "顶层键: " + ", ".join(d.keys()))
-    for key in ["memory", "diary", "stickers", "guard", "silence", "format", "janitor", "waking"]:
+    for key in ["memory", "diary", "stickers", "guard", "silence", "format",
+                "trace", "janitor", "waking"]:
         if key in d:
             ok("配置段", key)
         else:
@@ -535,9 +536,11 @@ def check_regressions():
         import builtins as _bi
         pdir = os.path.join(HERE, "plugins")
         miss = []
+        n_mod = 0
         for f in sorted(os.listdir(pdir)):
             if not (f.startswith("mindscape_") and f.endswith(".py")):
                 continue
+            n_mod += 1
             src = open(os.path.join(pdir, f), encoding="utf-8-sig").read()
             top = symtable.symtable(src, f, "exec")
             defined = {s.get_name() for s in top.get_symbols()}
@@ -558,7 +561,7 @@ def check_regressions():
             if unknown:
                 miss.append("%s:%s" % (f[10:-3], ",".join(unknown)))
         (ok if not miss else bad)("R17 模块不蹭别人的全局名",
-                                 " / ".join(miss) or "12 个模块全部自洽")
+                                 " / ".join(miss) or "%d 个模块全部自洽" % n_mod)
     except Exception as e:
         bad("R17 模块全局名自洽", str(e)[:140])
 
@@ -1586,6 +1589,75 @@ def check_regressions():
                               "../x=%r ok=%r abs=%r 盘符=%r" % (c1, c2, c3, c4))
     except Exception as e:
         bad("R02 路径校验", str(e)[:140])
+    # R34: 观测层必须真的量得出「多大 / 多久」。
+    #      「回复变慢」这类问题没有数据就只能靠猜；而事后拿日志时间戳去拼
+    #      「上一行到 Prepare to send」会被工具轮和多段发送打乱 ——
+    #      这一层唯一的职责就是把体积和耗时变成一行可信的日志。
+    try:
+        import importlib as _il
+        import mindscape_trace as TR
+        _il.reload(TR)
+        _log = []
+        _real_logger = TR.logger
+        TR.logger = types.SimpleNamespace(
+            info=lambda msg, *a: _log.append(("INFO", msg % a)),
+            warning=lambda msg, *a: _log.append(("WARN", msg % a)))
+
+        class _Ev:
+            """两个 event 故意做成**不同对象**（模拟真实框架里的克隆）：
+            起始时刻只挂 extras 会静默丢记录，必须靠实例侧的 pending 表对上。"""
+
+            def __init__(self):
+                self._x = {}
+                self.unified_msg_origin = "self::100000001::group::100000002"
+
+            def set_extra(self, k, v):
+                self._x[k] = v
+
+            def get_extra(self, k, d=None):
+                return self._x.get(k, d)
+
+            def get_self_id(self):
+                return "100000001"
+
+            def get_group_id(self):
+                return "100000002"
+
+        try:
+            inst = TR.TraceMixin()
+            inst.setup(None)
+            _log.clear()
+            ev, ev2 = _Ev(), _Ev()          # ← 响应拿到的是另一个对象
+            req = types.SimpleNamespace(
+                system_prompt="提" * 300,
+                contexts=[{"role": "user", "content": "字" * 100}],
+                prompt="问" * 10, func_tool=None)
+            resp = types.SimpleNamespace(
+                usage=types.SimpleNamespace(input_other=100,
+                                            input_cached=50, output=20))
+            asyncio.run(inst.tr_measure_request(ev, req))
+            asyncio.run(inst.tr_measure_response(ev2, resp))
+            frag = _log[1][1] if len(_log) > 1 else ""
+            normal = (len(_log) == 2
+                      and _log[0][0] == "INFO" and "出站" in _log[0][1]
+                      and _log[1][0] == "INFO" and "完成" in frag
+                      and "sys=300字" in frag and "上下文=1条/100字" in frag
+                      and "工具=0" in frag and "耗时=" in frag
+                      and "tok=100+50/20" in frag)
+            # 阈值调到负数 → 同一条必须升级成 WARNING（线上就靠它 grep 慢轮）
+            inst.tr_warn_ms = -1
+            _log.clear()
+            asyncio.run(inst.tr_measure_request(ev, req))
+            asyncio.run(inst.tr_measure_response(ev2, resp))
+            loud = (len(_log) == 2 and _log[1][0] == "WARN"
+                    and "SLOW" in _log[1][1])
+        finally:
+            TR.logger = _real_logger
+        (ok if (normal and loud) else bad)(
+            "R34 观测层量得出「多大 / 多久」",
+            "常规=%s 超阈值升级=%s | %s" % (normal, loud, frag[:88]))
+    except Exception as e:
+        bad("R34 观测层", "%s: %s" % (type(e).__name__, str(e)[:120]))
 
 
 # ── 6. 转义保真 ──
