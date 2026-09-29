@@ -210,3 +210,118 @@ async def recall_memory(*args, **kwargs):
                 "或者那件事里的另一个说法）；如果还是没有，就直接说你想不起来了，"
                 "不要编。") % kw
     return format_hits(kw, hits, total, full)
+
+
+def rc_knowledge_for(self_id):
+    """取这个 bot 配置的「查阅型文档」（战斗数据这类：平时不注入，问到才查）。"""
+    for b in _bot_entries():
+        if str(b.get("self_id", "")) != str(self_id):
+            continue
+        ks = b.get("knowledge")
+        out = []
+        if isinstance(ks, list):
+            for k in ks:
+                if not isinstance(k, dict):
+                    continue
+                p = str(k.get("path") or "")
+                if p and not os.path.isabs(p):
+                    p = os.path.join(os.path.dirname(cfg.config_path()), p)
+                if p:
+                    out.append({"name": str(k.get("name") or "资料"),
+                                "desc": str(k.get("desc") or ""),
+                                "path": p})
+        return out
+    return []
+
+
+def rc_sections(text):
+    """按二级标题切段（段头一起保留）。"""
+    secs, cur = [], []
+    for line in (text or "").splitlines():
+        if line.startswith("## ") and cur:
+            secs.append("\n".join(cur).strip())
+            cur = [line]
+        else:
+            cur.append(line)
+    if cur:
+        secs.append("\n".join(cur).strip())
+    return [s for s in secs if s]
+
+
+def rc_search_sections(path, keyword, limit=3, max_chars=2000):
+    """在结构化文档里按【段落】检索 —— 问「配队」就给整段，不是散落的几行。"""
+    if not path or not os.path.exists(path):
+        return [], 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            secs = rc_sections(f.read())
+    except Exception:
+        return [], 0
+    terms = split_terms(keyword)
+    if not terms:
+        return [], len(secs)
+    scored = []
+    for s in secs:
+        low = s.lower()
+        hit = sum(1 for t in terms if t in low)
+        if hit:
+            scored.append((hit, -len(s), s))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    out, used = [], 0
+    for _, _, s in scored:
+        if out and used + len(s) > max_chars:
+            break
+        out.append(s)
+        used += len(s)
+        if len(out) >= limit:
+            break
+    return out, len(secs)
+
+
+@llm_tool(name="lookup_knowledge")
+async def lookup_knowledge(*args, **kwargs):
+    """查资料库里的**战斗数据**（配队 / 光锥 / 遗器 / 星魂 / 机制 / 玩法）。
+
+    只要对方问的是**战斗相关**的问题，就必须先查这里再开口，**不要凭印象编**：
+    能不能和谁组队、带什么光锥、遗器怎么配、主词条选什么、星魂提升大不大、
+    某个模式的玩法、某个机制是怎么回事。
+
+    返回的是资料原文 —— 用你自己的口吻讲出来，别照本宣科念。
+    资料里没有的，就直说不知道，绝不要编数值。
+
+    Args:
+        keyword(string): 查询关键词，可以给一组（空格或逗号分开）。
+            例：配队 银狼 / 光锥 / 遗器 主词条 / 星魂 / 机制 笑点
+        which(string): 指定查哪一份资料的名字，不填就全查
+    """
+    kw = str(kwargs.get("keyword") or _first_str(args)).strip()
+    if not kw:
+        return "你想查哪方面的？给个关键词（配队 / 光锥 / 遗器 / 星魂 / 机制）。"
+    ev = None
+    for a in args:
+        if hasattr(a, "get_self_id"):
+            ev = a
+            break
+    try:
+        sid = str(ev.get_self_id()) if ev is not None else ""
+    except Exception:
+        sid = ""
+    docs = rc_knowledge_for(sid)
+    if not docs:
+        return "我这边没有配置任何资料库。"
+    want = str(kwargs.get("which") or "").strip()
+    blocks, names = [], []
+    for d in docs:
+        if want and want not in d["name"]:
+            continue
+        hits, total = rc_search_sections(d["path"], kw)
+        if hits:
+            names.append(d["name"])
+            blocks.extend(hits)
+    if not blocks:
+        return ("查了资料库，没有跟「%s」直接相关的内容。"
+                "换个更贴的说法再查一次；如果还是没有，就老实说这块你不清楚，"
+                "不要凭印象编数值。") % kw
+    head = "【资料原文 · %s】用你自己的口吻讲，别照念：\n\n" % "、".join(names)
+    tail = "\n\n（以上是资料，讲的时候不要提「资料」「文档」这些词。）"
+    return head + "\n\n".join(blocks) + tail

@@ -28,6 +28,17 @@ memory:
       # style_chars: 800                         # 稳定层注入上限
       # style_recent: "./data/bot-name.style-recent.md"  # 近期层（最近几天的原始条目）
       # style_recent_chars: 400                  # 近期层注入上限
+      # knowledge: 查阅型文档 —— 平时【不注入 prompt】，只有问到相关问题时
+      #            才用 lookup_knowledge 工具去查。适合「战斗数据」「产品手册」
+      #            这类又长、又只有偶尔用得上的资料。
+      #            为什么不直接注入：一份战斗档案动辄 8~9KB，塞进去会直接
+      #            吃光整个记忆预算（2500 字），而 99% 的对话根本用不到。
+      #            检索按【二级标题分段】—— 问「配队」直接给整段，不是散落的几行。
+      # knowledge:
+      #   - name: "战斗数据"
+      #     path: "./data/bot-name.combat.md"
+      #     desc: "配队 / 光锥 / 遗器 / 星魂 / 机制 / 玩法"
+      #
       # rules: 这个 bot 自己的行为规矩，随记忆一起注入。
       #        写在这里而不是代码里 —— 通用框架不该硬编码某个人设特有的规矩。
       # rules:
