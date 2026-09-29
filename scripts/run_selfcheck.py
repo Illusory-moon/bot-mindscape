@@ -8,6 +8,7 @@
   4. 脱敏扫描（无真实信息泄漏）
   5. 仓库结构完整性
   6. 转义保真（产物里带反斜杠的字符串必须与源码逐字一致）
+  7. 产物新鲜度（按 --market 重建，与 dist 逐字节比较）
 
 用法：python scripts/run_selfcheck.py
 """
@@ -1466,6 +1467,44 @@ def check_escapes():
         ok("转义保真", "源码 %d 个带反斜杠的字符串，产物里逐字都在" % total)
 
 
+# ── 7. 产物新鲜度 ──
+def check_build_fresh():
+    """dist 里的产物必须能由当前源码重建出来（逐字节一致）。
+
+    为什么要有：产物是**提交进仓库的**，而真正跑的是产物。以前只证明「语法能过」，
+    没有证明「产物 == 源码」—— `docs/deploy.md` 与实现悄悄分叉就是这么来的。
+    这里按 `--market` 的口径在临时目录重建，再与现有产物比字节。
+    """
+    section("7. 产物新鲜度（源码能否重建出当前 dist）")
+    out = os.path.join(HERE, "dist", "mindscape", "main.py")
+    if not os.path.exists(out):
+        bad("产物新鲜度", "dist/mindscape/main.py 不存在，先跑 scripts/build_plugin.py")
+        return
+    try:
+        import contextlib as _cl
+        import io as _io
+        import tempfile
+        import build_plugin as BP
+        cur = open(out, "rb").read()
+        tmp = tempfile.mkdtemp(prefix="_sc_build_")
+        old = BP.OUT_DIR
+        BP.OUT_DIR = tmp
+        buf = _io.StringIO()
+        try:
+            with _cl.redirect_stdout(buf):
+                BP.main(exclude=tuple(BP.LOCAL_ONLY))
+        finally:
+            BP.OUT_DIR = old
+        fresh = open(os.path.join(tmp, "main.py"), "rb").read()   # OUT_DIR 已经是 …/mindscape
+        if fresh == cur:
+            ok("产物新鲜度", "重建结果与 dist 逐字节一致（%d 字节）" % len(cur))
+        else:
+            bad("产物新鲜度", "重建结果与 dist 不一致 —— 改了源码没重新构建？"
+                              "（dist %d / 重建 %d 字节）" % (len(cur), len(fresh)))
+    except Exception as e:
+        bad("产物新鲜度", "%s: %s" % (type(e).__name__, str(e)[:120]))
+
+
 def main():
     print("bot-mindscape 全套自检")
     print("仓库: " + HERE)
@@ -1475,6 +1514,7 @@ def main():
     check_privacy()
     check_structure()
     check_escapes()
+    check_build_fresh()
     check_regressions()
     print()
     print("=" * 56)

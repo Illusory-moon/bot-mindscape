@@ -24,8 +24,9 @@ cd bot-mindscape
 pip install -r requirements.txt
 cp config/config.example.yaml config/config.yaml
 # 编辑 config.yaml，填入你的 bot 信息
-python scripts/run_selfcheck.py    # 自检环境
+python scripts/run_selfcheck.py    # 自检环境（含脱敏扫描）
 python scripts/config_gui.py       # 生成配置
+python scripts/build_plugin.py --market   # 构建成单文件插件（装进 AstrBot 前必须做）
 ```
 
 > **两种管理界面随你挑**：
