@@ -2156,6 +2156,8 @@ class StickersMixin:
         self.index_path = st_abs(self.s_c.get("index") or os.path.join(self.dir, "index.json"))
         self.seen_path = st_abs(self.s_c.get("seen") or os.path.join(self.dir, "seen.json"))
         os.makedirs(self.dir, exist_ok=True)
+        self.seen_ok = set()        # 已入库（键 = 分类:md5）
+        self.seen_no = set()        # 明确拒绝（重启后也不清）
         self.seen = self._load_seen()
         self._bg = set()            # 后台采集任务，留引用防被 GC 掉
         logger.info(
@@ -2164,24 +2166,37 @@ class StickersMixin:
         )
 
     def _load_seen(self):
+        """读去重表。
+
+        结构：{"accepted": [...], "rejected": [...]}，键都是「分类:md5」。
+          - accepted：真正入库过的图
+          - rejected：**明确拒绝**过的图（超尺寸 / 视觉判定 related=false）
+
+        ⚠️ 两类必须分开。以前只有一张平表，自愈时「只保留图库里现存的图」——
+        于是明确拒绝的记录一重启就被清掉：同一张图被反复下载、反复调用视觉 API
+        （白花钱），甚至可能因为判定翻转又进了库。
+        现在只清理 accepted 里「图已从库中删除」的墓碑，rejected 一律保留。
+
+        自愈判据必须用**内容 md5**，不能拿文件名前缀凑：导入脚本会把文件重命名成
+        「<前缀>_xxxx.gif」，前缀就不再是 md5 —— 用前缀匹配会把真实存在的图误判成
+        墓碑，去重记录一丢，那张图重发就会以原名再入一份（造出重复）。
+        ponytail: 启动时把整个图库哈希一遍（目前 51 张 / 54MB，约 0.2s）。
+                   涨到几百 MB 就该改成 sidecar 的 md5 清单。
+        """
         try:
             with open(self.seen_path, encoding="utf-8") as f:
                 d = json.load(f)
         except Exception:
             return set()
-        if not isinstance(d, list):
+        legacy = isinstance(d, list)
+        if legacy:
+            keys = set(d)
+        elif isinstance(d, dict):
+            keys = set(d.get("accepted") or []) | set(d.get("rejected") or [])
+        else:
             return set()
-        keys = set(d)
-        # 自愈：去重表的条目在「图库条目被删」之后不会跟着删，于是变成**墓碑** ——
-        # 那张图再发一次也不会被采集，用户看到的是「删掉以后就再也收不回来」。
-        #
-        # 判据必须用**内容的 md5**，不能拿文件名前缀凑：导入脚本会把文件重命名成
-        # 「<前缀>_xxxx.gif」，前缀就不再是 md5 了 —— 用前缀匹配会把真实存在的图
-        # 误判成墓碑，去重记录一丢，那张图重发就会以原名再入一份（造出重复）。
-        # ponytail: 这里把整个图库哈希一遍（目前 51 张 / 54MB，约 0.2s，只在启动时做）。
-        #            图库涨到几百 MB 就该改成 sidecar 的 md5 清单。
+        live = set()
         try:
-            live = set()
             for x in (load_index(self.index_path) or []):
                 fn = str(x.get("file") or "")
                 if not fn:
@@ -2189,26 +2204,49 @@ class StickersMixin:
                 with open(os.path.join(self.dir, fn), "rb") as fp:
                     live.add(str(x.get("category") or "") + ":"
                              + hashlib.md5(fp.read()).hexdigest())
-            kept = set()
-            for k in keys:
-                if k in live:
-                    kept.add(k)
-            if kept != keys:
-                self.seen = kept
-                self._save_seen()
-                logger.info("[mindscape_stickers] 去重表自愈：%d -> %d（清掉 %d 条墓碑）",
-                            len(keys), len(kept), len(keys) - len(kept))
-            return kept
         except Exception:
+            # 图库读不出来就不敢动去重表：全按拒绝保留，宁可少收也不重复烧 API
+            self.seen_ok, self.seen_no = set(), keys
             return keys
+        if legacy:
+            # 老格式分不清来源：在图库里的算入库，其余**保守归入拒绝**
+            self.seen_ok = set(k for k in keys if k in live)
+            self.seen_no = keys - self.seen_ok
+            logger.info("[mindscape_stickers] 去重表迁移：老平表 %d 条 → 入库 %d / 拒绝 %d",
+                        len(keys), len(self.seen_ok), len(self.seen_no))
+            self._save_seen()
+            return keys
+        acc = set(d.get("accepted") or [])
+        self.seen_ok = set(k for k in acc if k in live)
+        self.seen_no = set(d.get("rejected") or [])
+        if self.seen_ok != acc:
+            logger.info("[mindscape_stickers] 去重表自愈：入库 %d -> %d（清掉 %d 条墓碑），"
+                        "拒绝记录 %d 条原样保留",
+                        len(acc), len(self.seen_ok), len(acc) - len(self.seen_ok),
+                        len(self.seen_no))
+            self._save_seen()
+        return self.seen_ok | self.seen_no
 
     def _save_seen(self):
         try:
             with open(self.seen_path, "w", encoding="utf-8") as f:
-                json.dump(sorted(self.seen)[-3000:], f)
+                json.dump({"accepted": sorted(self.seen_ok)[-3000:],
+                           "rejected": sorted(self.seen_no)[-3000:]}, f)
         except Exception:
             pass
 
+    def _mark_seen(self, key, accepted):
+        """记一条去重记录。
+
+        accepted=False = **明确拒绝**（超尺寸 / 判定不相关）—— 这类记录重启后
+        也不会被自愈清掉；只有「入库过的图被从库里删了」才清。
+        """
+        if accepted:
+            self.seen_ok.add(key)
+        else:
+            self.seen_no.add(key)
+        self.seen.add(key)
+        self._save_seen()
     def _add_index(self, fname, category, verdict):
         """加锁 + 重读 + 合并 + 原子写，避免和导入脚本互相覆盖。"""
         entry = {
@@ -2300,8 +2338,7 @@ class StickersMixin:
             # 复用的代价是 'int' object is not subscriptable —— 通过闸门的图全存不进去。
             w, ih = img_size(path)
             if w and ih and max(w, ih) > max_side:
-                self.seen.add(key)      # 记下：同一张不必反复下载重判
-                self._save_seen()
+                self._mark_seen(key, False)   # 明确拒绝：重启后也不该重判
                 logger.info("[mindscape_stickers] 跳过 %dx%d（超过 %d，疑似截图/壁纸）",
                             w, ih, max_side)
                 return
@@ -2312,8 +2349,7 @@ class StickersMixin:
             return
         if not verdict.get("related"):
             # 明确判定为「不相关」：认为已处理，不再重复消耗 API
-            self.seen.add(key)
-            self._save_seen()
+            self._mark_seen(key, False)   # 明确拒绝：重启后也不该重判
             return
 
         ext = os.path.splitext(path)[1].lower() or ".jpg"
@@ -2333,8 +2369,7 @@ class StickersMixin:
                 pass
             return
 
-        self.seen.add(key)          # 只有真正入库成功才记为已见
-        self._save_seen()
+        self._mark_seen(key, True)    # 只有真正入库成功才算「入库」
         self._add_index(fname, category, verdict)
         logger.info("[mindscape_stickers] 已入库 %s | %s", fname, verdict.get("name"))
 

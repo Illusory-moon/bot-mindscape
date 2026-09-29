@@ -713,6 +713,10 @@ def check_regressions():
             s = _Self()
             s.s_c = {"judge": {"max_side": max_side}}
             s.seen = set()
+            s.seen_ok = set()        # 入库桶
+            s.seen_no = set()        # 明确拒绝桶
+            # 直接绑真实的记账方法 —— 在桩里另写一份，两边早晚会各自漂移
+            s._mark_seen = MS2.StickersMixin._mark_seen.__get__(s, _Self)
             s.dir = work
             s.index_path = os.path.join(work, "index.json")
             s._save_seen = lambda: None
@@ -735,6 +739,9 @@ def check_regressions():
         _aio.run(MS2.StickersMixin._handle(s2, _Comp(), "catA"))
         gate_ok = (s2.added == []
                    and sorted(n for n in os.listdir(work) if n != "t.png") == saved)
+        # 闸门挡下的图要落进【拒绝桶】：重启后不该被重新下载重判
+        bucket_ok = (len(s2.seen_no) == 1 and s2.seen_ok == set()
+                     and len(s.seen_ok) == 1 and s.seen_no == set())
 
         src2 = open(os.path.join(PLUGINS, "mindscape_stickers.py"),
                     encoding="utf-8").read()
@@ -742,9 +749,10 @@ def check_regressions():
                  and "await self._handle" not in src2)
         shrink_ok = ("def shrink_for_judge" in src2
                      and "shrink_for_judge(path)" in src2)
-        (ok if (saved_ok and gate_ok and bg_ok and shrink_ok) else bad)(
+        (ok if (saved_ok and gate_ok and bucket_ok and bg_ok and shrink_ok) else bad)(
             "R22 采集入库端到端",
-            "落盘=%s 闸门=%s 后台=%s 缩图=%s" % (saved_ok, gate_ok, bg_ok, shrink_ok))
+            "落盘=%s 闸门=%s 分桶=%s 后台=%s 缩图=%s"
+            % (saved_ok, gate_ok, bucket_ok, bg_ok, shrink_ok))
         for n in os.listdir(work):
             os.remove(os.path.join(work, n))
         os.rmdir(work)
@@ -794,21 +802,20 @@ def check_regressions():
     except Exception as e:
         bad("R23 引用图片", str(e)[:140])
 
-    # R24: 去重表（seen.json）要能自愈。
-    #      病根：从 WebUI 删掉图库条目时，seen 里的去重记录不会跟着删，于是留下
-    #      一条**墓碑** —— collect 第一件事就是 `if key in self.seen: return`，
-    #      所以那张图再发一次也收不进来，用户看到的是「删了以后就再也收不回来」。
-    #      文件名就是 md5 的前 10 位，所以只比对前缀，不用重新哈希整个图库。
+    # R24: 去重表（seen.json）的三种状态必须分得清。
+    #      accepted = 真正入库过的图；rejected = **明确拒绝**（超尺寸 / 判定不相关）。
+    #      以前只有一张平表，自愈时「只保留图库里现存的图」→ 明确拒绝的记录一重启
+    #      就被清掉：同一张图被反复下载、反复调用视觉 API，甚至判定翻转后又进库。
+    #      现在只清 accepted 里「图已从库中删除」的墓碑，rejected 一律保留。
     try:
         import json as _js
+        import hashlib as _hl
         import mindscape_stickers as MS3
         importlib.reload(MS3)
 
         work = os.path.join(HERE, "_sc_seen")
         if not os.path.isdir(work):
             os.makedirs(work)
-        # 图库里真放一张图（内容 md5 决定它的去重键）；另有 2 条对不上的
-        import hashlib as _hl
         blob = b"\x89PNG\r\n\x1a\n" + b"x" * 64
         real = _hl.md5(blob).hexdigest()
         live_key = "catA:" + real
@@ -816,58 +823,81 @@ def check_regressions():
         dead2 = "catB:" + "0" * 32
         ifile = os.path.join(work, "index.json")
         sfile = os.path.join(work, "seen.json")
-        with open(os.path.join(work, real[:10] + ".gif"), "wb") as fp:
+        img = os.path.join(work, real[:10] + ".gif")
+        with open(img, "wb") as fp:
             fp.write(blob)
         with open(ifile, "w", encoding="utf-8") as fp:
             _js.dump([{"file": real[:10] + ".gif", "category": "catA"}], fp)
-        with open(sfile, "w", encoding="utf-8") as fp:
-            _js.dump([live_key, dead_key, dead2], fp)
 
         class _S:
             pass
 
-        s = _S()
-        s.seen_path = sfile
-        s.index_path = ifile
-        s.dir = work
-        s._save_seen = lambda: None
-        kept = MS3.StickersMixin._load_seen(s)
+        def _mk_seen(payload):
+            with open(sfile, "w", encoding="utf-8") as fp:
+                if isinstance(payload, str):
+                    fp.write(payload)
+                else:
+                    _js.dump(payload, fp)
 
-        # 带前缀的文件名不能被误判成墓碑（catA_<md5>.gif 的前缀不是 md5）
+        def _load():
+            s = _S()
+            s.seen_path = sfile
+            s.index_path = ifile
+            s.dir = work
+            s.seen_ok, s.seen_no = set(), set()
+            saved = []
+            s._save_seen = lambda: saved.append(1)
+            return MS3.StickersMixin._load_seen(s), s, saved
+
+        # 1) 旧平表：在图库里的算入库，其余**保守归入拒绝**（宁可少收，不能丢拒绝记录）
+        _mk_seen([live_key, dead_key, dead2])
+        got, s1, saved1 = _load()
+        legacy_ok = (got == {live_key, dead_key, dead2}
+                     and s1.seen_ok == {live_key}
+                     and s1.seen_no == {dead_key, dead2}
+                     and bool(saved1))
+
+        # 2) 新格式：accepted 里「图已从库中删除」的墓碑必须清掉
+        _mk_seen({"accepted": [live_key, dead_key], "rejected": []})
+        got2, s2, _ = _load()
+        tomb_ok = (got2 == {live_key} and s2.seen_ok == {live_key})
+
+        # 3) 新格式：rejected **跨重启必须还在** —— 这条就是本次修的病
+        _mk_seen({"accepted": [live_key], "rejected": [dead_key]})
+        got3, s3, _ = _load()
+        keep_ok = (got3 == {live_key, dead_key} and s3.seen_no == {dead_key})
+
+        # 4) 带前缀的文件名不能被误判成墓碑（前缀不是 md5，必须按内容哈希）
         pf = "catA_" + real[:10] + ".gif"
-        os.rename(os.path.join(work, real[:10] + ".gif"), os.path.join(work, pf))
+        os.rename(img, os.path.join(work, pf))
         with open(ifile, "w", encoding="utf-8") as fp:
             _js.dump([{"file": pf, "category": "catA"}], fp)
-        with open(sfile, "w", encoding="utf-8") as fp:
-            _js.dump([live_key], fp)
-        s3 = _S()
-        s3.seen_path = sfile
-        s3.index_path = ifile
-        s3.dir = work
-        s3._save_seen = lambda: None
-        prefixed_ok = (MS3.StickersMixin._load_seen(s3) == {live_key})
-        with open(sfile, "w", encoding="utf-8") as fp:
-            _js.dump([live_key, dead_key], fp)
+        _mk_seen({"accepted": [live_key], "rejected": []})
+        got4, _, _ = _load()
+        prefixed_ok = (got4 == {live_key})
 
-        # 坏文件不能炸：seen.json 写成乱七八糟的，应返回空集
-        with open(sfile, "w", encoding="utf-8") as fp:
-            fp.write("{not a list")
-        s2 = _S()
-        s2.seen_path = sfile
-        s2.index_path = ifile
-        s2.dir = work
-        s2._save_seen = lambda: None
-        bad_ok = (MS3.StickersMixin._load_seen(s2) == set())
+        # 5) 坏文件不能炸
+        _mk_seen("{not json")
+        got5, _, _ = _load()
+        bad_ok = (got5 == set())
 
-        prune_ok = (kept == {live_key})
+        # 6) 「判定暂时失败」不许写进去重表：那条分支必须在标记之前就 return
+        _src = open(os.path.join(PLUGINS, "mindscape_stickers.py"),
+                    encoding="utf-8").read()
+        _seg = _src.split("if verdict is None:")[1]
+        _seg = _seg[:_seg.index("return") + 6] if "return" in _seg else _seg[:200]
+        tmp_ok = ("_mark_seen" not in _seg)
+
         for n in os.listdir(work):
             os.remove(os.path.join(work, n))
         os.rmdir(work)
-        (ok if (prune_ok and bad_ok and prefixed_ok) else bad)(
-            "R24 去重表自愈",
-            "只留现存=%s 坏文件不炸=%s 带前缀不误杀=%s"
-            % (prune_ok, bad_ok, prefixed_ok))
+        good = legacy_ok and tomb_ok and keep_ok and prefixed_ok and bad_ok and tmp_ok
+        (ok if good else bad)(
+            "R24 去重表：墓碑清理 / 拒绝保留",
+            "旧表迁移=%s 墓碑清理=%s 拒绝保留=%s 带前缀=%s 坏文件=%s 暂失败不记=%s"
+            % (legacy_ok, tomb_ok, keep_ok, prefixed_ok, bad_ok, tmp_ok))
     except Exception as e:
+        bad("R24 去重表", str(e)[:140])
         bad("R24 去重表自愈", str(e)[:140])
 
     # R25: 风格学习（mindscape_learn）必须「默认关闭 + 不耦合 + 不碰别人」。
