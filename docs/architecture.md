@@ -93,6 +93,8 @@ if result is None or not result.chain:
 | `mindscape_core` | 共享 | 纯函数：索引读写、路径校验、判定类型校验、跨进程锁 | 无框架依赖 |
 | `mindscape_config` | 共享 | 配置读取（YAML，带缓存与失败降级） | 无框架依赖 |
 | `mindscape_guard` | 沉浸 | 报错拦截 + 日志脱敏 | core |
+| `mindscape_block` | 沉浸 | 前置黑名单：名单内的人的消息在最早阶段就被拦掉（含不收图） | config |
+| `mindscape_vision` | 沉浸 | 有图时提醒「先查再认，查完还不确定就承认看不清」 | core / config |
 | `mindscape_memory` | 认知 | **分层注入**（规矩 / 账本 / 摘要 / 原文）+ 人物画像 | core / config |
 | `mindscape_recall` | 认知 | 按需检索（混合检索 + 多词 + 边界自知 + 转述≠事实） | core / config |
 | `mindscape_diary` | 认知 | 增量读消息库 → LLM 提炼 → 写 Markdown | core / config（独立脚本） |
