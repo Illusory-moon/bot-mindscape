@@ -2462,12 +2462,16 @@ class RescueMixin:
                 return
             if response is None:
                 return
-            if "[CronJob]" not in (getattr(response, "completion_text", "") or ""):
-                return
+            txt = (getattr(response, "completion_text", "") or "").strip()
+            if not txt:
+                return          # 本来就没话，没什么可清的
+            # 判据【不能】等 "[CronJob]" 前缀 —— 那个前缀是 AstrBot 在 runner 跑完之后
+            # 自己拼上去的，模型自己写的那段根本没有它（所以这条逻辑空转了四天）。
+            # 冒泡轮里模型只能靠工具说话，收尾那段必然是「任务总结」，直接换掉即可。
             sent = str(event.get_extra("_ms_sent_text") or "").strip()
             if sent:
                 response.completion_text = sent
-                logger.info("[mindscape_rescue] 冒泡轮历史去任务化 -> %s", sent[:40])
+                logger.info("[mindscape_rescue] 冒泡轮历史去任务化（原文 %d 字）-> %s", len(txt), sent[:40])
             else:
                 response.completion_text = ""
                 logger.info("[mindscape_rescue] 冒泡轮没发话，历史不留痕")
