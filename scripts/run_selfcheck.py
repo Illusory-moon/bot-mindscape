@@ -1448,6 +1448,133 @@ def check_regressions():
     except Exception as e:
         bad("R32 作用域", "%s: %s" % (type(e).__name__, str(e)[:140]))
     # R02: 路径穿越必须在入库前就被拒绝
+    # R33: Markdown 记忆链的一致性 —— 三处「写到一半就退出」的后果。
+    try:
+        import json as _js2
+        import urllib.request as _ur2
+        import mindscape_diary as MD2
+
+        work = os.path.join(HERE, "_sc_chain")
+        if not os.path.isdir(work):
+            os.makedirs(work)
+        db = os.path.join(work, "m.db")
+        out = os.path.join(work, "d.md")
+        statef = os.path.join(work, "d.state.json")
+        people = os.path.join(work, "d.people.md")
+        for x in (db, out, statef, people, people + ".tmp"):
+            if os.path.exists(x):
+                os.remove(x)
+
+        def _mk(marks):
+            con = sqlite3.connect(db)
+            con.execute("CREATE TABLE messages (timestamp INT, sequence INT, data TEXT)")
+            for i, t in enumerate(marks):
+                payload = _js2.dumps({"user_id": "9", "group_id": "1",
+                                      "message": [{"type": "text", "data": {"text": t}}]})
+                con.execute("INSERT INTO messages VALUES (?,?,?)", (100 + i, i + 1, payload))
+            con.commit()
+            con.close()
+
+        os.environ["_SC_CHAIN_KEY"] = "k"
+        dd = {"source": {"db": db, "table": "messages",
+                         "fields": {"time": "timestamp", "seq": "sequence", "data": "data"}},
+              "llm": {"api_base": "http://127.0.0.1:9/v1", "api_key_env": "_SC_CHAIN_KEY",
+                      "model": "x"},
+              "batch": 40, "max_input_chars": 100000, "max_tokens": 50, "max_batches": 40,
+              "targets": [{"output": out, "state": statef, "persona": "p",
+                           "people": people}]}
+        _real = _ur2.urlopen
+
+        class _RR:
+            def __init__(self, b):
+                self._b = b
+            def read(self):
+                return self._b
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        def _fk(req, timeout=None):
+            return _RR(_js2.dumps({"choices": [{"message": {"content": _js2.dumps(
+                {"diary": ["一条"], "people": {"某人": "群友"}})}}]}).encode())
+
+        # (a) 「日记写完、游标还没落盘」：删掉状态再跑一次，不能重复
+        _mk(["QA%d" % i + "x" * 60 for i in range(3)])
+        _ur2.urlopen = _fk
+        try:
+            MD2.run_target(dd)
+            first = open(out, encoding="utf-8").read()
+            os.remove(statef)                       # 模拟：游标没落盘就退出了
+            MD2.run_target(dd)
+            second = open(out, encoding="utf-8").read()
+        finally:
+            _ur2.urlopen = _real
+        # 留意：3 条消息在同一批里，桩每批只回 1 条日记 —— 所以 - 一条 本来就只该有 1 行。
+        # 要证的是「重跑不追加」：内容一模一样、且**只有 1 个批次标记**。
+        once_ok = (first == second
+                   and first.count("ms-seq:") == 1
+                   and first.count("- 一条") == 1)
+
+        # (b) 画像原子替换：不留 .tmp，且内容完整
+        people_ok = (os.path.exists(people)
+                     and not os.path.exists(people + ".tmp")
+                     and "某人" in open(people, encoding="utf-8").read())
+
+        # (c) 摘要：只重算「内容变过」的那天
+        import mindscape_digest as DG2
+        dg_out = os.path.join(work, "dig.digest.md")
+        diary2 = os.path.join(work, "d2.md")
+        past = "2020-01-0%d"
+        for x in (dg_out, dg_out + ".state.json", diary2):
+            if os.path.exists(x):
+                os.remove(x)
+
+        def _write_diary(extra):
+            with open(diary2, "w", encoding="utf-8") as f:
+                for i in (1, 2):
+                    f.write("## " + (past % i) + " 10:00\n")
+                    for k in range(3):
+                        f.write("- 第%d天第%d条\n" % (i, k))
+                    if i == 1 and extra:
+                        f.write("- 补录的一条\n")
+
+        calls = []
+
+        def _fake_digest(llm, date, lines, mi, mt):
+            calls.append(date)
+            return "摘要-" + date
+
+        _old_dl = DG2.digest_llm
+        DG2.digest_llm = _fake_digest
+        try:
+            _write_diary(False)
+            n1 = DG2.run_digest_target({"diary": diary2, "output": dg_out, "name": "t"}, {})
+            n2 = DG2.run_digest_target({"diary": diary2, "output": dg_out, "name": "t"}, {})
+            _write_diary(True)                       # 只改第 1 天
+            n3 = DG2.run_digest_target({"diary": diary2, "output": dg_out, "name": "t"}, {})
+        finally:
+            DG2.digest_llm = _old_dl
+        calls1 = calls[:n1]
+        calls3 = calls[n1 + n2:]
+        dig_ok = (n1 == 2 and n2 == 0 and n3 == 1
+                  and calls3 == [past % 1])
+
+        for x in (db, out, statef, people, people + ".tmp", dg_out,
+                  dg_out + ".state.json", diary2):
+            if os.path.exists(x):
+                os.remove(x)
+        os.rmdir(work)
+        good = once_ok and people_ok and dig_ok
+        (ok if good else bad)(
+            "R33 记忆链一致性（重跑不重复 / 原子写 / 只重算变过的那天）",
+            "重跑无重复=%s 画像原子写=%s 摘要:首次%d 无改%d 改一天后%d 重算的=%s | "
+            "诊断: 首=%d 次=%d 条首=%d 条次=%d 标记=%s 相同=%s"
+            % (once_ok, people_ok, n1, n2, n3, calls3,
+               len(first), len(second), first.count("- 一条"), second.count("- 一条"),
+               ("ms-seq:" in first), (first == second)))
+    except Exception as e:
+        bad("R33 记忆链一致性", "%s: %s" % (type(e).__name__, str(e)[:140]))
     try:
         from mindscape_core import safe_name, is_inside
         c1 = safe_name("../x.png")

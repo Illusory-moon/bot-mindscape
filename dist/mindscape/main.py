@@ -1542,17 +1542,46 @@ def _update_people(path, people, now, relations=None):
             continue                          # 权威关系里的人，不让摘要顶掉
         existing[key] = str(v).strip()[:80]
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("# 你认识的人\n\n")
-        f.write("最后更新：" + now + "\n\n")
-        if relations:
-            f.write(REL_TITLE + "\n")
-            for r in relations:
-                f.write(r + "\n")
-            f.write("\n")
-        f.write(AUTO_TITLE + "\n")
-        for k in sorted(existing):
-            f.write("- " + k + "：" + existing[k] + "\n")
+    # 先写临时文件、再原子替换 —— 中途退出只会留下一个 .tmp，
+    # 绝不会把画像**写坏成半份**（以前直接覆盖写，进程一死就只剩半截）。
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("# 你认识的人\n\n")
+            f.write("最后更新：" + now + "\n\n")
+            if relations:
+                f.write(REL_TITLE + "\n")
+                for r in relations:
+                    f.write(r + "\n")
+                f.write("\n")
+            f.write(AUTO_TITLE + "\n")
+            for k in sorted(existing):
+                f.write("- " + k + "：" + existing[k] + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)          # 同一目录内：原子
+    except Exception:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+        raise
+
+
+def dy_has_batch(path, rng, tail_bytes=200000):
+    """产物里是否已经写过这一批（看【文件尾巴】就够了）。
+
+    重跑要补的总是最后那批 —— 崩溃发生在「写完日记、游标还没落盘」之间，
+    所以只需在尾部找标记，不必扫整个文件。
+    """
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            if size > tail_bytes:
+                f.seek(size - tail_bytes)
+            return ("ms-seq:" + rng).encode("utf-8") in f.read()
+    except Exception:
+        return False
 
 
 def run_target(d):
@@ -1611,13 +1640,22 @@ def run_target(d):
             # 标题用这批消息自己的时间，而不是「运行时刻」—— 追历史时一次运行会
             # 写出几十批，用运行时刻就会出现几十个一模一样的 ## 标题。
             stamp = datetime.datetime.fromtimestamp(chunk[-1]["ts"]).strftime("%Y-%m-%d %H:%M")
-            if entries:
+            # 这一批的来源游标范围，写成【独立一行】的 HTML 注释：
+            #   - 渲染时看不见；检索只认 "## " 和 "- "，所以不会污染记忆文本
+            #   - 万一「日记写完、游标还没落盘」就退出，重跑时靠它认出这批已写过，
+            #     只推进游标、不再追加一遍（以前会整整重复一批）
+            rng = "%s-%s" % (chunk[0]["seq"], chunk[-1]["seq"])
+            if entries and not dy_has_batch(out_file, rng):
                 with open(out_file, "a", encoding="utf-8") as fp:
+                    fp.write("<!-- ms-seq:" + rng + " -->\n")
                     fp.write("## " + stamp + "\n")
                     for e in entries:
                         fp.write("- " + str(e) + "\n")
                     fp.write("\n")
                 total_added += len(entries)
+            elif entries:
+                print("[mindscape_diary] 这批已写过（ms-seq:%s），只推进游标" % rng)
+                total_added += 0
             # 人物画像先攒着，一轮结束时合并落盘一次即可
             people = res.get("people") or {}
             if isinstance(people, dict) and people:

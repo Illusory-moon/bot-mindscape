@@ -151,6 +151,34 @@ def digest_llm(llm, date, entries, max_input_chars, max_tokens, timeout=90):
     return txt.strip() or None
 
 
+def dg_fp(text):
+    """一天的日记文本的指纹：内容变一点，指纹就变。"""
+    import hashlib
+    return hashlib.md5((text or "").encode("utf-8")).hexdigest()
+
+
+def dg_load_state(path):
+    """读「日期 -> 内容指纹」的旁挂状态。**必须用 dg_ 前缀**：
+
+    打包后所有模块共用一个命名空间，`load_state` / `save_state` 已经被 diary 占了 ——
+    重名会静默覆盖掉对方的函数。
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def dg_save_state(path, state):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+
 def run_digest_target(d, common):
     """处理一个日记文件的「补摘要」。返回新增条数。"""
     diary = dg_abs(d.get("diary"))
@@ -173,9 +201,15 @@ def run_digest_target(d, common):
         return 0
 
     done = load_digests(out)
+    state_path = out + ".state.json"
+    state = dg_load_state(state_path)
     today = datetime.date.today().strftime("%Y-%m-%d")
+    fps = {x: dg_fp(chr(10).join(days[x])) for x in days}
+    # 待补 = 从没有过摘要的，**或者**那天的日记内容变过了的。
+    # 以前只看「有没有摘要」，所以事后补录旧日记时，旧摘要永远不会更新。
     todo = [x for x in sorted(days)
-            if x < today and x not in done and len(days[x]) >= min_entries]
+            if x < today and len(days[x]) >= min_entries
+            and (x not in done or state.get(x) != fps[x])]
 
     made = 0
     for date in todo[:per_run]:
@@ -189,15 +223,19 @@ def run_digest_target(d, common):
             print("[mindscape_digest] 响应为空，中断")
             break
         done[date] = txt[:max_chars]
+        state[date] = fps[date]                   # 记下这天的内容指纹
         save_digests(out, d.get("name"), done)   # 每成功一条就落盘
+        dg_save_state(state_path, state)
         made += 1
 
     # 只留最近 keep_days 天；摘要文件是给人看的，不该无限长
     if len(done) > keep_days:
         for old in sorted(done)[:-keep_days]:
             del done[old]
+            state.pop(old, None)              # 指纹跟着摘要一起清
     if made or not os.path.exists(out):
         save_digests(out, d.get("name"), done)
+        dg_save_state(state_path, state)
     print("[mindscape_digest] %s: 待补 %d 天，本次新增 %d 条，累计 %d 天"
           % (d.get("name") or "?", len(todo), made, len(done)))
     return made
