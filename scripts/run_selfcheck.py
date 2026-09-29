@@ -235,17 +235,54 @@ def _private_names():
     return words
 
 
+def _gitignored():
+    """读 .gitignore，返回 (目录名集合, 精确相对路径集合, 裸文件名集合)。
+
+    扫描器必须认 .gitignore：本机有 config/config.yaml（含服务器密码和 bot 号）
+    与 data/（拉下来的图库，标签里都是角色名）—— 这些**永远不会被提交**。
+    不区分「会被提交的」和「本机私有的」，扫描就会一直报假警，最后没人看它。
+
+    ⚠️ 源码里出现真实名词**依然要拦**（那是真泄漏）—— 这份忽略表只管被 git 忽略的文件。
+    """
+    dirs, files, names = set(), set(), set()
+    try:
+        with open(os.path.join(HERE, ".gitignore"), encoding="utf-8",
+                  errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or line.startswith("!"):
+                    continue
+                line = line.lstrip("/")
+                if line.endswith("/"):
+                    dirs.add(line.rstrip("/"))
+                elif "/" in line:
+                    files.add(line)
+                else:
+                    names.add(line)
+    except Exception:
+        pass
+    return dirs, files, names
+
+
 def check_privacy():
     section("4. 脱敏扫描")
     pats = _private_names()
     SKIP = {"run_selfcheck.py", "private-names.txt", "private-names.example.txt"}
+    idirs, ifiles, inames = _gitignored()
     leaked = []
+    skipped = 0
     for root, dirs, names in os.walk(HERE):
-        dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git")]
+        rel_root = os.path.relpath(root, HERE).replace("\\", "/")
+        if rel_root == ".":
+            rel_root = ""
+        dirs[:] = [d for d in dirs
+                   if d not in ("__pycache__", ".git") and d not in idirs]
         for n in names:
             if not n.endswith((".py", ".md", ".yaml", ".json", ".txt")):
                 continue
-            if n in SKIP:
+            rel = (rel_root + "/" + n) if rel_root else n
+            if n in SKIP or n in inames or rel in ifiles:
+                skipped += 1
                 continue
             fp = os.path.join(root, n)
             try:
@@ -262,7 +299,8 @@ def check_privacy():
         for x in leaked:
             bad("泄漏", x)
     else:
-        ok("脱敏", "未发现敏感信息（本地词表 %d 条）" % len(pats))
+        ok("脱敏", "未发现敏感信息（本地词表 %d 条，另有 %d 个文件被 .gitignore 排除）"
+           % (len(pats), skipped))
 
 
 # ── 5. 结构 ──

@@ -300,3 +300,24 @@ ui:
     remote_dir: "/opt/your-bot/data/stickers"
     remote_index: "stickers_index.json"   # 远端索引文件名
     timeout: 25
+# ── 前置黑名单（可选）──
+# 命中的人：消息在【事件最早阶段】就被 stop_event 拦掉 ——
+# 不回复、不采集图片、不进任何插件的视野。
+# 为什么必须前置：「不收图」这半边靠 LLM 阶段的拦截做不到，
+# 图片在更早的消息事件阶段就被采集器拿走了。
+# 与 AstrBot 核心的白名单不同：那个粒度是会话/群，这个是群内某个人；
+# 而且 targets 按 self_id 分开写，几个 bot 互不牵连。
+# blocklist:
+#   enabled: true
+#   targets:
+#     - self_id: "<bot 的 QQ 号>"
+#       users: ["<要屏蔽的 QQ 号>", "..."]
+#       note: "自动 @ + 发图的群友或 bot"
+
+# ── 有图时的识图提醒（可选）──
+# 只在「这一轮真的带了图」时注入一句：先查再认，查完还不确定就承认看不清。
+# 兜底那句话【故意不写死】—— 只给方向，措辞交给角色自己（写死会被原样照抄）。
+# targets 留空 = 所有 bot 都生效。
+# vision:
+#   enabled: true
+#   targets: ["<bot 的 QQ 号>"]

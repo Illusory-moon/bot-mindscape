@@ -274,6 +274,21 @@ def bot_entries():
     return bots if isinstance(bots, list) else []
 
 
+BL_PRIORITY = 999
+
+
+def bl_load_config():
+    c = cfg.section("blocklist") or {}
+    on = bool(c.get("enabled"))
+    table = {}
+    for t in (c.get("targets") or []):
+        sid = str(t.get("self_id") or "")
+        users = {str(u).strip() for u in (t.get("users") or []) if str(u).strip()}
+        if sid and users:
+            table[sid] = users
+    return on, table
+
+
 DEFAULT_PATTERNS = [
     "LLM 响应错误",
     "All chat models failed",
@@ -434,6 +449,36 @@ def si_load_config():
     targets = [str(x) for x in (c.get("targets") or [])]
     prompt = str(c.get("prompt") or "").strip() or (SI_PROMPT % {"token": token})
     return bool(c.get("enabled", False)), token, targets, prompt
+
+
+VS_MARK = "这一轮的消息里带了图"
+
+
+VS_HINT = """## 这一轮的消息里带了图 —— 认人之前先查
+
+- 图里的人物 / 作品，**先用 lookup_knowledge 查，查完还不确定就联网搜**；
+  不要凭印象直接认。
+- **查完还是不确定**是谁，就用你自己的口吻糊过去 —— 大意是「画面太糊、看不清」，
+  **具体怎么说按你平常的说话方式来，别照抄这句**。
+  糊弄 + 老实承认看不清，永远好过瞎编一个名字。
+- 没有依据之前，**绝不说**「这就是 XX」。认错一个人，比说不认识难看得多。
+"""
+
+
+def vs_load_config():
+    c = cfg.section("vision") or {}
+    on = bool(c.get("enabled"))
+    targets = [str(x) for x in (c.get("targets") or [])]
+    return on, targets
+
+
+def vs_has_image(event):
+    """这一轮的消息里有没有图（只看顶层组件）。"""
+    comps = getattr(getattr(event, "message_obj", None), "message", None) or []
+    for c in comps:
+        if isinstance(c, Image):
+            return True
+    return False
 
 
 DEFAULT_MAX_CHARS = 2500
@@ -1814,6 +1859,34 @@ class _MindscapeConfigNS:
 
 
 cfg = _MindscapeConfigNS()
+class BlockMixin:
+    def setup(self, context):
+        self.bl_on, self.bl_table = bl_load_config()
+        self.bl_count = 0
+        logger.info("[mindscape_block] loaded | enabled=%s | bots=%s",
+                    self.bl_on, {k: len(v) for k, v in self.bl_table.items()})
+
+    @filter.event_message_type(EventMessageType.ALL, priority=BL_PRIORITY)
+    async def bl_pre_block(self, event: AstrMessageEvent):
+        """命中黑名单 → 终止事件传播：不回复、不采集图片、不进任何插件。"""
+        try:
+            if not self.bl_on:
+                return
+            users = self.bl_table.get(str(event.get_self_id()))
+            if not users:
+                return
+            sender = str(event.get_sender_id())
+            if sender not in users:
+                return
+            self.bl_count += 1
+            logger.info("[mindscape_block] 前置拦截 | bot=%s sender=%s（第 %d 次）",
+                        event.get_self_id(), sender, self.bl_count)
+            event.stop_event()
+        except Exception as e:
+            # 拦截逻辑出错时放行 —— 宁可漏拦，也不能把正常消息吞掉
+            logger.warning("[mindscape_block] 拦截异常，已放行: %s", str(e)[:120])
+
+
 class GuardMixin:
     def setup(self, context):
 
@@ -2767,14 +2840,46 @@ class SilenceMixin:
                     event.stop_event()
         except Exception as e:
             logger.warning("[mindscape_silence] 拦截失败: %s", str(e)[:120])
+
+
+class VisionMixin:
+    def setup(self, context):
+        self.vs_on, self.vs_targets = vs_load_config()
+        logger.info("[mindscape_vision] loaded | enabled=%s | targets=%s",
+                    self.vs_on, self.vs_targets or "全部")
+
+    def _vs_hit(self, event):
+        if not self.vs_on:
+            return False
+        if not self.vs_targets:
+            return True
+        return str(event.get_self_id()) in self.vs_targets
+
+    @filter.on_llm_request()
+    async def vs_hint(self, event: AstrMessageEvent, request):
+        """只在「这一轮真的带了图」时，往系统提示里塞一次提醒。"""
+        try:
+            if not self._vs_hit(event):
+                return
+            if not vs_has_image(event):
+                return
+            old = getattr(request, "system_prompt", "") or ""
+            if VS_MARK in old:
+                return
+            request.system_prompt = old + "\n\n" + VS_HINT
+            logger.info("[mindscape_vision] 有图：已提醒先查再认 | bot=%s",
+                        event.get_self_id())
+        except Exception as e:
+            logger.warning("[mindscape_vision] 注入失败: %s", str(e)[:120])
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
 # ==================================================================
-class MindscapePlugin(GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, SilenceMixin, star.Star):
+class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, SilenceMixin, VisionMixin, star.Star):
     def __init__(self, context):
         self.context = context
         self.name = "mindscape"
         self.author = "bot-mindscape"
+        BlockMixin.setup(self, context)
         GuardMixin.setup(self, context)
         MemoryMixin.setup(self, context)
         StickersMixin.setup(self, context)
@@ -2782,4 +2887,5 @@ class MindscapePlugin(GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, F
         FormatMixin.setup(self, context)
         RescueMixin.setup(self, context)
         SilenceMixin.setup(self, context)
-        logger.info("[mindscape] 插件已加载（7 个模块）")
+        VisionMixin.setup(self, context)
+        logger.info("[mindscape] 插件已加载（9 个模块）")
