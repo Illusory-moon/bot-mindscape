@@ -7,9 +7,11 @@
   3. 各模块核心纯函数行为（打桩框架）
   4. 脱敏扫描（无真实信息泄漏）
   5. 仓库结构完整性
+  6. 转义保真（产物里带反斜杠的字符串必须与源码逐字一致）
 
 用法：python scripts/run_selfcheck.py
 """
+import ast
 import importlib.util
 import os
 import re
@@ -1274,6 +1276,75 @@ def check_regressions():
         bad("R02 路径校验", str(e)[:140])
 
 
+# ── 6. 转义保真 ──
+def check_escapes():
+    """产物里「带反斜杠的字符串」必须与源码逐字一致。
+
+    为什么要有这一条：源码里的正则一旦在编辑中丢了反斜杠，
+    **AST 照样通过、构建照样成功**，但运行时语义已经变了 ——
+    实测踩过：日期正则被写成没有反斜杠的版本，整段过滤失效，
+    直到拿纯函数的真实返回值去查才发现。
+
+    这里不猜语义，只做一件事：源码里每个含反斜杠的字符串常量，
+    都必须在产物里原样出现。用 chr(92) 代替反斜杠，免得检查器自己踩这个坑。
+    """
+    section("6. 转义保真（防「AST 过、语义坏」）")
+    out = os.path.join(HERE, "dist", "mindscape", "main.py")
+    if not os.path.exists(out):
+        bad("转义保真", "产物不存在，先跑 scripts/build_plugin.py")
+        return
+    # 只有【真正进产物】的模块才该在这里查：
+    #   ORDER 里的模块会被合并；LOCAL_ONLY 的会被排除；
+    #   其余（digest / style / forget 等）是独立脚本，压根不进产物。
+    # 两个清单都从 build_plugin.py 现读，免得写死后失同步。
+    order, skip = set(), set()
+    try:
+        bp = open(os.path.join(HERE, "scripts", "build_plugin.py"), encoding="utf-8").read()
+        m = re.search(r"ORDER\s*=\s*\[(.*?)\]", bp, re.S)
+        if m:
+            order = set(re.findall(chr(34) + r"([a-z_]+)" + chr(34), m.group(1)))
+        m = re.search(r"LOCAL_ONLY\s*=\s*\[([^\]]*)\]", bp)
+        if m:
+            skip = {x.strip().strip(chr(34)).strip(chr(39)) for x in m.group(1).split(",") if x.strip()}
+    except Exception:
+        pass
+    if not order:
+        bad("转义保真", "读不到 build_plugin.py 的 ORDER，检查会失真")
+        return
+    bundle = open(out, encoding="utf-8", errors="replace").read()
+    total, miss, broke = 0, [], []
+    for n in sorted(os.listdir(PLUGINS)):
+        if not n.endswith(".py") or n[:-3] not in order or n[:-3] in skip:
+            continue
+        p = os.path.join(PLUGINS, n)
+        try:
+            tree = ast.parse(open(p, encoding="utf-8-sig").read())
+        except Exception as e:
+            broke.append("%s: %s" % (n, str(e)[:60]))
+            continue
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                continue
+            v = node.value
+            if chr(92) not in v or not (2 <= len(v) <= 400):
+                continue
+            total += 1
+            if v not in bundle:
+                miss.append("%s: %r" % (n, v[:44]))
+    # 「一个都没扫到」本身就是故障信号：检查没工作，比检查通过更像坏消息
+    if total == 0:
+        bad("转义保真", "一个带反斜杠的字符串都没扫到 —— 检查本身没工作；解析失败 %d 个 %s"
+            % (len(broke), broke[:3]))
+        return
+    if broke:
+        bad("转义保真 解析失败", str(broke[:3]))
+    if miss:
+        for x in miss[:8]:
+            bad("转义丢失", x)
+    else:
+        ok("转义保真", "源码 %d 个带反斜杠的字符串，产物里逐字都在" % total)
+
+
 def main():
     print("bot-mindscape 全套自检")
     print("仓库: " + HERE)
@@ -1282,6 +1353,7 @@ def main():
     check_functions()
     check_privacy()
     check_structure()
+    check_escapes()
     check_regressions()
     print()
     print("=" * 56)

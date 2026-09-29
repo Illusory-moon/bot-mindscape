@@ -75,30 +75,49 @@ def split_terms(keyword):
     return [x.strip() for x in re.split(r"[\s,，、/|]+", keyword or "") if x.strip()]
 
 # 日期只认「整词就是日期」的形状，免得把「4+1」这种也当成日期。
-_DATE_TOKEN = re.compile(r"(?:\d{4}\s*[-/年]\s*)?(\d{1,2})\s*[-/月]\s*(\d{1,2})\s*号?")
+# 年份**可选**：写了就按完整年月日比，没写就只比月日（保持跨年检索）。
+_DATE_TOKEN = re.compile(r"(?:(\d{4})\s*[-/年]\s*)?(\d{1,2})\s*[-/月]\s*(\d{1,2})\s*号?")
 
 
 def date_key(s):
-    """从文本里抠出 (月, 日)。认 2026-09-16 / 09-16 / 9月16号。认不出返回 None。
+    """从文本里抠出 (年, 月, 日)。**年可能是 None**（只写了「9月16号」）。认不出返回 None。
 
-    日记每条条目头上都带日期（## 2026-09-16 23:57），正文里也可能提到别的日期 ——
-    取第一个（也就是头部那个）。
+    取第一个匹配 —— 日记的日期写在条目头上（## 2026-09-16 23:57），
+    正文里提到别的日期不该盖过它（调用方优先拿 head）。
     """
     for m in _DATE_TOKEN.finditer(s or ""):
-        mo, dy = int(m.group(1)), int(m.group(2))
+        y, mo, dy = m.group(1), int(m.group(2)), int(m.group(3))
         if 1 <= mo <= 12 and 1 <= dy <= 31:
-            return mo, dy
+            return (int(y) if y else None, mo, dy)
     return None
 
 
 def date_filter(term):
-    """这个查询词是不是一个「日期」？是就返回 (月,日)，否则 None。"""
+    """这个查询词是不是一个「日期」？是就返回 (年,月,日)（**年可为 None**），否则 None。"""
     t = (term or "").strip()
     if not t or len(t) > 12:
         return None
     if not _DATE_TOKEN.fullmatch(t):
         return None
     return date_key(t)
+
+
+def date_match(line_date, want):
+    """条目日期是否命中查询日期。
+
+    月日必须一致；**只有查询里写了年份时才比年份** ——
+    否则「2026-09-16」会把 2025-09-16 一起捞进来（年份被丢掉的老 bug）。
+    条目年份认不出来时不否决，避免误杀。
+    """
+    if not line_date or not want:
+        return False
+    wy, wm, wd = want
+    ly, lm, ld = line_date
+    if (wm, wd) != (lm, ld):
+        return False
+    if wy is not None and ly is not None and wy != ly:
+        return False
+    return True
 
 
 def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP,
@@ -141,8 +160,11 @@ def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP,
                 continue
             body = line.lstrip("- ").strip()
             text = head + " " + body
-            if wants and date_key(text) not in wants:
-                continue
+            if wants:
+                # 日期以【条目头】为准：正文里提到别的日期不算
+                ld = date_key(head) or date_key(body)
+                if not any(date_match(ld, w) for w in wants):
+                    continue
             if words:
                 per = [score_line(text, t) for t in words]
                 hit = sum(1 for s in per if s > 0)
