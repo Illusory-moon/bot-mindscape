@@ -85,6 +85,47 @@ PLACEHOLDERS = {
 IMG_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 
 
+ALL_TOKENS = ("all", "*", "全部", "所有")
+
+
+def scope_list(raw):
+    """把配置里的 targets 规范成字符串列表。
+
+    跳过 None / 空串 / 纯空白 —— `str(None)` 会变成字面量 "None" 混进列表，
+    那样「这个 bot 号在不在作用域里」的判断会被一个假目标污染。
+    """
+    out = []
+    for x in (raw or []):
+        if x is None:
+            continue
+        s = str(x).strip()
+        if s:
+            out.append(s)
+    return out
+
+
+def scope_hit(targets, self_id):
+    """这个 bot 是否在 targets 的作用域内。
+
+    空列表仍返回 True（旧语义，见上面的注释），但**加载时应当用 scope_warn() 喊一声** ——
+    静默全开是跨 bot 事故的高发地。
+    """
+    t = scope_list(targets)
+    if not t:
+        return True
+    if any(x.lower() in ALL_TOKENS for x in t):
+        return True
+    return str(self_id) in t
+
+
+def scope_warn(logger, name, targets, enabled=True):
+    """enabled 但 targets 为空 → 明确警告「这会作用于全部 bot」。"""
+    if enabled and not scope_list(targets):
+        logger.warning(
+            "[%s] enabled=True 但 targets 为空：按旧语义这会作用于**全部 bot**。"
+            "要么列出 bot 号，要么显式写 [\"all\"] —— 别让空列表替你决定。", name)
+
+
 def abs_path(path, base_dir):
     """把相对路径解析为绝对路径（相对于配置目录）。"""
     if not path:
@@ -2674,11 +2715,12 @@ class FormatMixin:
         self.f_c = cfg.section("format")
         self.targets = [str(x) for x in (self.f_c.get("targets") or [])]
         logger.info("[mindscape_format] loaded | %d target(s)", len(self.targets))
+        scope_warn(logger, "mindscape_format", self.targets)
 
     @filter.on_decorating_result(priority=900)
     async def flatten_result(self, event: AstrMessageEvent):
         try:
-            if self.targets and str(event.get_self_id()) not in self.targets:
+            if not scope_hit(self.targets, event.get_self_id()):
                 return
             result = event.get_result()
             if result is None or not result.is_llm_result():
@@ -2883,13 +2925,12 @@ class SilenceMixin:
         self.si_count = 0
         logger.info("[mindscape_silence] loaded | enabled=%s token=%s targets=%d",
                     self.si_on, self.si_token, len(self.si_targets))
+        scope_warn(logger, "mindscape_silence", self.si_targets, self.si_on)
 
     def _si_hit(self, event):
         if not self.si_on:
             return False
-        if not self.si_targets:
-            return True
-        return str(event.get_self_id()) in self.si_targets
+        return scope_hit(self.si_targets, event.get_self_id())
 
     @filter.on_llm_request()
     async def si_grant(self, event: AstrMessageEvent, request):
@@ -2956,13 +2997,12 @@ class VisionMixin:
         self.vs_on, self.vs_targets = vs_load_config()
         logger.info("[mindscape_vision] loaded | enabled=%s | targets=%s",
                     self.vs_on, self.vs_targets or "全部")
+        scope_warn(logger, "mindscape_vision", self.vs_targets, self.vs_on)
 
     def _vs_hit(self, event):
         if not self.vs_on:
             return False
-        if not self.vs_targets:
-            return True
-        return str(event.get_self_id()) in self.vs_targets
+        return scope_hit(self.vs_targets, event.get_self_id())
 
     @filter.on_llm_request()
     async def vs_hint(self, event: AstrMessageEvent, request):

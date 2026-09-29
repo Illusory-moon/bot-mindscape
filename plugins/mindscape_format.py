@@ -10,6 +10,7 @@ from astrbot.api import logger, star
 from astrbot.api.event import AstrMessageEvent, filter
 
 import mindscape_config as cfg
+from mindscape_core import scope_hit, scope_warn
 
 PUNCT = "。！？~…，、；："
 
@@ -39,11 +40,12 @@ class FormatMixin:
         self.f_c = cfg.section("format")
         self.targets = [str(x) for x in (self.f_c.get("targets") or [])]
         logger.info("[mindscape_format] loaded | %d target(s)", len(self.targets))
+        scope_warn(logger, "mindscape_format", self.targets)
 
     @filter.on_decorating_result(priority=900)
     async def flatten_result(self, event: AstrMessageEvent):
         try:
-            if self.targets and str(event.get_self_id()) not in self.targets:
+            if not scope_hit(self.targets, event.get_self_id()):
                 return
             result = event.get_result()
             if result is None or not result.is_llm_result():

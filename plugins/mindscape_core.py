@@ -28,6 +28,52 @@ PLACEHOLDERS = {
 IMG_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 
 
+# ── 作用域：哪些 bot 生效 ──
+# 「空列表 = 全部 bot」是历史语义，也是最容易造成**意外全开**的地方
+# （一个 bot 的配置悄悄作用到另一个 bot 上）。所以：
+#   - 显式写 all / * / 全部 → 覆盖所有 bot（推荐，意思明确）
+#   - 空列表 → 仍按旧语义算「全部」，但加载时会**大声警告**，逼你写清楚
+ALL_TOKENS = ("all", "*", "全部", "所有")
+
+
+def scope_list(raw):
+    """把配置里的 targets 规范成字符串列表。
+
+    跳过 None / 空串 / 纯空白 —— `str(None)` 会变成字面量 "None" 混进列表，
+    那样「这个 bot 号在不在作用域里」的判断会被一个假目标污染。
+    """
+    out = []
+    for x in (raw or []):
+        if x is None:
+            continue
+        s = str(x).strip()
+        if s:
+            out.append(s)
+    return out
+
+
+def scope_hit(targets, self_id):
+    """这个 bot 是否在 targets 的作用域内。
+
+    空列表仍返回 True（旧语义，见上面的注释），但**加载时应当用 scope_warn() 喊一声** ——
+    静默全开是跨 bot 事故的高发地。
+    """
+    t = scope_list(targets)
+    if not t:
+        return True
+    if any(x.lower() in ALL_TOKENS for x in t):
+        return True
+    return str(self_id) in t
+
+
+def scope_warn(logger, name, targets, enabled=True):
+    """enabled 但 targets 为空 → 明确警告「这会作用于全部 bot」。"""
+    if enabled and not scope_list(targets):
+        logger.warning(
+            "[%s] enabled=True 但 targets 为空：按旧语义这会作用于**全部 bot**。"
+            "要么列出 bot 号，要么显式写 [\"all\"] —— 别让空列表替你决定。", name)
+
+
 def abs_path(path, base_dir):
     """把相对路径解析为绝对路径（相对于配置目录）。"""
     if not path:

@@ -31,6 +31,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.core.message.components import Image
 
 import mindscape_config as cfg
+from mindscape_core import scope_hit, scope_warn
 
 VS_MARK = "这一轮的消息里带了图"
 VS_HINT = """## 这一轮的消息里带了图 —— 认人之前先查
@@ -65,13 +66,12 @@ class VisionMixin:
         self.vs_on, self.vs_targets = vs_load_config()
         logger.info("[mindscape_vision] loaded | enabled=%s | targets=%s",
                     self.vs_on, self.vs_targets or "全部")
+        scope_warn(logger, "mindscape_vision", self.vs_targets, self.vs_on)
 
     def _vs_hit(self, event):
         if not self.vs_on:
             return False
-        if not self.vs_targets:
-            return True
-        return str(event.get_self_id()) in self.vs_targets
+        return scope_hit(self.vs_targets, event.get_self_id())
 
     @filter.on_llm_request()
     async def vs_hint(self, event: AstrMessageEvent, request):

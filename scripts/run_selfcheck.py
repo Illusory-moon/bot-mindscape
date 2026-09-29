@@ -1384,6 +1384,69 @@ def check_regressions():
     except Exception as e:
         bad("R31 日记分批", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
+    # R32: 作用域隔离 —— A 的配置不能改变 B 的回复 / 图片 / 记忆。
+    #      「空列表 = 全部 bot」是历史语义，最容易意外全开；显式写 all 才是明确的全开。
+    try:
+        from mindscape_core import scope_hit, scope_list, scope_warn
+
+        class _Ev:
+            def __init__(self, sid):
+                self.sid = sid
+            def get_self_id(self):
+                return self.sid
+
+        A, B = "100000001", "100000002"
+        only_a = [A]
+        iso = (scope_hit(only_a, A) is True and scope_hit(only_a, B) is False)
+        al = bool(scope_hit(["all"], A) and scope_hit(["ALL"], B)
+                  and scope_hit(["全部"], B))
+        empty = bool(scope_hit([], A) and scope_hit(None, B))     # 旧语义：空 = 全部
+        norm = (scope_list([" a ", "", None, "b"]) == ["a", "b"])
+
+        class _L:
+            def __init__(self):
+                self.msgs = []
+            def warning(self, *a, **k):
+                self.msgs.append(a)
+        lg = _L()
+        scope_warn(lg, "t", [], True)          # 空 + enabled → 必须警告
+        scope_warn(lg, "t", ["all"], True)     # 显式 all → 不该警告
+        scope_warn(lg, "t", [], False)         # 没开 → 不该警告
+        warn_ok = (len(lg.msgs) == 1)
+
+        # 回复侧：沉默 / 识图
+        import mindscape_silence as _SL
+        import mindscape_vision as _VS
+        _st = type("S", (), {"si_on": True, "si_targets": only_a})()
+        hk_say = (not _SL.SilenceMixin._si_hit(_st, _Ev(B))
+                  and _SL.SilenceMixin._si_hit(_st, _Ev(A)))
+        _vt = type("S", (), {"vs_on": True, "vs_targets": only_a})()
+        hk_see = (not _VS.VisionMixin._vs_hit(_vt, _Ev(B))
+                  and _VS.VisionMixin._vs_hit(_vt, _Ev(A)))
+
+        # 图片侧：图库分类按 self_id 精确匹配，没配就是「不采」
+        import mindscape_stickers as _SK
+        _kt = type("S", (), {"s_c": {"targets": [{"self_id": A, "category": "catA"}]}})()
+        hk_img = (_SK.StickersMixin._target_category(_kt, A) == "catA"
+                  and _SK.StickersMixin._target_category(_kt, B) is None)
+
+        # 记忆侧：日记文件也按 self_id 精确匹配
+        import mindscape_recall as _RC
+        _old = _RC._bot_entries
+        _RC._bot_entries = lambda: [{"self_id": A, "diary": "/tmp/x.md"}]
+        try:
+            hk_mem = (_RC._diary_for(A) == "/tmp/x.md" and _RC._diary_for(B) == "")
+        finally:
+            _RC._bot_entries = _old
+
+        good = (iso and al and empty and norm and warn_ok
+                and hk_say and hk_see and hk_img and hk_mem)
+        (ok if good else bad)(
+            "R32 作用域隔离（A 的配置不影响 B）",
+            "只给A=%s 显式all=%s 空=全部(旧)=%s 规范化=%s 空表告警=%s | 钩子级: 回复=%s 识图=%s 图片=%s 记忆=%s"
+            % (iso, al, empty, norm, warn_ok, hk_say, hk_see, hk_img, hk_mem))
+    except Exception as e:
+        bad("R32 作用域", "%s: %s" % (type(e).__name__, str(e)[:140]))
     # R02: 路径穿越必须在入库前就被拒绝
     try:
         from mindscape_core import safe_name, is_inside

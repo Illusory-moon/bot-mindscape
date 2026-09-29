@@ -19,6 +19,7 @@ from astrbot.api import logger, star
 from astrbot.api.event import AstrMessageEvent, filter
 
 import mindscape_config as cfg
+from mindscape_core import scope_hit, scope_warn
 
 SI_DEFAULT_TOKEN = "[[silence]]"
 
@@ -103,13 +104,12 @@ class SilenceMixin:
         self.si_count = 0
         logger.info("[mindscape_silence] loaded | enabled=%s token=%s targets=%d",
                     self.si_on, self.si_token, len(self.si_targets))
+        scope_warn(logger, "mindscape_silence", self.si_targets, self.si_on)
 
     def _si_hit(self, event):
         if not self.si_on:
             return False
-        if not self.si_targets:
-            return True
-        return str(event.get_self_id()) in self.si_targets
+        return scope_hit(self.si_targets, event.get_self_id())
 
     @filter.on_llm_request()
     async def si_grant(self, event: AstrMessageEvent, request):
