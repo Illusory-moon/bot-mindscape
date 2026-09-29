@@ -50,6 +50,11 @@ def score_line(text, kw, min_ratio=0.6, min_chars=2):
         return 0.0
     if q in t:
         return 100.0
+    if not any(c.isalpha() for c in q):
+        # 纯数字/符号的词（日期、编号）只认精确命中，不做逐字模糊 ——
+        # 「09-16」曾因为 0 / 9 / - 三个字符就凑够 0.6 的命中率，
+        # 把整本日记都算成命中，报出「共命中 7478 条」这种假数字。
+        return 0.0
     chars = [c for c in q if not c.isspace() and c not in STOP_CHARS]
     if len(chars) < min_chars:
         return 0.0
@@ -68,6 +73,32 @@ def score_line(text, kw, min_ratio=0.6, min_chars=2):
 def split_terms(keyword):
     """把查询词拆成一组近义词：空格、逗号、顿号、斜杠都算分隔。"""
     return [x.strip() for x in re.split(r"[\s,，、/|]+", keyword or "") if x.strip()]
+
+# 日期只认「整词就是日期」的形状，免得把「4+1」这种也当成日期。
+_DATE_TOKEN = re.compile(r"(?:\d{4}\s*[-/年]\s*)?(\d{1,2})\s*[-/月]\s*(\d{1,2})\s*号?")
+
+
+def date_key(s):
+    """从文本里抠出 (月, 日)。认 2026-09-16 / 09-16 / 9月16号。认不出返回 None。
+
+    日记每条条目头上都带日期（## 2026-09-16 23:57），正文里也可能提到别的日期 ——
+    取第一个（也就是头部那个）。
+    """
+    for m in _DATE_TOKEN.finditer(s or ""):
+        mo, dy = int(m.group(1)), int(m.group(2))
+        if 1 <= mo <= 12 and 1 <= dy <= 31:
+            return mo, dy
+    return None
+
+
+def date_filter(term):
+    """这个查询词是不是一个「日期」？是就返回 (月,日)，否则 None。"""
+    t = (term or "").strip()
+    if not t or len(t) > 12:
+        return None
+    if not _DATE_TOKEN.fullmatch(t):
+        return None
+    return date_key(t)
 
 
 def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP,
@@ -88,6 +119,12 @@ def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP,
     terms = split_terms(keyword)
     if not terms:
         return [], 0
+    # 日期词当【过滤条件】，不当打分项。
+    # 否则问「9-16」时，别的日子只要沾上同一个名字就会被一起捞回来，
+    # 再按新旧排序 —— 结果就是「今天的记忆」把「那一天」挤出去。
+    # 外部症状：她能想起很久以前的事，但把好几天混成一团。
+    wants = [d for d in (date_filter(t) for t in terms) if d]
+    words = [t for t in terms if date_filter(t) is None]
     scored = []
     head = ""
     n = 0
@@ -104,9 +141,20 @@ def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP,
                 continue
             body = line.lstrip("- ").strip()
             text = head + " " + body
-            sc = max(score_line(text, t) for t in terms)
-            if sc > 0:
-                scored.append((sc, n, "[%s] %s" % (head, body)))
+            if wants and date_key(text) not in wants:
+                continue
+            if words:
+                per = [score_line(text, t) for t in words]
+                hit = sum(1 for s in per if s > 0)
+                if not hit:
+                    continue
+                # 命中词数优先，其次才是单词语义分。
+                # 旧实现取 max()：只沾 1 个词和沾满 5 个词同分，于是同分按行号倒序，
+                # 最新的永远排最前，旧事全被挤到 80 条之外。
+                sc = hit * 100.0 + (max(per) if per else 0.0)
+            else:
+                sc = 100.0
+            scored.append((sc, n, "[%s] %s" % (head, body)))
     if not scored:
         return [], 0
     # 先按分数降序；同分时越新越靠前
@@ -180,7 +228,9 @@ async def recall_memory(*args, **kwargs):
 
     Args:
         keyword(string): 搜索关键词。可以给**一组近义词**，用空格或逗号分开
-            —— 你记日记时用的词，和对方问话时用的词经常不一样，多给几个才不会漏
+            —— 你记日记时用的词，和对方问话时用的词经常不一样，多给几个才不会漏。
+            要指定**日期**就直接写（2026-09-16 / 09-16 / 9月16号）：给了日期就只翻那一天。
+            问「某天谁干了什么」时，**日期和人名一起给**，比只给日期准得多
         full(boolean): 数数/汇总时必须设为 true —— 默认只给最相关的十几条，
             数数一定漏；设为 true 会返回全部命中
     """
