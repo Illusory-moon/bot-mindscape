@@ -277,7 +277,19 @@ class MemoryMixin:
                                or DEFAULT_STYLE_RECENT_CHARS)
                 sty2 = _clean_style(read_recent(sr_path, sr_chars))
 
-            if len(mem) < min_chars and not dig and not notes and not sty and not sty2:
+            # 规矩也是要注入的内容，必须一起参与这个「有没有东西可注入」的判断 ——
+            # 一个白板起步的 bot（新接进来的通道）日记/摘要/账本/风格全空，
+            # 只看那几样就会**连规矩一起被跳过**，于是它永远不知道该记账，
+            # 账本也就永远是空的（鸡生蛋）。
+            rules = [str(x).strip() for x in (bot.get("rules") or []) if str(x).strip()]
+            if (
+                len(mem) < min_chars
+                and not dig
+                and not notes
+                and not sty
+                and not sty2
+                and not rules
+            ):
                 return
 
             old = getattr(request, "system_prompt", "") or ""
@@ -313,7 +325,6 @@ class MemoryMixin:
             )
             # 规矩：每个 bot 自己的行为约束，写在配置里（不进代码，避免把
             # 某个人设特有的规矩硬编码进通用框架）。
-            rules = [str(x).strip() for x in (bot.get("rules") or []) if str(x).strip()]
             if rules:
                 block += SECTION_RULES + "\n" + "\n".join("- " + r for r in rules) + "\n\n"
             if notes:
