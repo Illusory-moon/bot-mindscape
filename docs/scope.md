@@ -21,6 +21,7 @@
 | `silence.targets` | `self_id` 列表 | ⚠️ **空 = 全部 bot** | 清空整条回复 |
 | `vision.targets` | 同上 | ⚠️ **空 = 全部 bot** | 注入识图提醒 |
 | `format.targets` | 同上 | ⚠️ **空 = 全部 bot** | 压平回复 |
+| `format.no_period` | `self_id` 列表 | ✅ **空 = 关**（子选项，**不**用旧语义） | 去掉出站文本里的「。」 |
 | `groupctx.targets` | 同上 | ⚠️ **空 = 全部 bot** | 注入群上下文 + 定向性（还要 `enabled: true`） |
 | `stickers.targets[].category` | 按 `self_id` 查表 | 没配 → **谁都不采集** | 图片入库 |
 | `sticker_use`（复用 `stickers.targets`） | 同上 | 没配 → **谁都不发图** | 发送内容 |

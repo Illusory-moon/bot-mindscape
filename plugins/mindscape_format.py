@@ -14,6 +14,25 @@ from mindscape_core import scope_hit, scope_warn
 
 PUNCT = "。！？~…，、；："
 
+# 只碰【全角】句号：ASCII 的「.」是数字与版本号（4.6 / 0+0 / PS5.0），
+# 碰了就是事故 —— 这一条是硬底线。
+PERIODS = ("。", "．")
+
+
+def drop_period(text):
+    """句尾不点标点：末尾的「。」去掉（留空），句中的「。」换成「，」。
+
+    为什么不是一律换成「~」：有些沉重的句子拿波浪号收尾会变味 ——
+    规矩是**不用句号表示「说完了」**，不是每句都要卖萌。所以末尾留空，
+    中间用逗号接着往下走（和本模块压平多段时的连接符一致）。
+    """
+    if not text:
+        return text
+    for ch in PERIODS:
+        if ch in text:
+            text = "，".join(p for p in (x.strip() for x in text.split(ch)) if p)
+    return text
+
 
 def flatten(text, join_with="，", drop_last_if_short=False, short_len=8):
     """把多段文本压成一段。"""
@@ -39,7 +58,11 @@ class FormatMixin:
 
         self.f_c = cfg.section("format")
         self.targets = [str(x) for x in (self.f_c.get("targets") or [])]
-        logger.info("[mindscape_format] loaded | %d target(s)", len(self.targets))
+        # 句尾去句号：**子选项，空 = 关**（故意不沿用「空 = 全部 bot」那条旧语义，
+        # 否则谁忘写一行，全场的句号都被剃光）
+        self.f_np = [str(x) for x in (self.f_c.get("no_period") or [])]
+        logger.info("[mindscape_format] loaded | %d target(s) | 句尾去句号=%s",
+                    len(self.targets), self.f_np or "关")
         scope_warn(logger, "mindscape_format", self.targets)
 
     @filter.on_decorating_result(priority=900)
@@ -56,11 +79,14 @@ class FormatMixin:
             join_with = self.f_c.get("join_with") or "，"
             drop = bool(self.f_c.get("drop_last_if_short", False))
             short_len = int(self.f_c.get("short_len") or 8)
+            no_period = bool(self.f_np) and scope_hit(self.f_np, event.get_self_id())
             for comp in chain:
                 txt = getattr(comp, "text", None)
                 if not isinstance(txt, str) or not txt.strip():
                     continue
                 new = flatten(txt, join_with, drop, short_len)
+                if no_period:
+                    new = drop_period(new)
                 if new != txt:
                     comp.text = new
         except Exception as e:

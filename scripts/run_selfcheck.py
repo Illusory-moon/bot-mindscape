@@ -1721,6 +1721,41 @@ def check_regressions():
             % (tail_ok, len(got), head_ok, default_off))
     except Exception as e:
         bad("R35 群上下文补齐", "%s: %s" % (type(e).__name__, str(e)[:140]))
+    # R36: 句尾去句号 —— 末尾留空、句中改逗号，且**绝不碰 ASCII 的「.」**
+    #      （4.6 / 0+0 是版本号，剃了就出事故）；子选项空 = 关，不能沿用
+    #      「空 = 全部 bot」那条旧语义，否则谁忘写一行全场的句号都没了。
+    try:
+        import importlib as _il4
+        import mindscape_format as FM
+        _il4.reload(FM)
+        cases = [
+            ("今天天气不错。", "今天天气不错"),
+            ("A。B。", "A，B"),
+            ("等等。。", "等等"),
+            ("4.6 版本的银狼 0+0。", "4.6 版本的银狼 0+0"),
+            ("没有句号的句子~", "没有句号的句子~"),
+        ]
+        wrong = [(a, FM.drop_period(a), b) for a, b in cases if FM.drop_period(a) != b]
+        inst_off = FM.FormatMixin()
+        inst_off.setup(None)
+        off_by_default = (inst_off.f_np == [])
+        _real_section = FM.cfg.section
+        FM.cfg.section = lambda n, d=None: ({"no_period": ["100000001"]}
+                                           if n == "format" else {})
+        try:
+            inst_on = FM.FormatMixin()
+            inst_on.setup(None)
+        finally:
+            FM.cfg.section = _real_section
+        scoped = (inst_on.f_np == ["100000001"])
+        good = (not wrong) and off_by_default and scoped
+        (ok if good else bad)(
+            "R36 句尾去句号（留空 / 句中改逗号 / 不碰 ASCII 点 / 空=关）",
+            "%d/%d 条用例 默认关=%s 按 bot 生效=%s | %s"
+            % (len(cases) - len(wrong), len(cases), off_by_default, scoped,
+               str(wrong)[:80]))
+    except Exception as e:
+        bad("R36 句尾去句号", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
 
 # ── 6. 转义保真 ──
