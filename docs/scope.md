@@ -26,7 +26,7 @@
 | `stickers.targets[].category` | 按 `self_id` 查表 | 没配 → **谁都不采集** | 图片入库 |
 | `sticker_use`（复用 `stickers.targets`） | 同上 | 没配 → **谁都不发图** | 发送内容 |
 | `blocklist.targets[].users` | 按 `self_id` 查表 | 没配 → 不拦 | 拦截一切 |
-| `guard.patterns` | **全局**（没有 targets） | — | 拦截错误文本 |
+| `guard.patterns` / `guard.send_guard` | **全局**（没有 targets） | — | 拦截错误文本（含**不走结果管线**的 `event.send()` 出口） |
 | `rescue` | **全局** | — | 空回复补一次 |
 | `diary` / `learn` / `style` / `digest` 的 `targets` | 独立脚本各自遍历 | 空 → 不跑 | 后台文件 |
 | `janitor` | **全局**（独立脚本） | — | 清会话库 |

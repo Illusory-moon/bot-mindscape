@@ -123,7 +123,7 @@ flowchart TD
 
 | 模块 | 职责 |
 |---|---|
-| `mindscape_guard` | **错误拦截 / 该静默时就静默** —— 经该钩子的常见错误文本（API Error / Timeout / Traceback）会被**整条清空**（对用户来说就是「这次没说话」），不会发出去 |
+| `mindscape_guard` | **错误拦截 / 该静默时就静默** —— 常见错误文本（API Error / Timeout / Traceback / 框架自己的 agent 报错）会被**整条清空**；除了结果管线，还兜住了框架那两条**不走管线**的 `send()` 出口（`guard.send_guard`） |
 | `mindscape_silence` | **沉默的权利** —— 不想说话时只输出一个令牌，整条回复被清空，群里**真的毫无动静**（不是「（和我无关，安静飘过）」那种假装沉默） |
 | `mindscape_format` | **输出规范化** —— 压平多行、去除 AI 腔 |
 | `mindscape_rescue` | **空回复救援** —— 推理模型只吐 reasoning、正文为空时，补一次轻量调用兜住 |

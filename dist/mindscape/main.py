@@ -441,6 +441,13 @@ DEFAULT_PATTERNS = [
     "Traceback (most recent call last)",
     "openai.",
     "httpx.",
+    # 框架**自己**的报错口径（实测漏过一次，见下面的 send 级兜底）：
+    #   internal.py 的 except 里直接发 "Error occurred while processing agent request: …"
+    "Error occurred while processing agent",
+    "Error occurred during AI execution",
+    "Failed to download file from",
+    "Error Type:",
+    "Error Message:",
 ]
 
 
@@ -489,6 +496,73 @@ def redact(text, limit=100):
     for rx, rep in _SECRET_PATTERNS:
         t = rx.sub(rep, t)
     return t[:limit]
+
+
+MS_SEND_WRAPPED = "_mindscape_send_guard"
+
+
+def ms_chain_text(message):
+    """从 MessageChain 里取纯文本（拿不到就返回空串，不抛）。"""
+    try:
+        got = message.get_plain_text()
+        if isinstance(got, str):
+            return got
+    except Exception:
+        pass
+    parts = []
+    for c in (getattr(message, "chain", None) or []):
+        t = getattr(c, "text", None)
+        if isinstance(t, str):
+            parts.append(t)
+    return "".join(parts)
+
+
+def ms_install_send_guard(check):
+    """给平台事件类的 send 包一层，返回这次包了几个类（幂等）。"""
+    try:
+        from astrbot.core.platform.astr_message_event import AstrMessageEvent as _Base
+    except Exception:
+        return 0
+    seen, targets = set(), []
+
+    def walk(cls):
+        if cls in seen:
+            return
+        seen.add(cls)
+        if cls is not _Base and "send" in cls.__dict__:
+            targets.append(cls)
+        for sub in cls.__subclasses__():
+            walk(sub)
+
+    walk(_Base)
+    n = 0
+    for cls in targets:
+        if getattr(cls, MS_SEND_WRAPPED, False):
+            continue
+        orig = cls.__dict__["send"]
+
+        async def _ms_send(self, message, _orig=orig, **kw):
+            try:
+                txt = ms_chain_text(message)
+            except Exception:
+                txt = ""
+            if txt.strip():
+                try:
+                    hit = check(txt)
+                except Exception:
+                    hit = False
+                if hit:
+                    logger.warning(
+                        "[mindscape_guard] 拦下直接发送的报错（这条不走结果管线）: %s",
+                        redact(txt))
+                    return None
+            return await _orig(self, message, **kw)
+
+        _ms_send.__name__ = getattr(orig, "__name__", "send")
+        setattr(cls, MS_SEND_WRAPPED, True)
+        setattr(cls, "send", _ms_send)
+        n += 1
+    return n
 
 
 def is_error_text(text, patterns=None, regex=None):
@@ -2234,7 +2308,32 @@ class GuardMixin:
 
         self.patterns, self.regex = _load_config()
         self.blocked = 0
-        logger.info("[mindscape_guard] loaded | %d 条拦截规则", len(self.patterns))
+        g = cfg.section("guard")
+        self.g_send = True if g.get("send_guard") is None else bool(g.get("send_guard"))
+        armed = self._ms_arm_send_guard() if self.g_send else 0
+        logger.info("[mindscape_guard] loaded | %d 条拦截规则 | send 级兜底=%s（本次包了 %d 个类）",
+                    len(self.patterns), self.g_send, armed)
+
+    def _ms_hit(self, text):
+        """这条文本是不是框架报错（结果管线与 send 级兜底共用同一套判据）。"""
+        return is_error_text(text, self.patterns, self.regex)
+
+    def _ms_arm_send_guard(self):
+        """装 send 级兜底（幂等）。平台事件类这时可能还没 import，等下面那个钩子再补一次。"""
+        try:
+            return ms_install_send_guard(self._ms_hit)
+        except Exception as e:
+            logger.warning("[mindscape_guard] send 级兜底安装失败: %s", str(e)[:120])
+            return 0
+
+    @filter.on_astrbot_loaded()
+    async def ms_arm_late(self, *args, **kwargs):
+        """框架加载完毕：这时候平台事件类都在了，把漏掉的补上。"""
+        if not getattr(self, "g_send", False):
+            return
+        n = self._ms_arm_send_guard()
+        if n:
+            logger.info("[mindscape_guard] send 级兜底补装 %d 个类", n)
 
     @filter.on_decorating_result(priority=999)
     async def block_error(self, event: AstrMessageEvent):

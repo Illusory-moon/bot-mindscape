@@ -1756,6 +1756,69 @@ def check_regressions():
                str(wrong)[:80]))
     except Exception as e:
         bad("R36 句尾去句号", "%s: %s" % (type(e).__name__, str(e)[:140]))
+    # R37: 框架有两条报错出口**不走结果管线**（agent 异常 / LLM 构建失败，都是直接
+    #      `event.send()`）—— 挂在 on_decorating_result 上的拦截一点机会都没有。
+    #      实测漏过一次真实报错（群里收到一句英文 Error occurred while processing agent
+    #      request: Failed to download file …）。这里给平台事件类的 send 包一层兜底，
+    #      同时确认**不能误伤正常回复**、且重复装不会叠包。
+    try:
+        import importlib as _il5
+        import types as _ty
+        import mindscape_guard as GD
+        _il5.reload(GD)
+        sent = []
+        plat = _ty.ModuleType("astrbot.core.platform.astr_message_event")
+
+        class _Base:
+            async def send(self, message):
+                sent.append("base")
+
+        class _Sub(_Base):
+            async def send(self, message):
+                sent.append("sub")
+                return await super().send(message)
+
+        plat.AstrMessageEvent = _Base
+        _pkg = _ty.ModuleType("astrbot.core.platform")
+        _old_plat = sys.modules.get("astrbot.core.platform.astr_message_event")
+        _old_pkg = sys.modules.get("astrbot.core.platform")
+        sys.modules["astrbot.core.platform"] = _pkg
+        sys.modules["astrbot.core.platform.astr_message_event"] = plat
+
+        class _Chain:
+            def __init__(self, t):
+                self._t = t
+                self.chain = []
+
+            def get_plain_text(self, *a, **k):
+                return self._t
+
+        try:
+            n1 = GD.ms_install_send_guard(GD.is_error_text)
+            n2 = GD.ms_install_send_guard(GD.is_error_text)
+            ev = _Sub()
+            leaked = ("Error occurred while processing agent request: "
+                      "Failed to download file from https URL host='cdn.example.com' "
+                      "file='raw300.gif' len=91. HTTP status code: 404")
+            asyncio.run(ev.send(_Chain(leaked)))
+            blocked = (sent == [])
+            asyncio.run(ev.send(_Chain("嘻，直播间不供句号~")))
+            passed = (sent == ["sub", "base"])
+            good = (n1 >= 1 and n2 == 0 and blocked and passed)
+        finally:
+            if _old_plat is None:
+                sys.modules.pop("astrbot.core.platform.astr_message_event", None)
+            else:
+                sys.modules["astrbot.core.platform.astr_message_event"] = _old_plat
+            if _old_pkg is None:
+                sys.modules.pop("astrbot.core.platform", None)
+            else:
+                sys.modules["astrbot.core.platform"] = _old_pkg
+        (ok if good else bad)(
+            "R37 send 级报错兜底（不走管线的那条路）",
+            "包了%d类 重复装=%d 拦住=%s 正常放行=%s" % (n1, n2, blocked, passed))
+    except Exception as e:
+        bad("R37 send 级兜底", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
 
 # ── 6. 转义保真 ──

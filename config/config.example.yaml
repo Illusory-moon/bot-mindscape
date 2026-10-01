@@ -231,6 +231,12 @@ stickers:
 
 # ── 沉浸层：报错拦截 ──
 guard:
+  # 「直接 send」的兜底（默认开）：框架有两条报错出口**不走结果管线** ——
+  #   agent 阶段抛异常（internal.py 的 except）、LLM 构建失败，都是直接 event.send()。
+  #   挂在 on_decorating_result 上的拦截永远看不到它们（实测漏过一次真实报错：
+  #   QQ 表情 CDN 404 → 群里收到一句英文 Error occurred while processing agent request…）。
+  #   打开后给平台事件类的 send() 包一层：命中报错特征就不发，只记日志。
+  send_guard: true
   # 这里的 patterns 是【追加】到内置默认规则之上的（不会替换掉默认规则）。
   # 也就是说：留空 = 只用内置默认；写几条 = 默认 + 你写的这几条。
   patterns:
