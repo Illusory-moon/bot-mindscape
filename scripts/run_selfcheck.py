@@ -203,6 +203,12 @@ def check_functions():
         ]}], ensure_ascii=False)
         con.execute("INSERT INTO conversations VALUES (?)", (payload,))
         con.execute("INSERT INTO conversations VALUES (?)", ("data:image/png;base64,AAAA",))
+        # ③ 一行已经**被改坏**的（url 是占位符，行里已经没有 data:image）→ 也要能自愈
+        broken = _json.dumps([{"role": "user", "content": [
+            {"type": "text", "text": "旧图的残骸"},
+            {"type": "image_url", "image_url": {"url": "[图片]", "id": None}},
+        ]}], ensure_ascii=False)
+        con.execute("INSERT INTO conversations VALUES (?)", (broken,))
         con.commit(); con.close()
         n_srow, n_shit, n_img, n_big, b, a = jn.clean(db, "conversations", "content", 2.0)
         con = sqlite3.connect(db)
@@ -210,12 +216,13 @@ def check_functions():
         con.close()
         kept_ctx = any("看这张图" in r for r in rows)
         no_media = not any("data:image" in r for r in rows)
-        good = (n_srow == 1 and n_shit == 1 and n_img == 1
-                and kept_ctx and no_media and len(rows) == 2)
+        healed = any("旧图的残骸" in r for r in rows)
+        good = (n_srow == 2 and n_shit == 2 and n_img == 1
+                and kept_ctx and no_media and healed and len(rows) == 3)
         (ok if good else bad)(
             "janitor.clean 先脱图再删行",
-            "脱图 %d 行/%d 处 | 删图片行 %d | 会话保留=%s 无 base64=%s | 剩 %d 行"
-            % (n_srow, n_shit, n_img, kept_ctx, no_media, len(rows)))
+            "脱图 %d 行/%d 处 | 删图片行 %d | 会话保留=%s 无 base64=%s 自愈=%s | 剩 %d 行"
+            % (n_srow, n_shit, n_img, kept_ctx, no_media, healed, len(rows)))
         # ⚠️ 脱图后**不能留下非法的 image_url 段**：provider 会直接 400
         #    （Unsupported image_url format），那个会话从此每轮都失败、一句话都说不出来。
         #    实测踩过（2026-10-02 18:5x）。所以断言「换成了文字段」。

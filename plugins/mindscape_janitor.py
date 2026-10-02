@@ -68,6 +68,7 @@ def _safe_ident(name, fallback):
 
 # 内联图片的 data-URL（后面那一串 base64 就是要脱掉的东西）
 DATA_URL_RE = re.compile(r"data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+")
+PLACEHOLDER = "[图片]"          # 内联图被换成它（image_url 段则整段换成文字段）
 
 
 def _strip_parts(msgs):
@@ -84,7 +85,7 @@ def _strip_parts(msgs):
             continue
         c = m.get("content")
         if isinstance(c, str):
-            new = DATA_URL_RE.sub("[图片]", c)
+            new = DATA_URL_RE.sub(PLACEHOLDER, c)
             if new != c:
                 m["content"] = new
                 n += 1
@@ -99,13 +100,13 @@ def _strip_parts(msgs):
                 bad = (isinstance(url, str)
                        and not (url.startswith("http") or url.startswith("data:image")))
                 if isinstance(url, str) and (url.startswith("data:image") or bad):
-                    out.append({"type": "text", "text": "[图片]"})
+                    out.append({"type": "text", "text": PLACEHOLDER})
                     n += 1
                     continue
             if isinstance(part, dict):
                 for k, v in list(part.items()):
                     if isinstance(v, str) and "data:image" in v:
-                        part[k] = DATA_URL_RE.sub("[图片]", v)
+                        part[k] = DATA_URL_RE.sub(PLACEHOLDER, v)
                         n += 1
             out.append(part)
         m["content"] = out
@@ -117,13 +118,21 @@ def strip_media(con, table, column):
 
     返回 (改了几行, 替换几处, 砍掉几字)。
     改完必须仍是合法 JSON —— 坏 JSON 比不改更糟，所以解析失败就跳过、留给删行兜底。
+
+    顺手**自愈**历史上被改坏的段（那种行里已经没有 `data:image` 了，只挑了占位符），
+    所以筛选条件除了内联图，还包括「占位符当 url」的行。
     """
+    mark = "%" + PLACEHOLDER + "%"
     rows = list(con.execute(
-        "SELECT rowid, %s FROM %s WHERE %s LIKE '%%data:image%%'" % (column, table, column)
+        "SELECT rowid, %s FROM %s WHERE %s LIKE '%%data:image%%' OR %s LIKE ?" % (column, table, column, column),
+        (mark,),
     ))
     n_row = n_hit = n_chars = 0
     for rid, content in rows:
-        if not isinstance(content, str) or "data:image" not in content:
+        if not isinstance(content, str):
+            continue
+        # 注意：不能因为「没有 data:image」就跳过 —— 被改坏过的行正是这种（只剩占位符）
+        if "data:image" not in content and '"' + PLACEHOLDER + '"' not in content:
             continue
         try:
             msgs = json.loads(content)
