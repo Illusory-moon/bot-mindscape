@@ -115,6 +115,43 @@ def gc_head(event):
             "也不要替别人回答。")
 
 
+def gc_quote(event):
+    """本条消息引用了什么 —— 返回 (有没有引用, 引用的是不是我自己, 引用里有没有图)。
+
+    为什么必须单独说一句：aiocqhttp 会 get_msg 把**被引用那条的完整组件链**塞进
+    Reply.chain，框架还会把引用里的图渲染成 [Image Attachment in quoted message: …]
+    混进**本条消息的正文**。结果模型把它当成「这一轮新收到的图」——
+    实测：有人引用了 bot 自己发的表情包，bot 回头对着自己的图说「诶，这不是我嘛~」。
+    """
+    msgs = event.get_messages() or []
+    me = str(event.get_self_id())
+    quoted = mine = has_img = False
+    for c in msgs:
+        if type(c).__name__ != "Reply":
+            continue
+        quoted = True
+        mine = str(getattr(c, "sender_id", "") or "") == me
+        for x in (getattr(c, "chain", None) or []):
+            if type(x).__name__ == "Image":
+                has_img = True
+    if not has_img:                      # 兜底：链里拿不到，就看框架渲染进正文的那句标记
+        try:
+            if "Image Attachment in quoted message" in str(event.message_str or ""):
+                has_img = True
+        except Exception:
+            pass
+    return (quoted, mine, has_img)
+
+
+def gc_quote_note(mine):
+    """引用里那张图是谁发的 —— 只给方向，不写台词。"""
+    if mine:
+        return ("⚠️ 本条消息**引用的是你自己之前那条（带图或表情包）**：那张图是**你自己发的**，"
+                "不是别人刚发给你的新图 —— 别当新图去认、去接、去问这是什么。")
+    return ("⚠️ 本条消息**引用的是别人以前发的图**：那是旧图，不是这一轮新发的，"
+            "别当成刚收到的图。")
+
+
 class GroupctxMixin:
     def setup(self, context):
         c = cfg.section("groupctx")
@@ -146,8 +183,12 @@ class GroupctxMixin:
                                   str(gid), self.gc_count, self.gc_window,
                                   self.gc_tail)
             lines = []
+            q_quoted = q_mine = q_img = False
             if self.gc_mark:
                 lines += ["", "【本条消息的定向性】", gc_head(event)]
+                q_quoted, q_mine, q_img = gc_quote(event)
+                if q_quoted and q_img:
+                    lines.append(gc_quote_note(q_mine))
             if recs:
                 lines.append("")
                 lines.append("【本群最近的真实聊天记录（用于理解上下文，不要逐条回应，也不要复述）】")
@@ -158,7 +199,9 @@ class GroupctxMixin:
                 return
             request.system_prompt = ((request.system_prompt or "") + chr(10)
                                      + chr(10).join(lines))
-            logger.info("[mindscape_groupctx] 注入 self=%s 群=%s 历史=%d 条",
-                        event.get_self_id(), gid, len(recs))
+            logger.info("[mindscape_groupctx] 注入 self=%s 群=%s 历史=%d 条 引用=%s",
+                        event.get_self_id(), gid, len(recs),
+                        ("自己发的图" if (q_quoted and q_img and q_mine) else
+                         "别人的图" if (q_quoted and q_img) else "无"))
         except Exception as exc:
             logger.warning("[mindscape_groupctx] 注入失败: %s", str(exc)[:120])

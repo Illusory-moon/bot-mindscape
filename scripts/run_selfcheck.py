@@ -1755,14 +1755,32 @@ def check_regressions():
         h_other = GC.gc_head(_GE())
         head_ok = ("@ 了你本人" in h_at and "引用了你说过的话" in h_reply
                    and "提到了你的名字" in h_mention and "不是对你说的" in h_other)
+
+        # R35b: 引用里的图必须说清是谁发的 —— 实测有人引用了她自己发的表情包，
+        #       她回头对着自己的图说「诶，这不是火花花嘛~」（框架把引用里的图
+        #       渲染进了本条正文，模型当成了新收到的图）。
+        class Image:
+            pass
+
+        # 类名必须正好是 "Reply"（gc_quote 按类名认组件），所以用 type() 造
+        ReplyOther = type("Reply", (), {"sender_id": "200000002", "chain": [Image()]})
+        ReplyMine = type("Reply", (), {"sender_id": "100000001", "chain": [Image()]})
+
+        q_mine = GC.gc_quote(_GE([ReplyMine()]))
+        q_other = GC.gc_quote(_GE([ReplyOther()]))
+        q_none = GC.gc_quote(_GE())
+        quote_ok = (q_mine == (True, True, True) and q_other == (True, False, True)
+                    and q_none == (False, False, False)
+                    and "你自己发的" in GC.gc_quote_note(True)
+                    and "别人以前发的" in GC.gc_quote_note(False))
         inst = GC.GroupctxMixin()
         inst.setup(None)
         default_off = inst.gc_on is False
-        good = tail_ok and head_ok and default_off
+        good = tail_ok and head_ok and quote_ok and default_off
         (ok if good else bad)(
-            "R35 群上下文补齐（尾读等价 / 定向性四态 / 默认关）",
-            "尾读等价=%s(%d条) 定向性=%s 默认关=%s"
-            % (tail_ok, len(got), head_ok, default_off))
+            "R35 群上下文补齐（尾读等价 / 定向性四态 / 引用图归属 / 默认关）",
+            "尾读等价=%s(%d条) 定向性=%s 引用图=%s 默认关=%s"
+            % (tail_ok, len(got), head_ok, quote_ok, default_off))
     except Exception as e:
         bad("R35 群上下文补齐", "%s: %s" % (type(e).__name__, str(e)[:140]))
     # R36: 句尾去句号 —— 末尾留空、句中改逗号，且**绝不碰 ASCII 的「.」**
