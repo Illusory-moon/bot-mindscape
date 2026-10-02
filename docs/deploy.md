@@ -109,8 +109,9 @@ groupctx:
 */10 * * * * MINDSCAPE_CONFIG=/path/to/config.yaml \
   python /path/to/bot-mindscape/plugins/mindscape_diary.py
 
-# 每 15 分钟清理会话历史（防「假死」）
-*/15 * * * * MINDSCAPE_CONFIG=/path/to/config.yaml \
+# 每 1~5 分钟清理会话历史（脱掉内联图 + 防「假死」）
+#   ⚠️ 这个窗口越长，中间那几轮就越可能带着几百 KB 的 base64 去请求模型
+* * * * * MINDSCAPE_CONFIG=/path/to/config.yaml \
   python /path/to/bot-mindscape/plugins/mindscape_janitor.py
 ```
 

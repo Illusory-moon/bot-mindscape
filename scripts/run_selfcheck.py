@@ -182,9 +182,13 @@ def check_functions():
     except Exception as e:
         bad("recall 加载", str(e)[:100])
 
-    # janitor
+    # janitor：先「脱图」再「删行」—— 脱图保住会话上下文，删行只是兜底。
+    #      实测事故（2026-10-02）：群里一张图以 base64 落进历史，单条 48 万字 →
+    #      那个会话每轮请求都带着它（≈12 万 token，顶穿上下文窗口）。
+    #      老行为是整行删掉（连会话上下文一起没），现在只脱那坨数据。
     try:
         import sqlite3
+        import json as _json
         jn = load("mindscape_janitor")
         db = os.path.join(HERE, "_selfcheck.db")
         if os.path.exists(db):
@@ -192,10 +196,26 @@ def check_functions():
         con = sqlite3.connect(db)
         con.execute("CREATE TABLE conversations (content TEXT)")
         con.execute("INSERT INTO conversations VALUES (?)", ("x" * 100,))
+        payload = _json.dumps([{"role": "user", "content": [
+            {"type": "text", "text": "看这张图"},
+            {"type": "image_url", "image_url":
+             {"url": "data:image/png;base64," + "A" * 5000}},
+        ]}], ensure_ascii=False)
+        con.execute("INSERT INTO conversations VALUES (?)", (payload,))
         con.execute("INSERT INTO conversations VALUES (?)", ("data:image/png;base64,AAAA",))
         con.commit(); con.close()
-        n_img, n_big, b, a = jn.clean(db, "conversations", "content", 2.0)
-        (ok if n_img == 1 else bad)("janitor.clean", "删图片会话=%d" % n_img)
+        n_srow, n_shit, n_img, n_big, b, a = jn.clean(db, "conversations", "content", 2.0)
+        con = sqlite3.connect(db)
+        rows = [r[0] for r in con.execute("SELECT content FROM conversations")]
+        con.close()
+        kept_ctx = any("看这张图" in r for r in rows)
+        no_media = not any("data:image" in r for r in rows)
+        good = (n_srow == 1 and n_shit == 1 and n_img == 1
+                and kept_ctx and no_media and len(rows) == 2)
+        (ok if good else bad)(
+            "janitor.clean 先脱图再删行",
+            "脱图 %d 行/%d 处 | 删图片行 %d | 会话保留=%s 无 base64=%s | 剩 %d 行"
+            % (n_srow, n_shit, n_img, kept_ctx, no_media, len(rows)))
         os.remove(db)
     except Exception as e:
         bad("janitor 加载", str(e)[:100])
