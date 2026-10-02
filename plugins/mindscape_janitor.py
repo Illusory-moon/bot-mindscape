@@ -70,11 +70,53 @@ def _safe_ident(name, fallback):
 DATA_URL_RE = re.compile(r"data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+")
 
 
+def _strip_parts(msgs):
+    """把消息里内联的 base64 图片换成占位符，**返回替换处数**。
+
+    ⚠️ 关键：`image_url` 段不能只把 url 换掉 —— 那样 provider 会直接 400
+    （`Unsupported image_url format`），整个会话从此每轮都失败、她一句话都说不出来。
+    实测踩过（2026-10-02：线上群会话被旧版正则改坏，她静默了两轮）。
+    所以**整段换成文字段**，同时顺手修掉历史上已经被改坏的段。
+    """
+    n = 0
+    for m in (msgs or []):
+        if not isinstance(m, dict):
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            new = DATA_URL_RE.sub("[图片]", c)
+            if new != c:
+                m["content"] = new
+                n += 1
+            continue
+        if not isinstance(c, list):
+            continue
+        out = []
+        for part in c:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                iu = part.get("image_url")
+                url = iu.get("url") if isinstance(iu, dict) else None
+                bad = (isinstance(url, str)
+                       and not (url.startswith("http") or url.startswith("data:image")))
+                if isinstance(url, str) and (url.startswith("data:image") or bad):
+                    out.append({"type": "text", "text": "[图片]"})
+                    n += 1
+                    continue
+            if isinstance(part, dict):
+                for k, v in list(part.items()):
+                    if isinstance(v, str) and "data:image" in v:
+                        part[k] = DATA_URL_RE.sub("[图片]", v)
+                        n += 1
+            out.append(part)
+        m["content"] = out
+    return n
+
+
 def strip_media(con, table, column):
-    """把记录里内联的 base64 图片就地换成占位符。
+    """把记录里内联的 base64 图片换成占位符（保住会话上下文）。
 
     返回 (改了几行, 替换几处, 砍掉几字)。
-    只改「改完仍是合法 JSON」的行 —— 会话历史是 JSON 数组，改成坏 JSON 比不改更糟。
+    改完必须仍是合法 JSON —— 坏 JSON 比不改更糟，所以解析失败就跳过、留给删行兜底。
     """
     rows = list(con.execute(
         "SELECT rowid, %s FROM %s WHERE %s LIKE '%%data:image%%'" % (column, table, column)
@@ -83,17 +125,18 @@ def strip_media(con, table, column):
     for rid, content in rows:
         if not isinstance(content, str) or "data:image" not in content:
             continue
-        hits = DATA_URL_RE.findall(content)
-        if not hits:
-            continue
-        new = DATA_URL_RE.sub("[图片]", content)
         try:
-            json.loads(new)
+            msgs = json.loads(content)
         except Exception:
-            continue          # 改不动就留给下面「删行」兜底
+            continue          # 解析不了就别碰，留给下面「删行」兜底
+        hits = DATA_URL_RE.findall(content)      # 先量一下砍掉多少（按原始文本算）
+        n = _strip_parts(msgs)
+        if not n:
+            continue
+        new = json.dumps(msgs, ensure_ascii=False)
         con.execute("UPDATE %s SET %s = ? WHERE rowid = ?" % (table, column), (new, rid))
         n_row += 1
-        n_hit += len(hits)
+        n_hit += n
         n_chars += sum(len(h) for h in hits)
     return (n_row, n_hit, n_chars)
 

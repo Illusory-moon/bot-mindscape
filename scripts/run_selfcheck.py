@@ -216,6 +216,23 @@ def check_functions():
             "janitor.clean 先脱图再删行",
             "脱图 %d 行/%d 处 | 删图片行 %d | 会话保留=%s 无 base64=%s | 剩 %d 行"
             % (n_srow, n_shit, n_img, kept_ctx, no_media, len(rows)))
+        # ⚠️ 脱图后**不能留下非法的 image_url 段**：provider 会直接 400
+        #    （Unsupported image_url format），那个会话从此每轮都失败、一句话都说不出来。
+        #    实测踩过（2026-10-02 18:5x）。所以断言「换成了文字段」。
+        fmt_ok = False
+        for r in rows:
+            if "看这张图" not in r:
+                continue
+            for m in _json.loads(r):
+                c = m.get("content") if isinstance(m, dict) else None
+                if not isinstance(c, list):
+                    continue
+                for part in c:
+                    if (isinstance(part, dict) and part.get("type") == "text"
+                            and part.get("text") == "[图片]"):
+                        fmt_ok = True
+        (ok if fmt_ok else bad)("janitor 脱图后不留非法 image_url 段",
+                              "换成文字段=%s" % fmt_ok)
         os.remove(db)
     except Exception as e:
         bad("janitor 加载", str(e)[:100])
