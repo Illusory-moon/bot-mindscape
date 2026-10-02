@@ -1772,7 +1772,8 @@ def check_regressions():
         quote_ok = (q_mine == (True, True, True) and q_other == (True, False, True)
                     and q_none == (False, False, False)
                     and "你自己发的" in GC.gc_quote_note(True)
-                    and "别人以前发的" in GC.gc_quote_note(False))
+                    and "别人发的" in GC.gc_quote_note(False)
+                    and "不用对着它认图" in GC.gc_quote_note(True))
         inst = GC.GroupctxMixin()
         inst.setup(None)
         default_off = inst.gc_on is False
