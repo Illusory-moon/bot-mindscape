@@ -1,6 +1,10 @@
 # 配置（含密钥）
 config/config.yaml
 config/config.local.yaml
+config/managed.yaml
+config/managed-wake.json
+config/managed.sync.json
+config/managed*.bak-*
 secrets/
 
 # 运行时数据（记忆 / 图库 / 日志）

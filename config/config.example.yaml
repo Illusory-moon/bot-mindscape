@@ -364,6 +364,10 @@ ui:
     remote_dir: "/opt/your-bot/data/stickers"
     remote_index: "stickers_index.json"   # 远端索引文件名
     timeout: 25
+    # Web 管理台完整配置同步（远端路径可按实际部署覆盖）
+    remote_config: "/opt/astrbot/data/plugin_data/astrbot_plugin_mindscape/config.yaml"
+    remote_wake: "/opt/astrbot/data/auto_wake_cfg.json"
+    # restart_command: "docker restart your-bot-container"  # 同步后自动生效
 # ── 前置黑名单（可选）──
 # 命中的人：消息在【事件最早阶段】就被 stop_event 拦掉 ——
 # 不回复、不采集图片、不进任何插件的视野。

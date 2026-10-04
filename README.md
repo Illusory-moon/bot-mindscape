@@ -342,6 +342,12 @@ silence:                   # 沉默的权利：不想说话时**真的什么都�
 
 在 `ui.sync` 里填好服务器信息后，本地管理台会多出「拉取 / 推送」按钮，也可以在命令行直接用：
 
+管理台配置页分为「规矩 / 记忆 / 认知 / 表达 / 运行」五个标签。表单修改自动保存到本机的
+`config/managed.yaml` 与 `config/managed-wake.json`，点击「同步服务器」才上传。
+首次打开会从服务器读取完整配置；远端在此期间有改动则拒绝覆盖。上传前两份远端文件分别备份，
+也可在 `ui.sync.restart_command` 指定同步成功后的重启命令。
+`remote_config` 与 `remote_wake` 可覆盖默认的 AstrBot 路径。图库同步仍使用下面的独立命令。
+
 ```bash
 python scripts/mindscape_sync.py status  # 看两边差异
 python scripts/mindscape_sync.py pull    # 服务器 -> 本地

@@ -4,7 +4,7 @@
 依赖：PyYAML + Python 标准库（http.server）。默认只监听 127.0.0.1。
 
 功能：
-  1. 配置编辑（YAML 原文，保存前校验语法）
+  1. 分区配置表单（本地自动保存，检查远端版本后同步）
   2. 图库浏览 / 改名 / 改标签 / 移除
   3. 与远程服务器双向同步（需要配置 ui.sync，见 mindscape_sync.py）
 
@@ -37,6 +37,11 @@ try:
     import mindscape_webedit as edit
 except Exception:
     edit = None
+
+try:
+    import mindscape_webconfig as managed
+except Exception:
+    managed = None
 
 TOKEN = secrets.token_urlsafe(16)
 ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
@@ -136,6 +141,10 @@ const K_TAB = 'mindscape.tab';
 const K_CFG = 'mindscape.draft.config';
 const K_ITEM = 'mindscape.draft.item.';
 let CUR = null;
+let CONFIG = null;
+let BOT = null;
+let SAVE_QUEUE = Promise.resolve();
+const PENDING_SAVES = new Map();
 
 // 草稿存取：写不进去也只是丢草稿，绝不能让功能挂掉
 function ls(k, v){
@@ -157,6 +166,103 @@ function show(i, btn){
 async function post(url, body){
   const r = await fetch(url, {method:'POST', headers:{'X-Mindscape-Token':TK}, body:body});
   return await r.json();
+}
+
+function configStatus(message, error=false){
+  const el = document.getElementById('managed-msg');
+  el.textContent = message;
+  el.classList.toggle('error', error);
+}
+async function loadManaged(){
+  configStatus('正在读取配置...');
+  try {
+    const j = await post('/api/managed/view', '');
+    if (!j.ok) throw Error(j.error);
+    CONFIG = j.data;
+    const select = document.getElementById('bot-select');
+    select.replaceChildren();
+    CONFIG.bots.forEach(b => {
+      const option = document.createElement('option');
+      option.value = b.id; option.textContent = b.name + ' · ' + b.id;
+      select.append(option);
+    });
+    BOT = CONFIG.bots.some(b => b.id === BOT) ? BOT : CONFIG.bots[0]?.id;
+    select.value = BOT || '';
+    renderFields();
+    configStatus(CONFIG.dirty ? '已保存到本机，等待同步服务器' : '本机与服务器一致');
+  } catch(e) { configStatus('读取失败：' + e.message, true); }
+}
+function renderFields(){
+  document.querySelectorAll('.config-section').forEach(section => {
+    section.replaceChildren();
+    const tab = section.dataset.tab;
+    const fields = (CONFIG?.fields || []).filter(f => f.tab === tab);
+    fields.forEach(f => {
+      const row = document.createElement('div'); row.className = 'field';
+      const text = document.createElement('div');
+      const title = document.createElement('label'); title.textContent = f.label;
+      const hint = document.createElement('small'); hint.textContent = f.hint || '';
+      text.append(title, hint);
+      const input = document.createElement(f.type === 'lines' ? 'textarea' : 'input');
+      const key = f.source + ':' + f.path;
+      input.id = 'setting-' + f.source + '-' + f.path.replaceAll('.', '-');
+      title.htmlFor = input.id;
+      const owner = f.scope === 'bot' ? BOT : 'global';
+      let value = CONFIG.values[owner]?.[key];
+      if (f.type === 'bool' || f.type === 'target') {
+        input.type = 'checkbox'; input.checked = !!value;
+      } else if (f.type === 'int' || f.type === 'prob') {
+        input.type = 'number'; input.min = '0';
+        input.max = f.type === 'prob' ? '100' : '1000000';
+        input.step = f.type === 'prob' ? 'any' : '1';
+        input.required = true;
+        input.value = value ?? '';
+      } else { input.value = value ?? ''; input.rows = 4; }
+      if (f.scope === 'bot' && !BOT) input.disabled = true;
+      let timer;
+      const save = () => {
+        const v = (f.type === 'bool' || f.type === 'target') ? input.checked
+          : f.type === 'int' ? Number(input.value)
+          : f.type === 'prob' ? Number(input.value) : input.value;
+        if (!input.checkValidity()) { configStatus('请检查「' + f.label + '」的数值', true); return; }
+        configStatus('正在保存到本机...');
+        SAVE_QUEUE = SAVE_QUEUE.then(async () => {
+          const j = await post('/api/managed/change', JSON.stringify({source:f.source,path:f.path,bot:owner,value:v}));
+          if (!j.ok) throw Error(j.error);
+          CONFIG.dirty = j.dirty;
+          CONFIG.values[owner][key] = v;
+          configStatus('已保存到本机，等待同步服务器');
+        }).catch(e => configStatus('保存失败：' + e.message, true));
+      };
+      input.addEventListener(f.type === 'bool' || f.type === 'target' ? 'change' : 'input', () => {
+        clearTimeout(timer);
+        PENDING_SAVES.delete(input);
+        timer = setTimeout(() => { PENDING_SAVES.delete(input); save(); },
+                           f.type === 'bool' || f.type === 'target' ? 0 : 500);
+        PENDING_SAVES.set(input, () => { clearTimeout(timer); save(); });
+      });
+      row.append(text, input); section.append(row);
+    });
+  });
+}
+function configTab(n, button){
+  document.querySelectorAll('.config-section').forEach((el,i) => el.classList.toggle('on',i===n));
+  document.querySelectorAll('.config-tabs button').forEach(el => el.classList.remove('on'));
+  button.classList.add('on');
+}
+async function configSync(action){
+  for (const flush of PENDING_SAVES.values()) flush();
+  PENDING_SAVES.clear();
+  await SAVE_QUEUE;
+  if (action === 'pull' && CONFIG?.dirty && !confirm('本机有未同步的修改，重新读取会覆盖它们。继续吗？')) return;
+  if (action === 'push' && !CONFIG?.dirty) { configStatus('本机与服务器一致'); return; }
+  configStatus(action === 'push' ? '正在同步服务器...' : '正在从服务器读取...');
+  try {
+    const j = await post('/api/managed/' + action, '');
+    if (!j.ok) throw Error(j.error);
+    await loadManaged();
+    configStatus(j.message);
+  } catch(e) { configStatus('同步失败：' + e.message, true); }
 }
 
 // ── 配置页：边打边存草稿，浏览器丢标签页 / 误刷新都不会白改 ──
@@ -259,9 +365,12 @@ document.getElementById('modal').addEventListener('click', e => { if (e.target.i
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 // 真有没保存的东西时，拦一下刷新/关闭
 window.addEventListener('beforeunload', e => {
-  if (cfgDirty() || CUR){ e.preventDefault(); e.returnValue = ''; }
+  if (cfgDirty() || CUR || document.getElementById('managed-msg').textContent === '正在保存到本机...'){
+    e.preventDefault(); e.returnValue = '';
+  }
 });
 cfgRestore();
+loadManaged();
 async function rmSeen(btn){
   const tr = btn.closest('tr');
   const j = await post('/api/seen/remove', JSON.stringify({key: tr.dataset.k}));
@@ -285,40 +394,71 @@ show(parseInt(ls(K_TAB) || '0', 10) || 0, null);
 
 PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <title>bot-mindscape 管理台</title><style>
-body{{background:#14121a;color:#eee;font-family:system-ui,sans-serif;margin:0;padding:20px}}
-h1{{font-size:18px;color:#e85a9b;margin:0 0 12px}}
-.tabs button{{background:#241f30;color:#bbb;border:1px solid #332c42;padding:6px 14px;
+body{{background:#14181b;color:#edf0ef;font-family:system-ui,sans-serif;margin:0;padding:24px;line-height:1.45}}
+body::before{{content:'';display:block;height:4px;background:linear-gradient(90deg,#e76783,#f5b451,#65c4a9);position:fixed;top:0;left:0;right:0}}
+h1{{font-size:20px;color:#f3f5f3;margin:0 0 18px}}
+button,input,textarea,select{{font:inherit}}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{{outline:2px solid #f5b451;outline-offset:2px}}
+.tabs button{{background:#242b2e;color:#b8c5c3;border:1px solid #3d4a4d;padding:6px 14px;
 margin-right:6px;border-radius:6px;cursor:pointer}}
-.tabs button.on{{background:#e85a9b;color:#fff;border-color:#e85a9b}}
+.tabs button.on{{background:#cb536e;color:#fff;border-color:#cb536e}}
 .bar{{margin:12px 0}}
-.bar button{{background:#2c2438;color:#ddd;border:1px solid #3d3450;padding:6px 12px;
+.bar button{{background:#293337;color:#ddd;border:1px solid #48585b;padding:6px 12px;
 border-radius:6px;cursor:pointer;margin-right:6px}}
-.bar button:hover{{border-color:#e85a9b}}
+.bar button:hover{{border-color:#e76783}}
 .panel{{display:none}}.panel.on{{display:block}}
-textarea{{width:100%;height:52vh;background:#1b1823;color:#ddd;border:1px solid #332c42;
+.config-head{{display:flex;align-items:end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:18px 0}}
+.config-head h2{{font-size:19px;margin:0 0 3px}}
+.config-head p{{font-size:13px;color:#aab5b3;margin:0}}
+.config-head select{{background:#242b2e;color:#fff;border:1px solid #4e5e60;border-radius:5px;padding:8px;min-width:180px}}
+.config-tabs{{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid #394246;margin:0 0 14px}}
+.config-tabs button{{white-space:nowrap;background:transparent;color:#aebbb9;border:0;border-bottom:2px solid transparent;padding:10px 18px;cursor:pointer}}
+.config-tabs button.on{{color:#fff;border-bottom-color:#e76783}}
+.config-section{{display:none;max-width:860px}}
+.config-section.on{{display:block}}
+.field{{display:grid;grid-template-columns:minmax(190px,1fr) minmax(190px,1.1fr);gap:22px;align-items:center;padding:15px 2px;border-bottom:1px solid #303b3f}}
+.field label{{display:block;font-size:14px;font-weight:600}}
+.field small{{display:block;color:#9baaa8;font-size:12px;margin-top:4px}}
+.field input:not([type=checkbox]),.field textarea{{width:100%;box-sizing:border-box;background:#20282b;color:#fff;border:1px solid #48585b;border-radius:5px;padding:8px 10px}}
+.field textarea{{height:90px;resize:vertical;font-family:inherit}}
+.field input[type=checkbox]{{appearance:none;width:42px;height:24px;background:#536163;border-radius:14px;cursor:pointer;position:relative}}
+.field input[type=checkbox]::after{{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:white;transition:left .15s}}
+.field input[type=checkbox]:checked{{background:#51a98c}}
+.field input[type=checkbox]:checked::after{{left:21px}}
+.config-actions{{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 0}}
+.config-actions button{{background:#334044;color:#fff;border:1px solid #55676a;padding:9px 14px;border-radius:5px;cursor:pointer}}
+.config-actions button.primary{{background:#cb536e;border-color:#cb536e}}
+.config-actions button:hover{{filter:brightness(1.14)}}
+.config-actions .msg{{margin:0}}
+.msg.error{{color:#ff9c9c}}
+.advanced{{max-width:860px;margin:24px 0;border-top:1px solid #394246;padding-top:12px;color:#abb7b4}}
+.advanced summary{{cursor:pointer}}
+.advanced textarea{{margin-top:12px}}
+@media(max-width:600px){{body{{padding:16px}}.field{{grid-template-columns:1fr;gap:8px}}.config-tabs button{{padding:10px 12px}}}}
+textarea{{width:100%;height:52vh;background:#20282b;color:#ddd;border:1px solid #48585b;
 border-radius:8px;padding:12px;font-family:monospace;font-size:13px;box-sizing:border-box}}
-.btn{{background:#e85a9b;color:#fff;border:0;padding:8px 18px;border-radius:6px;cursor:pointer;margin-top:8px}}
+.btn{{background:#cb536e;color:#fff;border:0;padding:8px 18px;border-radius:6px;cursor:pointer;margin-top:8px}}
 .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}}
-figure{{margin:0;background:#1e1b26;border-radius:10px;overflow:hidden;border:1px solid #2e2a3a}}
-figure img{{width:100%;max-height:190px;object-fit:contain;background:#0d0b12;display:block}}
-figcaption{{font-size:12px;padding:8px;color:#9a93ad}}
-.tag{{display:inline-block;background:#2a2436;color:#b9a8d0;border-radius:4px;padding:1px 6px;
+figure{{margin:0;background:#20282b;border-radius:7px;overflow:hidden;border:1px solid #39474a}}
+figure img{{width:100%;max-height:190px;object-fit:contain;background:#101718;display:block}}
+figcaption{{font-size:12px;padding:8px;color:#aebbb9}}
+.tag{{display:inline-block;background:#334044;color:#c8d6d3;border-radius:4px;padding:1px 6px;
 margin:0 3px 3px 0;font-size:10px}}
 .row{{margin-top:6px}}
-.row button{{font-size:11px;padding:3px 8px;margin-right:4px;background:#2c2438;color:#ccc;
-border:1px solid #3d3450;border-radius:4px;cursor:pointer}}
+.row button{{font-size:11px;padding:3px 8px;margin-right:4px;background:#293337;color:#ccc;
+border:1px solid #48585b;border-radius:4px;cursor:pointer}}
 .msg{{color:#7dd87d;font-size:13px;margin-left:10px}}
-pre{{background:#1b1823;border:1px solid #332c42;border-radius:8px;padding:12px;overflow:auto;max-height:60vh}}
+pre{{background:#20282b;border:1px solid #48585b;border-radius:7px;padding:12px;overflow:auto;max-height:60vh}}
 h2.cat{{font-size:14px;color:#c9bfe0;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid #2e2a3a}}
 h2.cat:first-child{{margin-top:4px}}
 h2.cat span{{color:#6f6880;font-weight:400;font-size:12px;margin-left:8px}}
-.hint{{color:#8b83a0;font-size:12px;line-height:1.8;background:#1b1823;border:1px solid #332c42;
-border-radius:8px;padding:10px 12px;margin:10px 0}}
+.hint{{color:#adbbb8;font-size:12px;line-height:1.8;background:#20282b;border:1px solid #39474a;
+border-radius:7px;padding:10px 12px;margin:10px 0}}
 code{{background:#2a2436;padding:1px 6px;border-radius:4px;color:#e9b7d4;font-size:12px}}
 .modal{{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;
 align-items:center;justify-content:center}}
 .modal.on{{display:flex}}
-.mbox{{background:#1e1b26;border:1px solid #3d3450;border-radius:12px;padding:18px;
+.mbox{{background:#20282b;border:1px solid #48585b;border-radius:7px;padding:18px;
 width:470px;max-width:92vw;max-height:90vh;overflow:auto}}
 .mbox h3{{margin:0 0 12px;color:#e85a9b;font-size:15px}}
 .mbox img{{width:100%;max-height:180px;object-fit:contain;background:#0d0b12;border-radius:8px}}
@@ -347,9 +487,30 @@ table.seen button:hover{{border-color:#e85a9b}}
 </div>
 
 <div class="panel on">
+<div class="config-head"><div><h2>配置</h2><p>调整后自动保存到本机，确认无误再同步到服务器</p></div>
+<label>正在设置 <select id="bot-select" onchange="BOT=this.value;renderFields()"></select></label></div>
+<div class="config-tabs">
+<button class="on" onclick="configTab(0,this)">规矩</button>
+<button onclick="configTab(1,this)">记忆</button>
+<button onclick="configTab(2,this)">认知</button>
+<button onclick="configTab(3,this)">表达</button>
+<button onclick="configTab(4,this)">运行</button>
+</div>
+<div class="config-section on" data-tab="规矩"></div>
+<div class="config-section" data-tab="记忆"></div>
+<div class="config-section" data-tab="认知"></div>
+<div class="config-section" data-tab="表达"></div>
+<div class="config-section" data-tab="运行"></div>
+<div class="config-actions">
+<button class="primary" onclick="configSync('push')">同步服务器</button>
+<button onclick="configSync('pull')">重新读取服务器</button>
+<span class="msg" id="managed-msg"></span>
+</div>
+<p class="hint">{restartmsg}</p>
+<details class="advanced"><summary>高级：本机连接与图库配置</summary>
 <textarea id="cfg">{config}</textarea>
-<button class="btn" onclick="saveCfg()">保存配置</button>
-<span class="msg" id="cmsg"></span>
+<button class="btn" onclick="saveCfg()">保存本机配置</button>
+<span class="msg" id="cmsg"></span></details>
 </div>
 
 <div class="panel">
@@ -490,6 +651,10 @@ def render():
 
     sync_ok = bool(edit) and edit.sync_available()
     syncmsg = "" if sync_ok else "（未配置 ui.sync，同步功能不可用）"
+    sync_settings = ((cfg.section("ui") or {}).get("sync") or {}) if cfg else {}
+    restartmsg = ("同步后会重启 bot；约 30 秒无法收消息。服务器配置与唤醒设置会分别备份。"
+                  if sync_settings.get("restart_command") else
+                  "同步后需手动重启 bot 才会生效。服务器配置与唤醒设置会分别备份。")
     srows = seen_rows()
     stale_n = sum(1 for r in srows if not r["live"])
     seenrows = "".join(
@@ -500,6 +665,7 @@ def render():
     ) or '<tr><td colspan="3" style="color:#6f6880">去重表是空的</td></tr>'
     page = PAGE.format(config=html.escape(raw), gallery=gallery, memory=html.escape(memory),
                        token=TOKEN, syncmsg=html.escape(syncmsg),
+                       restartmsg=html.escape(restartmsg),
                        gdir=html.escape(stickers_dir()), gcount=gcount,
                        seencount=len(srows), stale=stale_n, seenrows=seenrows)
     # JS 走占位符注入，不进 str.format —— 否则 JS 里每个花括号都要手写双份
@@ -575,6 +741,30 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
         if body is None:
             self._json({"ok": False, "error": "请求体过大"}, 413)
+            return
+
+        if path.startswith("/api/managed/"):
+            if not managed:
+                self._json({"ok": False, "error": "配置编辑模块不可用（需要 PyYAML）"})
+                return
+            try:
+                action = path.rsplit("/", 1)[-1]
+                if action == "view":
+                    self._json({"ok": True, "data": managed.snapshot()})
+                elif action == "change":
+                    d = json.loads(body or "{}")
+                    dirty = managed.change(d.get("source"), d.get("path"),
+                                           str(d.get("bot") or ""), d.get("value"))
+                    self._json({"ok": True, "dirty": dirty})
+                elif action == "pull":
+                    managed.pull()
+                    self._json({"ok": True, "message": "已读取服务器配置"})
+                elif action == "push":
+                    self._json({"ok": True, "message": managed.push()})
+                else:
+                    self._json({"ok": False, "error": "未知操作"}, 404)
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)[:180]})
             return
 
         if path == "/api/config":
