@@ -2500,36 +2500,43 @@ def mn_take_pending(pending, key, now, ttl=MN_PENDING_TTL):
     return (str(qq), str(name or ""))
 
 
-    @filter.on_decorating_result(priority=MN_HOOK_PRIORITY)
-    async def mn_attach(self, event: AstrMessageEvent):
-        """把排队的 @ 插到这条回复的**最前面**；她这轮没话要说，就单独把 @ 发出去。
+MN_PENDING = {}
 
-        为什么要挂到最前面而不是工具自己发一条：工具自己发消息 = 模型认为「事办完了」，
-        于是后面不再说话 —— 实测群里看到的就是一个干巴巴的纯 @（23:07/23:09/23:11 三次都是）。
-        """
-        try:
-            if not self.mn_pending:
-                return
-            key = "%s|%s" % (event.get_self_id(), event.get_group_id())
-            logger.info("[mindscape_mention] 钩子进入 key=%s 排队=%s",
-                        key, list(self.mn_pending.keys()))
-            item = mn_take_pending(self.mn_pending, key, time.time())
-            if not item:
-                logger.info("[mindscape_mention] 键对不上，丢弃排队（%s）", key)
-                return
-            qq, name = item
-            result = event.get_result()
-            chain = getattr(result, "chain", None) if result is not None else None
-            if chain:
-                chain.insert(0, At(qq=qq, name=name))
-                logger.info("[mindscape_mention] @ 挂在回复前 self=%s qq=%s（带正文）",
-                            event.get_self_id(), qq)
-            else:
-                event.set_result(MessageEventResult().at(name=name, qq=qq))
-                logger.info("[mindscape_mention] @ 单独发 self=%s qq=%s（这轮没正文）",
-                            event.get_self_id(), qq)
-        except Exception as exc:
-            logger.warning("[mindscape_mention] 挂 @ 失败: %s", str(exc)[:100])
+
+@filter.on_decorating_result(priority=MN_HOOK_PRIORITY)
+async def mn_attach_hook(*args, **kwargs):
+    """把排队的 @ 插到这条回复的**最前面**；这轮没正文就单独发一个 @。
+
+    为什么用模块级钩子而不是类方法：类方法的 decorating 钩子在本部署里**没被调用**
+    （同插件另外四个类方法钩子都跑得好好的，排查过 stop_event / 流式输出 / 注册行都在），
+    模块级注册是 AstrBot 最标准的那条路，先换过来把功能做通。
+    """
+    try:
+        event = None
+        for a in args:
+            if hasattr(a, "get_self_id"):
+                event = a
+                break
+        if event is None or not MN_PENDING:
+            return
+        key = "%s|%s" % (event.get_self_id(), event.get_group_id())
+        item = mn_take_pending(MN_PENDING, key, time.time())
+        if not item:
+            logger.info("[mindscape_mention] 键对不上，丢弃排队（%s）", key)
+            return
+        qq, name = item
+        result = event.get_result()
+        chain = getattr(result, "chain", None) if result is not None else None
+        if chain:
+            chain.insert(0, At(qq=qq, name=name))
+            logger.info("[mindscape_mention] @ 挂在回复前 self=%s qq=%s（带正文）",
+                        event.get_self_id(), qq)
+        else:
+            event.set_result(MessageEventResult().at(name=name, qq=qq))
+            logger.info("[mindscape_mention] @ 单独发 self=%s qq=%s（这轮没正文）",
+                        event.get_self_id(), qq)
+    except Exception as exc:
+        logger.warning("[mindscape_mention] 挂 @ 失败: %s", str(exc)[:100])
 # ==================================================================
 # 命名空间：让 cfg.xxx() / core.xxx() 这类调用在合并后依然可用
 # ==================================================================
@@ -3820,10 +3827,17 @@ class MentionMixin:
     def setup(self, context):
         self.mn_on, self.mn_targets = mn_load_config()
         self.mn_last = {}
-        self.mn_pending = {}
         logger.info("[mindscape_mention] loaded | enabled=%s | targets=%s | 节流=%ds",
                     self.mn_on, self.mn_targets or "全部", MN_THROTTLE)
         scope_warn(logger, "mindscape_mention", self.mn_targets, self.mn_on)
+        try:      # 诊断：到底注册了哪些 decorating 钩子、什么顺序
+            import astrbot.core.star.star_handler as _sh
+            _hs = [(h.handler_name, getattr(h, "extras_configs", {}).get("priority"))
+                   for h in _sh.star_handlers_registry.get_handlers_by_event_type(
+                       _sh.EventType.OnDecoratingResultEvent, only_activated=False)]
+            logger.info("[mindscape_mention] decorating 钩子清单(%d): %s", len(_hs), _hs)
+        except Exception as _exc:
+            logger.warning("[mindscape_mention] 钩子清单读取失败: %s", str(_exc)[:120])
 
     def mn_hit(self, event):
         return self.mn_on and scope_hit(self.mn_targets, event.get_self_id())
@@ -3905,9 +3919,9 @@ class MentionMixin:
         if not qq:
             return "群里没找到「%s」这个人" % who[:20]
         self.mn_last[key] = now
-        self.mn_pending[key] = (qq, name, now)
-        logger.info("[mindscape_mention] 点名排队 self=%s 群=%s who=%s -> qq=%s key=%s",
-                    ev.get_self_id(), gid, who[:16], qq, key)
+        MN_PENDING[key] = (qq, name, now)
+        logger.info("[mindscape_mention] 点名排队 self=%s 群=%s who=%s -> qq=%s key=%s obj=%s id=%s",
+                    ev.get_self_id(), gid, who[:16], qq, key, type(self).__name__, id(self))
         return "点名排上了：它会加在你**这条回复的最前面** —— 接着把想说的话写完就行；不想多说，那就只发这个 @。"
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
