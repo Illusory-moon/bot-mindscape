@@ -1774,16 +1774,99 @@ def check_regressions():
                     and "你自己发的" in GC.gc_quote_note(True)
                     and "别人发的" in GC.gc_quote_note(False)
                     and "不用对着它认图" in GC.gc_quote_note(True))
+
+        # R35c: 只加系统提示压不住「有人给我发了张图」的直觉（2026-10-03 22:50 实测）
+        #       → 请求正文里那行 quoted 标记必须被就地改写
+        class _TP:
+            def __init__(self, text):
+                self.text = text
+
+        class _Req:
+            def __init__(self, parts):
+                self.extra_user_content_parts = parts
+
+        _p = [_TP("x"), _TP("[Image Attachment in quoted message: path /tmp/a.jpg]")]
+        _n = GC.gc_quote_rewrite(_Req(_p), True)
+        _p2 = [_TP("[Image Attachment in quoted message: path /tmp/b.jpg]")]
+        class _Frozen:            # pydantic 冻结模型：属性不可写，只能换对象
+            def __init__(self, text):
+                object.__setattr__(self, "text", text)
+
+            def __setattr__(self, k, v):
+                raise AttributeError("frozen")
+
+        _p3 = [_Frozen("[Image Attachment in quoted message: path /tmp/c.jpg]")]
+        _n3 = GC.gc_quote_rewrite(_Req(_p3), True)
+        rw_ok = (_n == 1 and "Image Attachment" not in _p[1].text
+                 and "你自己" in _p[1].text
+                 and GC.gc_quote_rewrite(_Req(_p2), False) == 0
+                 and "Image Attachment" in _p2[0].text
+                 and _n3 == 1 and "你自己" in _p3[0].text)
         inst = GC.GroupctxMixin()
         inst.setup(None)
         default_off = inst.gc_on is False
-        good = tail_ok and head_ok and quote_ok and default_off
+        good = tail_ok and head_ok and quote_ok and rw_ok and default_off
         (ok if good else bad)(
-            "R35 群上下文补齐（尾读等价 / 定向性四态 / 引用图归属 / 默认关）",
-            "尾读等价=%s(%d条) 定向性=%s 引用图=%s 默认关=%s"
-            % (tail_ok, len(got), head_ok, quote_ok, default_off))
+            "R35 群上下文补齐（尾读等价 / 定向性四态 / 引用图归属 / 正文改写 / 默认关）",
+            "尾读等价=%s(%d条) 定向性=%s 引用图=%s 正文改写=%s 默认关=%s"
+            % (tail_ok, len(got), head_ok, quote_ok, rw_ok, default_off))
     except Exception as e:
         bad("R35 群上下文补齐", "%s: %s" % (type(e).__name__, str(e)[:140]))
+
+    # R38: 历史里的图也看得见 —— 主人 2026-10-04：「不管引用与否，真人都看得见图，
+    #      能在我们这边优化的就在这边优化，不要指望用户端改」。
+    #      缓冲补丁记 imgs（本地路径），唤醒时把「还活着」的图挂到 request.image_urls
+    try:
+        import importlib as _il8
+        import tempfile as _tf8
+        import time as _tm8
+        import mindscape_groupctx as GC8
+        _il8.reload(GC8)
+        _fd, _live = _tf8.mkstemp(suffix=".jpg")
+        os.close(_fd)
+        _fd2, _old = _tf8.mkstemp(suffix=".jpg")
+        os.close(_fd2)
+        _now8 = _tm8.time()
+        _recs8 = [
+            {"who": "old", "ts": _now8 - 9999, "imgs": [_old]},        # 窗口外 → 不要
+            {"who": "A", "ts": _now8 - 30, "text": "[图片]",
+             "imgs": ["/nope/x.jpg", _live, _live]},                   # 不存在 + 重复
+            {"who": "B", "ts": _now8 - 10, "text": "嗯"},              # 没图
+        ]
+        import asyncio as _a8
+        _loop8 = _a8.new_event_loop()
+
+        def _run8(coro):
+            return _loop8.run_until_complete(coro)
+
+        _got8 = GC8.gc_history_images(_recs8, 300, 9, now=_now8)
+        _Img8 = type("Image", (), {})
+        _Plain8 = type("Plain", (), {})
+
+        class _E8:
+            def __init__(self, m):
+                self._m = m
+
+            def get_messages(self):
+                return self._m
+
+        _refs8 = [p for p, _w, _t in _got8]
+        _res8 = (_run8(GC8.gc_resolve_ref(_live)),
+                 _run8(GC8.gc_resolve_ref("/nope/x.jpg")),
+                 _run8(GC8.gc_resolve_ref("file://" + _live)),
+                 _run8(GC8.gc_resolve_ref("ftp://nope")))
+        img_ok = (_refs8 == ["/nope/x.jpg", _live]           # 新的记录在前 + 去重 + 窗口外不要
+                  and GC8.gc_history_images(_recs8, 300, 0, now=_now8) == []
+                  and GC8.gc_history_images(_recs8, 300, 1, now=_now8)[0][0] == "/nope/x.jpg"
+                  and _res8 == (_live, "", _live, "")          # 本地直接用 / 不存在的丢掉 / file:// 也认
+                  and GC8.gc_has_image(_E8([_Img8()]))
+                  and not GC8.gc_has_image(_E8([_Plain8()])))
+        os.remove(_live)
+        os.remove(_old)
+        (ok if img_ok else bad)("R38 历史里的图带得动（窗口 / 去重 / 上限 / 解析本地·URL / 本条有图判定）",
+                                "候选=%r 解析=%r" % (_refs8, _res8))
+    except Exception as e:
+        bad("R38 历史里的图带得动", "%s: %s" % (type(e).__name__, str(e)[:140]))
     # R36: 句尾去句号 —— 末尾留空、句中改逗号，且**绝不碰 ASCII 的「.」**
     #      （4.6 / 0+0 是版本号，剃了就出事故）；子选项空 = 关，不能沿用
     #      「空 = 全部 bot」那条旧语义，否则谁忘写一行全场的句号都没了。

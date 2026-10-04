@@ -31,6 +31,33 @@ def _ms_render_chain(event) -> str:
     return s or str(event.message_str or "")
 
 
+def _ms_image_refs(event) -> list:
+    """本条消息带的图 → 「引用」列表：本地路径优先，其次可下载的 URL。
+
+    为什么是「引用」不是「路径」：唤醒判定在**预处理之前**（STAGES_ORDER 里
+    WakingCheckStage 排在 PreProcessStage 前面），这时候图还没落成文件，只有 URL。
+    所以先记下来，等插件真正要用了（on_llm_request，早已过预处理）再去下 / 直接用。
+    """
+    import os as _o
+    out = []
+    for c in (event.get_messages() or []):
+        if type(c).__name__ != "Image":
+            continue
+        ref = ""
+        for attr in ("path", "file", "url"):
+            v = getattr(c, attr, "") or ""
+            if not isinstance(v, str) or not v:
+                continue
+            if v.startswith("/") and _o.path.exists(v):
+                ref = v
+                break
+            if not ref and v.startswith(("http://", "https://", "file://")):
+                ref = v
+        if ref and ref not in out:
+            out.append(ref)
+    return out
+
+
 def _ms_record_ctx(event) -> None:
     """把群消息追加到缓冲文件（带文件锁 + 体积自截断）。"""
     try:
@@ -45,6 +72,9 @@ def _ms_record_ctx(event) -> None:
             "who": str(event.get_sender_name() or event.get_sender_id())[:24],
             "text": _ms_render_chain(event)[:300],
         }
+        _imgs = _ms_image_refs(event)
+        if _imgs:
+            _rec["imgs"] = _imgs
         if not _rec["text"].strip():
             return
         with open(_p, "a", encoding="utf-8") as _fp:

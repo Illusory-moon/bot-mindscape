@@ -37,6 +37,8 @@ DEFAULT_WINDOW = 30 * 60    # 只取 30 分钟内的（太旧的不算上下文�
 DEFAULT_TAIL = 512 * 1024   # 只读文件尾部这么多字节（够 800 行，即使每行接近上限长度）
 GC_KEEP_LINES = 800         # 再从中取最后这么多行（与整读的旧实现等价）
 GC_PRIORITY = 1             # 先于记忆注入：这条消息是「上下文」，记忆是「背景」
+DEFAULT_IMG_MAX = 2         # 历史里的图最多挂几张
+DEFAULT_IMG_WINDOW = 300    # 只挂最近 5 分钟发过的图（temp 文件会被清理，太旧的多半已经没了）
 
 
 def gc_buffer_path(conf):
@@ -150,9 +152,122 @@ def gc_quote_note(mine):
     if mine:
         return ("⚠️ 本条消息**引用的是你自己之前那条（带图或表情包）**：那张图是**你自己发的**，"
                 "你本来就知道它长什么样 —— 不用对着它认图、点评、问「这是什么」，"
-                "除非有人明确让你聊这张图。")
+                "也**别把它说成是对方拿出来的、搬出来的**；除非有人明确让你聊这张图。")
     return ("⚠️ 本条消息**引用的是别人发的图**：这张图是**别人发出来给你看的**，"
             "该看就看、该接话就接话 —— 别当成你自己发过的东西。")
+
+
+def gc_quote_rewrite(request, mine):
+    """把自己发的引用图，在**请求正文里**就地改写成明确的归属。
+
+    为什么不能只加系统提示：系统提示里那句笔记压不住「有人给我发了张图」的直觉 ——
+    用户消息正文里明晃晃挂着 [Image Attachment in quoted message: path …] 和那张真图。
+    实测 2026-10-03 22:50：她刚自己发的图 + 一句话，群友隔 21 秒引用回来 + @ 她，
+    她下一句就把那张图说成是「对方搬出来顶包」的东西了 —— 归属判定没错（日志打出
+    「引用=自己发的图」），是**那句话**把图说成了对方的素材。所以在正文里写清楚。
+    """
+    if not mine:
+        return 0
+    parts = getattr(request, "extra_user_content_parts", None)
+    if not parts:
+        return 0
+    new_text = ("[引用里的图：这是**你自己**之前发出去的那张（连图一起被引回来了）—— "
+                "对方只是接着你的话说，不是对方发给你的新图/新素材]")
+    n = 0
+    for i in range(len(parts)):
+        p = parts[i]
+        t = getattr(p, "text", None)
+        if not (isinstance(t, str) and "Image Attachment in quoted message" in t):
+            continue
+        try:
+            parts[i] = type(p)(text=new_text)   # 先换对象：pydantic 冻结模型也能改
+        except Exception:
+            try:
+                p.text = new_text               # 普通可写模型
+            except Exception:
+                continue
+        n += 1
+    return n
+
+
+def gc_has_image(event):
+    """本条消息**自己**带图吗（引用里的图不算 —— 那条走 gc_quote）。"""
+    try:
+        return any(type(c).__name__ == "Image" for c in (event.get_messages() or []))
+    except Exception:
+        return False
+
+
+def gc_history_images(recs, window_sec, cap, now=None):
+    """群缓冲里「还活着」的那几张图 —— [(路径, 谁发的, 时间)]，新的在前。
+
+    主人 2026-10-04：「不管引用与否，真人都看得见图，能在我们这边优化的就在这边优化，
+    不要指望用户端改」→ 历史消息里带的图，我们自己也挂上（缓冲里补丁记的 imgs）。
+    边界：只认缓冲里记过 imgs 的记录、只认文件还在的、只取最近 window_sec、最多 cap 张。
+    """
+    if not recs or cap <= 0:
+        return []
+    now = time.time() if now is None else now
+    out, seen = [], set()
+    for r in reversed(list(recs)):
+        try:
+            ts = float(r.get("ts") or 0)
+        except Exception:
+            continue
+        if window_sec and now - ts > window_sec:
+            continue
+        for p in (r.get("imgs") or []):
+            p = str(p)
+            if p in seen:
+                continue
+            seen.add(p)
+            out.append((p, str(r.get("who") or "?"), ts))
+            if len(out) >= cap:
+                return out
+    return out
+
+
+GC_IMG_CACHE = {}
+GC_IMG_CACHE_MAX = 32
+
+
+async def gc_resolve_ref(ref):
+    """把一条「图片引用」变成能喂给模型的本地路径。
+
+    缓冲里记的可能是本地路径（图已经落过盘），也可能是 URL —— 唤醒判定在预处理之前，
+    那时候只有 URL。是 URL 就地补一次下载（AstrBot 自己的下载器，带它的证书/代理处理）。
+    """
+    ref = str(ref or "")
+    if not ref:
+        return ""
+    if ref.startswith("file://"):
+        ref = ref[7:]
+    try:
+        if os.path.exists(ref):
+            return ref
+    except Exception:
+        return ""
+    if not ref.startswith(("http://", "https://")):
+        return ""
+    hit = GC_IMG_CACHE.get(ref)
+    if hit:
+        return hit if os.path.exists(hit) else ""
+    try:
+        from astrbot.core.utils.io import download_image_by_url
+    except Exception:
+        return ""
+    p = ""
+    try:
+        p = await download_image_by_url(ref)
+    except Exception as exc:
+        logger.warning("[mindscape_groupctx] 历史图下载失败 %s: %s", ref[:60], str(exc)[:80])
+        return ""
+    if p and os.path.exists(p):
+        if len(GC_IMG_CACHE) >= GC_IMG_CACHE_MAX:
+            GC_IMG_CACHE.clear()
+        GC_IMG_CACHE[ref] = p
+        return p
+    return ""
 
 
 class GroupctxMixin:
@@ -165,9 +280,13 @@ class GroupctxMixin:
         self.gc_tail = int(c.get("tail_bytes") or DEFAULT_TAIL)
         self.gc_mark = True if c.get("directness") is None else bool(c.get("directness"))
         self.gc_targets = [str(x) for x in (c.get("targets") or [])]
+        self.gc_img_on = True if c.get("images") is None else bool(c.get("images"))
+        self.gc_img_max = int(c.get("image_max") or DEFAULT_IMG_MAX)
+        self.gc_img_window = int(c.get("image_window_sec") or DEFAULT_IMG_WINDOW)
         logger.info(
-            "[mindscape_groupctx] loaded | enabled=%s | buffer=%s | 最近 %d 条/%ds | 定向性=%s",
-            self.gc_on, self.gc_path, self.gc_count, self.gc_window, self.gc_mark)
+            "[mindscape_groupctx] loaded | enabled=%s | buffer=%s | 最近 %d 条/%ds | 定向性=%s | 历史图=%s(max %d/%ds)",
+            self.gc_on, self.gc_path, self.gc_count, self.gc_window, self.gc_mark,
+            self.gc_img_on, self.gc_img_max, self.gc_img_window)
         scope_warn(logger, "mindscape_groupctx", self.gc_targets, self.gc_on)
 
     @filter.on_llm_request(priority=GC_PRIORITY)
@@ -185,26 +304,64 @@ class GroupctxMixin:
             recs = gc_read_recent(self.gc_path, event.get_platform_name(),
                                   str(gid), self.gc_count, self.gc_window,
                                   self.gc_tail)
+            q_quoted, q_mine, q_img = gc_quote(event)
+            hist_refs = []
+            if self.gc_img_on and not gc_has_image(event) and not (q_quoted and q_img):
+                hist_refs = gc_history_images(recs, self.gc_img_window, self.gc_img_max * 3)
+            hist_imgs = []
+            ref2path = {}
+            for _ref, _w, _t in hist_refs:
+                if len(hist_imgs) >= self.gc_img_max:
+                    break
+                _p = await gc_resolve_ref(_ref)
+                if _p:
+                    hist_imgs.append((_p, _w, _t))
+                    ref2path[str(_ref)] = _p
+            img_no = {}
+            for _k, (_p, _w, _t) in enumerate(hist_imgs, 1):
+                img_no[_p] = _k
             lines = []
-            q_quoted = q_mine = q_img = False
             if self.gc_mark:
                 lines += ["", "【本条消息的定向性】", gc_head(event)]
-                q_quoted, q_mine, q_img = gc_quote(event)
                 if q_quoted and q_img:
                     lines.append(gc_quote_note(q_mine))
+                    if q_mine and gc_quote_rewrite(request, True):
+                        logger.info("[mindscape_groupctx] 引用正文改写=自己发的图")
             if recs:
                 lines.append("")
                 lines.append("【本群最近的真实聊天记录（用于理解上下文，不要逐条回应，也不要复述）】")
                 for r in recs:
+                    tag = " ".join("［附件%d］" % img_no[ref2path[str(x)]]
+                                   for x in (r.get("imgs") or []) if str(x) in ref2path)
                     lines.append(str(r.get("who", "?"))[:16] + ": "
-                                 + str(r.get("text", ""))[:200])
+                                 + str(r.get("text", ""))[:200]
+                                 + (("  " + tag) if tag else ""))
+            if hist_imgs:
+                lines.append("")
+                lines.append("【上面历史里带的那几张图，按顺序就是附件 1…%d（标了［附件N］的那条就是它）】"
+                             % len(hist_imgs))
+                for _k, (_p, _w, _t) in enumerate(hist_imgs, 1):
+                    lines.append("附件%d = %s 在 %s 发的那张图"
+                                 % (_k, _w, time.strftime("%H:%M", time.localtime(_t))))
             if not lines:
                 return
             request.system_prompt = ((request.system_prompt or "") + chr(10)
                                      + chr(10).join(lines))
-            logger.info("[mindscape_groupctx] 注入 self=%s 群=%s 历史=%d 条 引用=%s",
+            if hist_imgs:
+                try:
+                    urls = getattr(request, "image_urls", None)
+                    if urls is None:
+                        urls = []
+                        request.image_urls = urls
+                    for _p, _w, _t in hist_imgs:
+                        if _p not in urls:
+                            urls.append(_p)
+                except Exception as exc:
+                    logger.warning("[mindscape_groupctx] 历史图挂载失败: %s", str(exc)[:120])
+            logger.info("[mindscape_groupctx] 注入 self=%s 群=%s 历史=%d 条 引用=%s 历史图=%d",
                         event.get_self_id(), gid, len(recs),
                         ("自己发的图" if (q_quoted and q_img and q_mine) else
-                         "别人的图" if (q_quoted and q_img) else "无"))
+                         "别人的图" if (q_quoted and q_img) else "无"),
+                        len(hist_imgs))
         except Exception as exc:
             logger.warning("[mindscape_groupctx] 注入失败: %s", str(exc)[:120])

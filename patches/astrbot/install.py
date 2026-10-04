@@ -44,9 +44,34 @@ def already_patched(text):
     return (MARK_BEGIN in text) and ("bot-mindscape: 唤醒判定" in text) and ("_ms_render_chain" in text)
 
 
+CTX_MARK = "# ── bot-mindscape: 群聊上下文缓冲（install.py 插在模块级）──"
+
+
+def upgrade_ctx_block(path, text):
+    """老版（不带图片路径）的缓冲块 → 新版。
+
+    为什么需要这个：already_patched() 只认「打过没打过」，老容器升级补丁时会被
+    一句「已打过」骗过去，缓冲里永远不会有 imgs。这里按块首注释定位、整块替换。
+    """
+    if "_ms_image_paths" in text or CTX_MARK not in text:
+        return text
+    i = text.find(CTX_MARK)
+    j = text.find("@register_stage", i)
+    if j == -1:
+        return text
+    new = text[:i] + read_block("_waking_ctx_block.py") + "\n\n\n" + text[j:]
+    bak = path + ".bak-ctximg-" + datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    shutil.copy2(path, bak)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(new)
+    print("[更新] 群聊上下文缓冲块 → 带图片路径版（备份 " + bak + "）")
+    return new
+
+
 def patch(path):
     with open(path, encoding="utf-8") as f:
         text = f.read()
+    text = upgrade_ctx_block(path, text)
     if already_patched(text):
         print("[跳过] 已经打过补丁：" + path)
         return True
