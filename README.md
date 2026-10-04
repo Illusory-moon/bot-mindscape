@@ -35,6 +35,8 @@ python scripts/build_plugin.py --market   # 构建成单文件插件（装进 As
 >
 > 各层怎么对接 bot 框架，见 [部署指南](docs/deploy.md)。
 
+需要 bot 在对话中自行形成对当前发言者的简短看法，可另装独立的 [个人印象插件](https://github.com/Illusory-moon/astrbot_plugin_impression)。它默认关闭，按 bot 和发言者隔离；与 mindscape 没有代码或数据依赖。
+
 ---
 
 ## 为什么需要它
