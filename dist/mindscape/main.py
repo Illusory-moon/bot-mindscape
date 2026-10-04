@@ -2508,8 +2508,14 @@ def mn_take_pending(pending, key, now, ttl=MN_PENDING_TTL):
         于是后面不再说话 —— 实测群里看到的就是一个干巴巴的纯 @（23:07/23:09/23:11 三次都是）。
         """
         try:
-            item = mn_take_pending(self.mn_pending, str(event.unified_msg_origin), time.time())
+            if not self.mn_pending:
+                return
+            key = "%s|%s" % (event.get_self_id(), event.get_group_id())
+            logger.info("[mindscape_mention] 钩子进入 key=%s 排队=%s",
+                        key, list(self.mn_pending.keys()))
+            item = mn_take_pending(self.mn_pending, key, time.time())
             if not item:
+                logger.info("[mindscape_mention] 键对不上，丢弃排队（%s）", key)
                 return
             qq, name = item
             result = event.get_result()
@@ -3888,7 +3894,9 @@ class MentionMixin:
         who = str(kwargs.get("who") or "").strip()
         if not who:
             return "要点谁？给个名字或者号"
-        key = str(ev.unified_msg_origin)
+        # 键用稳定字段：跨钩子拿到的 event 不保证同源（这条坑我们踩过），
+        # 用 unified_msg_origin 会在响应侧对不上。self_id + 群号 就稳。
+        key = "%s|%s" % (ev.get_self_id(), gid)
         now = time.time()
         if now - float(self.mn_last.get(key) or 0) < MN_THROTTLE:
             return "刚点过一次，等一会儿再点"
@@ -3898,8 +3906,8 @@ class MentionMixin:
             return "群里没找到「%s」这个人" % who[:20]
         self.mn_last[key] = now
         self.mn_pending[key] = (qq, name, now)
-        logger.info("[mindscape_mention] 点名排队 self=%s 群=%s who=%s -> qq=%s",
-                    ev.get_self_id(), gid, who[:16], qq)
+        logger.info("[mindscape_mention] 点名排队 self=%s 群=%s who=%s -> qq=%s key=%s",
+                    ev.get_self_id(), gid, who[:16], qq, key)
         return "点名排上了：它会加在你**这条回复的最前面** —— 接着把想说的话写完就行；不想多说，那就只发这个 @。"
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
