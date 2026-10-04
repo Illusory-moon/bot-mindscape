@@ -80,6 +80,13 @@ groupctx:
   image_same_sender: true  # 只挂「跟当前说话的人同一个发送者」的图，别把别人的图乱塞给她
   targets: []           # 留空 = 所有 bot；填 self_id 则只对这几个生效
 
+# ── 表达层：真 @（点名）──
+# 模型嘴里的「@某某」只是正文里的字符（被点的人收不到提醒）；本模块给它一个 at_user 工具，
+# 想真点名时发出**真的 at 段**。名字→号：先吃群缓冲，再问 OneBot 要成员名单兜底。
+mention:
+  enabled: true
+  targets: []           # 留空 = 所有 bot；填 self_id 则只对这几个生效
+
 # ── 认知层：记忆生成 ──
 diary:
   source:

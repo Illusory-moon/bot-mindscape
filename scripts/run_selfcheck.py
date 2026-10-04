@@ -1869,6 +1869,30 @@ def check_regressions():
                                 "候选=%r 解析=%r" % (_refs8, _res8))
     except Exception as e:
         bad("R38 历史里的图带得动", "%s: %s" % (type(e).__name__, str(e)[:140]))
+
+    # R39: 真 @ 点名 —— 名字/号 → QQ 的匹配（纯函数；真 At 段由 MessageEventResult.at 出）
+    try:
+        import importlib as _il9
+        import mindscape_mention as MN
+        _il9.reload(MN)
+        _ms = [
+            {"user_id": "111", "nickname": "芳芳", "card": ""},
+            {"user_id": "222", "nickname": "starry", "card": "Starry★"},
+            {"user_id": "333", "nickname": "小菲比", "card": "小菲比3号"},
+        ]
+        mn_ok = (MN.mn_match_member("1207436794", _ms) == ("1207436794", "")   # 直接给号
+                 and MN.mn_match_member("111", _ms) == ("111", "芳芳")          # 号 + 有名单
+                 and MN.mn_match_member("@芳芳", _ms) == ("111", "芳芳")        # 带 @ 前缀也认
+                 and MN.mn_match_member("Starry★", _ms) == ("222", "Starry★")  # 群名片精确
+                 and MN.mn_match_member("小菲比3号", _ms) == ("333", "小菲比3号")
+                 and MN.mn_match_member("菲比", _ms) == ("333", "小菲比3号")    # 唯一部分匹配（群名片优先）
+                 and MN.mn_match_member("", _ms) == ("", "")
+                 and MN.mn_match_member("查无此人", _ms) == ("", ""))
+        _ms2 = _ms + [{"user_id": "444", "nickname": "菲比酱", "card": ""}]
+        mn_ok = mn_ok and MN.mn_match_member("菲比", _ms2) == ("", "")          # 歧义不猜
+        (ok if mn_ok else bad)("R39 真 @ 点名（号 / 群名片 / 昵称 / 唯一部分匹配 / 歧义不猜）", "")
+    except Exception as e:
+        bad("R39 真 @ 点名", "%s: %s" % (type(e).__name__, str(e)[:140]))
     # R36: 句尾去句号 —— 末尾留空、句中改逗号，且**绝不碰 ASCII 的「.」**
     #      （4.6 / 0+0 是版本号，剃了就出事故）；子选项空 = 关，不能沿用
     #      「空 = 全部 bot」那条旧语义，否则谁忘写一行全场的句号都没了。
