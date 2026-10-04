@@ -1828,10 +1828,10 @@ def check_regressions():
         os.close(_fd2)
         _now8 = _tm8.time()
         _recs8 = [
-            {"who": "old", "ts": _now8 - 9999, "imgs": [_old]},        # 窗口外 → 不要
-            {"who": "A", "ts": _now8 - 30, "text": "[图片]",
+            {"who": "old", "uid": "9", "ts": _now8 - 9999, "imgs": [_old]},   # 窗口外 → 不要
+            {"who": "A", "uid": "1", "ts": _now8 - 30, "text": "[图片]",
              "imgs": ["/nope/x.jpg", _live, _live]},                   # 不存在 + 重复
-            {"who": "B", "ts": _now8 - 10, "text": "嗯"},              # 没图
+            {"who": "B", "uid": "2", "ts": _now8 - 10, "text": "嗯"},     # 没图
         ]
         import asyncio as _a8
         _loop8 = _a8.new_event_loop()
@@ -1859,6 +1859,8 @@ def check_regressions():
                   and GC8.gc_history_images(_recs8, 300, 0, now=_now8) == []
                   and GC8.gc_history_images(_recs8, 300, 1, now=_now8)[0][0] == "/nope/x.jpg"
                   and _res8 == (_live, "", _live, "")          # 本地直接用 / 不存在的丢掉 / file:// 也认
+                  and [p for p, _w, _t in GC8.gc_history_images(_recs8, 300, 9, now=_now8, sender="1")] == _refs8
+                  and GC8.gc_history_images(_recs8, 300, 9, now=_now8, sender="7") == []   # 同人过滤
                   and GC8.gc_has_image(_E8([_Img8()]))
                   and not GC8.gc_has_image(_E8([_Plain8()])))
         os.remove(_live)

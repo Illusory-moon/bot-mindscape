@@ -75,8 +75,9 @@ groupctx:
   tail_bytes: 524288    # 只读文件尾部这么多字节（缓冲是追加流，不需要整读）
   directness: true      # 注入「本条消息的定向性」（依赖补丁记的 wake_reason）
   images: true          # 历史消息里带的图也挂给模型（真人不管引用与否都看得见）
-  image_max: 2          # 最多挂几张
-  image_window_sec: 300 # 只管最近 5 分钟发的（temp 文件会被清，太旧的多半已经没了）
+  image_max: 1          # 最多挂几张 —— 每多一张 = 多一次视觉推理，模型会慢十几秒，1 张够用
+  image_window_sec: 120 # 只管最近 2 分钟发的（「发完马上问」的窗口）
+  image_same_sender: true  # 只挂「跟当前说话的人同一个发送者」的图，别把别人的图乱塞给她
   targets: []           # 留空 = 所有 bot；填 self_id 则只对这几个生效
 
 # ── 认知层：记忆生成 ──

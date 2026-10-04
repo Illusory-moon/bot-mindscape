@@ -37,8 +37,9 @@ DEFAULT_WINDOW = 30 * 60    # 只取 30 分钟内的（太旧的不算上下文�
 DEFAULT_TAIL = 512 * 1024   # 只读文件尾部这么多字节（够 800 行，即使每行接近上限长度）
 GC_KEEP_LINES = 800         # 再从中取最后这么多行（与整读的旧实现等价）
 GC_PRIORITY = 1             # 先于记忆注入：这条消息是「上下文」，记忆是「背景」
-DEFAULT_IMG_MAX = 2         # 历史里的图最多挂几张
-DEFAULT_IMG_WINDOW = 300    # 只挂最近 5 分钟发过的图（temp 文件会被清理，太旧的多半已经没了）
+DEFAULT_IMG_MAX = 1         # 历史里的图最多挂几张（1 张就够：多一张 = 多一次视觉推理 = 慢十几秒）
+DEFAULT_IMG_WINDOW = 120    # 只挂最近 2 分钟发过的图（「发完马上问」的窗口，再久基本无关）
+DEFAULT_IMG_SAME = True     # 只挂「跟当前说话的人同一个发送者」的图（附图也慢，别乱挂）
 
 
 def gc_buffer_path(conf):
@@ -198,7 +199,7 @@ def gc_has_image(event):
         return False
 
 
-def gc_history_images(recs, window_sec, cap, now=None):
+def gc_history_images(recs, window_sec, cap, now=None, sender=None):
     """群缓冲里「还活着」的那几张图 —— [(路径, 谁发的, 时间)]，新的在前。
 
     主人 2026-10-04：「不管引用与否，真人都看得见图，能在我们这边优化的就在这边优化，
@@ -215,6 +216,8 @@ def gc_history_images(recs, window_sec, cap, now=None):
         except Exception:
             continue
         if window_sec and now - ts > window_sec:
+            continue
+        if sender is not None and str(r.get("uid") or "") != str(sender):
             continue
         for p in (r.get("imgs") or []):
             p = str(p)
@@ -283,10 +286,12 @@ class GroupctxMixin:
         self.gc_img_on = True if c.get("images") is None else bool(c.get("images"))
         self.gc_img_max = int(c.get("image_max") or DEFAULT_IMG_MAX)
         self.gc_img_window = int(c.get("image_window_sec") or DEFAULT_IMG_WINDOW)
+        self.gc_img_same = (DEFAULT_IMG_SAME if c.get("image_same_sender") is None
+                            else bool(c.get("image_same_sender")))
         logger.info(
-            "[mindscape_groupctx] loaded | enabled=%s | buffer=%s | 最近 %d 条/%ds | 定向性=%s | 历史图=%s(max %d/%ds)",
+            "[mindscape_groupctx] loaded | enabled=%s | buffer=%s | 最近 %d 条/%ds | 定向性=%s | 历史图=%s(max %d/%ds 同人=%s)",
             self.gc_on, self.gc_path, self.gc_count, self.gc_window, self.gc_mark,
-            self.gc_img_on, self.gc_img_max, self.gc_img_window)
+            self.gc_img_on, self.gc_img_max, self.gc_img_window, self.gc_img_same)
         scope_warn(logger, "mindscape_groupctx", self.gc_targets, self.gc_on)
 
     @filter.on_llm_request(priority=GC_PRIORITY)
@@ -307,7 +312,9 @@ class GroupctxMixin:
             q_quoted, q_mine, q_img = gc_quote(event)
             hist_refs = []
             if self.gc_img_on and not gc_has_image(event) and not (q_quoted and q_img):
-                hist_refs = gc_history_images(recs, self.gc_img_window, self.gc_img_max * 3)
+                hist_refs = gc_history_images(
+                    recs, self.gc_img_window, self.gc_img_max * 3,
+                    sender=str(event.get_sender_id()) if self.gc_img_same else None)
             hist_imgs = []
             ref2path = {}
             for _ref, _w, _t in hist_refs:
