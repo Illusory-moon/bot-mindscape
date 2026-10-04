@@ -1873,10 +1873,46 @@ def check_regressions():
                   and GC8.gc_history_images(_recs8, 300, 9, now=_now8, sender="7") == []   # 同人过滤
                   and GC8.gc_has_image(_E8([_Img8()]))
                   and not GC8.gc_has_image(_E8([_Plain8()])))
+        with _tf8.TemporaryDirectory() as _dir8:
+            _buf8 = os.path.join(_dir8, "context.jsonl")
+            _chat8 = [
+                {"ts": _now8 - 25, "who": "A", "uid": "1", "text": "[图片]", "imgs": [_live]},
+                {"ts": _now8 - 20, "who": "B", "uid": "2", "text": "插了一句"},
+                {"ts": _now8 - 1, "who": "A", "uid": "1", "text": "火花，聊聊别的"},
+            ]
+            with open(_buf8, "w", encoding="utf-8") as _fp8:
+                for _item8 in _chat8:
+                    _fp8.write(_json.dumps({**_item8, "platform": "p", "group": "g"},
+                                           ensure_ascii=False) + chr(10))
+
+            class _Event8:
+                def get_self_id(self): return "bot"
+                def get_sender_id(self): return "1"
+                def get_platform_name(self): return "p"
+                def get_group_id(self): return "g"
+                def get_messages(self): return []
+                def get_extra(self, key): return None
+
+            _inst8 = GC8.GroupctxMixin()
+            _inst8.gc_on, _inst8.gc_targets, _inst8.gc_path = True, ["bot"], _buf8
+            _inst8.gc_count, _inst8.gc_window, _inst8.gc_tail = 15, 1800, 512 * 1024
+            _inst8.gc_mark = False
+            _inst8.gc_img_on, _inst8.gc_img_max = True, 1
+            _inst8.gc_img_window, _inst8.gc_img_same = 120, True
+            _req8 = types.SimpleNamespace(system_prompt="", image_urls=[])
+            _run8(_inst8.gc_inject(_Event8(), _req8))
+            prompt_ok = (_req8.image_urls == [_live]
+                         and "[%s] A: [图片]" % _tm8.strftime("%H:%M:%S", _tm8.localtime(_now8 - 25))
+                         in _req8.system_prompt
+                         and "本条消息时间：" in _req8.system_prompt
+                         and "距本条约" in _req8.system_prompt
+                         and "没有明确指向" in _req8.system_prompt
+                         and "与本条话题无关" in _req8.system_prompt)
         os.remove(_live)
         os.remove(_old)
-        (ok if img_ok else bad)("R38 历史里的图带得动（窗口 / 去重 / 上限 / 解析本地·URL / 本条有图判定）",
-                                "候选=%r 解析=%r" % (_refs8, _res8))
+        (ok if img_ok and prompt_ok else bad)(
+            "R38 历史图挂载与回复关联（窗口 / 同人 / 秒级时间 / 不相关不谈图）",
+            "候选=%r 解析=%r 注入=%s" % (_refs8, _res8, prompt_ok))
     except Exception as e:
         bad("R38 历史里的图带得动", "%s: %s" % (type(e).__name__, str(e)[:140]))
 

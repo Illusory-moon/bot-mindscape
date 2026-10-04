@@ -306,6 +306,7 @@ class GroupctxMixin:
             # 而这一轮的意义是自己找话题。
             if event.get_extra("cron_job"):
                 return
+            now = time.time()
             recs = gc_read_recent(self.gc_path, event.get_platform_name(),
                                   str(gid), self.gc_count, self.gc_window,
                                   self.gc_tail)
@@ -340,16 +341,23 @@ class GroupctxMixin:
                 for r in recs:
                     tag = " ".join("［附件%d］" % img_no[ref2path[str(x)]]
                                    for x in (r.get("imgs") or []) if str(x) in ref2path)
-                    lines.append(str(r.get("who", "?"))[:16] + ": "
+                    lines.append("[" + time.strftime("%H:%M:%S", time.localtime(float(r.get("ts") or now)))
+                                 + "] " + str(r.get("who", "?"))[:16] + ": "
                                  + str(r.get("text", ""))[:200]
                                  + (("  " + tag) if tag else ""))
             if hist_imgs:
                 lines.append("")
                 lines.append("【上面历史里带的那几张图，按顺序就是附件 1…%d（标了［附件N］的那条就是它）】"
                              % len(hist_imgs))
+                lines.append("本条消息时间：%s。历史图虽然可见，并不等于本条消息在请你评价它。"
+                             % time.strftime("%H:%M:%S", time.localtime(now)))
                 for _k, (_p, _w, _t) in enumerate(hist_imgs, 1):
-                    lines.append("附件%d = %s 在 %s 发的那张图"
-                                 % (_k, _w, time.strftime("%H:%M", time.localtime(_t))))
+                    lines.append("附件%d = %s 在 %s 发的图（距本条约 %d 秒）"
+                                 % (_k, _w, time.strftime("%H:%M:%S", time.localtime(_t)),
+                                    max(0, int(now - _t))))
+                lines.append("先回应本条消息。只有当本条没有明确指向那张历史图，且图只是与本条话题无关的"
+                             "情绪或状态表达时，才不要在回复中谈图；否则可自然结合图来回答。"
+                             "时间间隔只作判断线索，不能单独决定是否谈图。")
             if not lines:
                 return
             request.system_prompt = ((request.system_prompt or "") + chr(10)
