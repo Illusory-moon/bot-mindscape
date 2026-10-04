@@ -31,7 +31,7 @@ python scripts/build_plugin.py --market   # 构建成单文件插件（装进 As
 
 > **两种管理界面随你挑**：
 > - 桌面版：`python scripts/config_gui.py`（tkinter，零依赖）
-> - 网页版：`python scripts/web_ui.py`（标准库 http.server，访问 http://127.0.0.1:8777）
+> - 网页版：Windows 双击 `open_dashboard.bat`，会自动启动管理台并打开浏览器；也可运行 `python scripts/web_ui.py` 后访问 http://127.0.0.1:8777
 >
 > 各层怎么对接 bot 框架，见 [部署指南](docs/deploy.md)。
 

@@ -198,7 +198,8 @@ function renderFields(){
     const tab = section.dataset.tab;
     const fields = (CONFIG?.fields || []).filter(f => f.tab === tab);
     fields.forEach(f => {
-      const row = document.createElement('div'); row.className = 'field';
+      const row = document.createElement('div');
+      row.className = f.type === 'lines' ? 'field field-lines' : 'field';
       const text = document.createElement('div');
       const title = document.createElement('label'); title.textContent = f.label;
       const hint = document.createElement('small'); hint.textContent = f.hint || '';
@@ -394,13 +395,15 @@ show(parseInt(ls(K_TAB) || '0', 10) || 0, null);
 
 PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <title>bot-mindscape 管理台</title><style>
-body{{background:#14181b;color:#edf0ef;font-family:system-ui,sans-serif;margin:0;padding:24px;line-height:1.45}}
+html{{background:#14181b}}
+body{{box-sizing:border-box;max-width:1240px;background:#14181b;color:#edf0ef;font-family:system-ui,sans-serif;margin:0 auto;padding:24px;line-height:1.45}}
 body::before{{content:'';display:block;height:4px;background:linear-gradient(90deg,#e76783,#f5b451,#65c4a9);position:fixed;top:0;left:0;right:0}}
 h1{{font-size:20px;color:#f3f5f3;margin:0 0 18px}}
 button,input,textarea,select{{font:inherit}}
 button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{{outline:2px solid #f5b451;outline-offset:2px}}
+.tabs{{display:flex;flex-wrap:wrap;gap:6px}}
 .tabs button{{background:#242b2e;color:#b8c5c3;border:1px solid #3d4a4d;padding:6px 14px;
-margin-right:6px;border-radius:6px;cursor:pointer}}
+border-radius:6px;cursor:pointer}}
 .tabs button.on{{background:#cb536e;color:#fff;border-color:#cb536e}}
 .bar{{margin:12px 0}}
 .bar button{{background:#293337;color:#ddd;border:1px solid #48585b;padding:6px 12px;
@@ -414,9 +417,10 @@ border-radius:6px;cursor:pointer;margin-right:6px}}
 .config-tabs{{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid #394246;margin:0 0 14px}}
 .config-tabs button{{white-space:nowrap;background:transparent;color:#aebbb9;border:0;border-bottom:2px solid transparent;padding:10px 18px;cursor:pointer}}
 .config-tabs button.on{{color:#fff;border-bottom-color:#e76783}}
-.config-section{{display:none;max-width:860px}}
-.config-section.on{{display:block}}
-.field{{display:grid;grid-template-columns:minmax(190px,1fr) minmax(190px,1.1fr);gap:22px;align-items:center;padding:15px 2px;border-bottom:1px solid #303b3f}}
+.config-section{{display:none}}
+.config-section.on{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:28px}}
+.field{{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,.85fr);gap:14px;align-items:center;padding:15px 2px;border-bottom:1px solid #303b3f;min-width:0}}
+.field-lines{{grid-column:1/-1;grid-template-columns:minmax(210px,.4fr) minmax(0,1fr)}}
 .field label{{display:block;font-size:14px;font-weight:600}}
 .field small{{display:block;color:#9baaa8;font-size:12px;margin-top:4px}}
 .field input:not([type=checkbox]),.field textarea{{width:100%;box-sizing:border-box;background:#20282b;color:#fff;border:1px solid #48585b;border-radius:5px;padding:8px 10px}}
@@ -431,10 +435,11 @@ border-radius:6px;cursor:pointer;margin-right:6px}}
 .config-actions button:hover{{filter:brightness(1.14)}}
 .config-actions .msg{{margin:0}}
 .msg.error{{color:#ff9c9c}}
-.advanced{{max-width:860px;margin:24px 0;border-top:1px solid #394246;padding-top:12px;color:#abb7b4}}
+.advanced{{margin:24px 0;border-top:1px solid #394246;padding-top:12px;color:#abb7b4}}
 .advanced summary{{cursor:pointer}}
 .advanced textarea{{margin-top:12px}}
-@media(max-width:600px){{body{{padding:16px}}.field{{grid-template-columns:1fr;gap:8px}}.config-tabs button{{padding:10px 12px}}}}
+@media(max-width:1000px){{.config-section.on{{grid-template-columns:1fr}}.field-lines{{grid-template-columns:minmax(0,1fr) minmax(190px,1.1fr)}}}}
+@media(max-width:600px){{body{{padding:16px}}.field,.field-lines{{grid-template-columns:1fr;gap:8px}}.config-tabs{{flex-wrap:wrap;overflow:visible}}.config-tabs button{{padding:10px 12px}}.config-head label{{width:100%}}.config-head select{{max-width:100%;min-width:0}}}}
 textarea{{width:100%;height:52vh;background:#20282b;color:#ddd;border:1px solid #48585b;
 border-radius:8px;padding:12px;font-family:monospace;font-size:13px;box-sizing:border-box}}
 .btn{{background:#cb536e;color:#fff;border:0;padding:8px 18px;border-radius:6px;cursor:pointer;margin-top:8px}}
@@ -470,7 +475,7 @@ border:1px solid #3d3450;border-radius:6px;padding:7px 9px;font-size:13px;font-f
 .btn2{{background:#2c2438;color:#ddd;border:1px solid #3d3450;padding:8px 18px;
 border-radius:6px;cursor:pointer;margin-top:8px;margin-left:8px}}
 .btn2:hover{{border-color:#e85a9b}}
-table.seen{{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}}
+table.seen{{display:block;width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;overflow-x:auto}}
 table.seen td{{padding:5px 8px;border-bottom:1px solid #2a2436}}
 table.seen tr.tomb td{{background:#1d1826;color:#8a7f9c}}
 table.seen code{{color:#e85a9b;font-size:11px}}
