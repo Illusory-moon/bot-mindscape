@@ -78,7 +78,7 @@ def check_config():
         return
     ok("YAML 解析", "顶层键: " + ", ".join(d.keys()))
     for key in ["memory", "groupctx", "diary", "stickers", "guard", "silence", "format",
-                "trace", "janitor", "waking"]:
+                "trace", "janitor", "waking", "mention"]:
         if key in d:
             ok("配置段", key)
         else:
@@ -109,6 +109,16 @@ def stub():
     pe.ProviderRequest = object
     mc = types.ModuleType("astrbot.core.message.components")
     mc.Image = type("Image", (), {})
+    _comp_cache = {}
+
+    def _mc_getattr(name):        # 要什么组件给什么组件（At / Plain / …），同类只造一次
+        if name not in _comp_cache:
+            _comp_cache[name] = type(name, (), {
+                "__init__": lambda s, **kw: s.__dict__.update(kw),
+            })
+        return _comp_cache[name]
+
+    mc.__getattr__ = _mc_getattr
     mer = types.ModuleType("astrbot.core.message.message_event_result")
     mer.MessageEventResult = type("M", (), {"__init__": lambda s: None})
     emt = types.ModuleType("astrbot.core.star.filter.event_message_type")
@@ -1893,6 +1903,26 @@ def check_regressions():
         (ok if mn_ok else bad)("R39 真 @ 点名（号 / 群名片 / 昵称 / 唯一部分匹配 / 歧义不猜）", "")
     except Exception as e:
         bad("R39 真 @ 点名", "%s: %s" % (type(e).__name__, str(e)[:140]))
+
+    # R40: @ 要能挂在她这条回复的最前面（有正文就 @+正文；没正文就单发 @）
+    #      工具自己发消息那种做法会让模型认为「事办完了」，群里只剩一个干巴巴的 @（实测三次）
+    try:
+        import importlib as _il10
+        import mindscape_mention as MN2
+        _il10.reload(MN2)
+        _p = {}
+        _now = 1000.0
+        _p["s1"] = ("1207436794", "qwerty", _now)
+        _a = MN2.mn_take_pending(_p, "s1", _now + 5)
+        _b = MN2.mn_take_pending(_p, "s1", _now + 6)          # 取过就没了
+        _p["s2"] = ("1", "x", _now)
+        _c = MN2.mn_take_pending(_p, "s2", _now + MN2.MN_PENDING_TTL + 1)   # 过期丢掉
+        _d = MN2.mn_take_pending(_p, "nope", _now)
+        at_ok = (_a == ("1207436794", "qwerty") and _b is None and _c is None and _d is None)
+        (ok if at_ok else bad)("R40 @ 排队（挂到回复前 / 取过即清 / 过期丢掉）",
+                              "取=%r 再取=%r 过期=%r" % (_a, _b, _c))
+    except Exception as e:
+        bad("R40 @ 排队", "%s: %s" % (type(e).__name__, str(e)[:140]))
     # R36: 句尾去句号 —— 末尾留空、句中改逗号，且**绝不碰 ASCII 的「.」**
     #      （4.6 / 0+0 是版本号，剃了就出事故）；子选项空 = 关，不能沿用
     #      「空 = 全部 bot」那条旧语义，否则谁忘写一行全场的句号都没了。

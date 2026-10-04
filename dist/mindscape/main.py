@@ -21,6 +21,7 @@ from astrbot.api import llm_tool, logger, star
 from astrbot.api import logger
 from astrbot.api import logger, star
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.core.message.components import At
 from astrbot.core.message.components import Image
 from astrbot.core.message.message_event_result import MessageEventResult
 from astrbot.core.provider.entities import ProviderRequest
@@ -2442,6 +2443,12 @@ MN_BUF_WINDOW = 1800        # 只认半小时内说过话的人
 MN_BUF_TAIL = 512 * 1024
 
 
+MN_PENDING_TTL = 120       # 排队的 @ 最多等这么久（跨轮了就丢掉，别挂到下一句去）
+
+
+MN_HOOK_PRIORITY = 100     # on_decorating_result：跑在 guard(999) 之后
+
+
 def mn_load_config():
     c = cfg.section("mention") or {}
     return bool(c.get("enabled")), [str(x) for x in (c.get("targets") or [])]
@@ -2477,6 +2484,46 @@ def mn_match_member(who, members):
     if len(hits) == 1 and hits[0][0]:
         return hits[0]
     return "", ""
+
+
+def mn_take_pending(pending, key, now, ttl=MN_PENDING_TTL):
+    """取出一条排队的点名（过期的丢掉）→ (qq, name) 或 None。纯函数，自检直接跑。"""
+    item = (pending or {}).pop(key, None)
+    if not item:
+        return None
+    try:
+        qq, name, ts = item
+    except Exception:
+        return None
+    if ttl and now - float(ts) > ttl:
+        return None
+    return (str(qq), str(name or ""))
+
+
+    @filter.on_decorating_result(priority=MN_HOOK_PRIORITY)
+    async def mn_attach(self, event: AstrMessageEvent):
+        """把排队的 @ 插到这条回复的**最前面**；她这轮没话要说，就单独把 @ 发出去。
+
+        为什么要挂到最前面而不是工具自己发一条：工具自己发消息 = 模型认为「事办完了」，
+        于是后面不再说话 —— 实测群里看到的就是一个干巴巴的纯 @（23:07/23:09/23:11 三次都是）。
+        """
+        try:
+            item = mn_take_pending(self.mn_pending, str(event.unified_msg_origin), time.time())
+            if not item:
+                return
+            qq, name = item
+            result = event.get_result()
+            chain = getattr(result, "chain", None) if result is not None else None
+            if chain:
+                chain.insert(0, At(qq=qq, name=name))
+                logger.info("[mindscape_mention] @ 挂在回复前 self=%s qq=%s（带正文）",
+                            event.get_self_id(), qq)
+            else:
+                event.set_result(MessageEventResult().at(name=name, qq=qq))
+                logger.info("[mindscape_mention] @ 单独发 self=%s qq=%s（这轮没正文）",
+                            event.get_self_id(), qq)
+        except Exception as exc:
+            logger.warning("[mindscape_mention] 挂 @ 失败: %s", str(exc)[:100])
 # ==================================================================
 # 命名空间：让 cfg.xxx() / core.xxx() 这类调用在合并后依然可用
 # ==================================================================
@@ -3767,6 +3814,7 @@ class MentionMixin:
     def setup(self, context):
         self.mn_on, self.mn_targets = mn_load_config()
         self.mn_last = {}
+        self.mn_pending = {}
         logger.info("[mindscape_mention] loaded | enabled=%s | targets=%s | 节流=%ds",
                     self.mn_on, self.mn_targets or "全部", MN_THROTTLE)
         scope_warn(logger, "mindscape_mention", self.mn_targets, self.mn_on)
@@ -3810,6 +3858,9 @@ class MentionMixin:
     async def at_user(self, *args, **kwargs):
         """真的 @ 一个人（发出去是**会响的提醒**，不是正文里打「@某某」四个字符）。
 
+        **@ 会自动加在你这条回复的最前面** —— 所以紧接着把想说的话写出来就行（「@某某 你说的那句话…」）；
+        不想说别的也可以，那就只发一个 @。
+
         什么时候用：有人明确让你「@ 一下 / 艾特一下 / 点名」某人，或者你自己真想喊谁过来看。
         什么时候别用：只是嘴上提到某人、群里闲聊 —— 那种直接用嘴说；一次只点一个人，别连点。
 
@@ -3846,12 +3897,10 @@ class MentionMixin:
         if not qq:
             return "群里没找到「%s」这个人" % who[:20]
         self.mn_last[key] = now
-        logger.info("[mindscape_mention] 点名 self=%s 群=%s who=%s -> qq=%s",
+        self.mn_pending[key] = (qq, name, now)
+        logger.info("[mindscape_mention] 点名排队 self=%s 群=%s who=%s -> qq=%s",
                     ev.get_self_id(), gid, who[:16], qq)
-        try:
-            return MessageEventResult().at(name=name, qq=qq)
-        except Exception as exc:
-            return "点名失败：" + str(exc)[:60]
+        return "点名排上了：它会加在你**这条回复的最前面** —— 接着把想说的话写完就行；不想多说，那就只发这个 @。"
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
 # ==================================================================
