@@ -4,6 +4,7 @@
 源码: plugins/    重新生成: python scripts/build_plugin.py
 """
 
+import asyncio
 import base64
 import datetime
 import hashlib
@@ -747,6 +748,67 @@ def is_error_text(text, patterns=None, regex=None):
     except re.error:
         pass
     return False
+
+
+MS_SENDTOOL_FLAG = "_ms_sendtool_patched"
+
+
+MS_LINE_GAP = 0.8          # 连发之间的停顿（秒）—— 真人也是一句一句敲的
+
+
+def ms_patch_send_tool():
+    """把内置工具 `send_message_to_user` 改成「每个 plain 各发一条」。
+
+    实测（2026-10-06）：她和主人想连发短句时都爱用这个内置工具，而它把 components
+    拼成一个 MessageChain **一次**发出去 —— 群里只看到一条「火火兔 花花菇 嘻，测完就去睡呀」，
+    三段并成一句。规矩层劝不动、工具说明也劝不动，那就直接改它
+    （能用代码硬保证的，别指望提示词）。逐条发、之间停 MS_LINE_GAP 秒；
+    带非纯文本（图/语音/文件）或指定别的 session 的场景，原样交给原实现。
+    """
+    try:
+        from astrbot.core.tools.message_tools import SendMessageToUserTool
+    except Exception as e:
+        logger.warning("[mindscape_guard] 拿不到内置发送工具，跳过补丁: %s", type(e).__name__)
+        return 0
+    if getattr(SendMessageToUserTool, MS_SENDTOOL_FLAG, False):
+        return 0
+    orig = SendMessageToUserTool.call
+
+    async def _ms_send_to_user(self, context, *args, **kwargs):
+        msgs = kwargs.get("messages")
+        if msgs is None and args:
+            msgs = args[0]
+        if isinstance(msgs, (list, tuple)) and len(msgs) > 1:
+            plains = [m for m in msgs if isinstance(m, dict)
+                      and str(m.get("type")) == "plain"
+                      and str(m.get("text") or "").strip()]
+            others = [m for m in msgs
+                      if not (isinstance(m, dict) and str(m.get("type")) == "plain")]
+            if len(plains) > 1 and not others:
+                rest = {k: v for k, v in kwargs.items() if k != "messages"}
+                tail = tuple(args[1:]) if args else ()
+                n = 0
+                for m in plains:
+                    try:
+                        if tail:
+                            await orig(self, context, [m], *tail, **rest)
+                        else:
+                            await orig(self, context, messages=[m], **rest)
+                        n += 1
+                    except Exception as exc:
+                        logger.warning("[mindscape_guard] 逐条发送第 %d 条失败: %s",
+                                       n + 1, str(exc)[:80])
+                        break
+                    await asyncio.sleep(MS_LINE_GAP)
+                logger.info("[mindscape_guard] 内置工具逐条发送 %d 条（原本 %d 段会并成一条）",
+                            n, len(plains))
+                return "Already sent %d separate messages." % n
+        return await orig(self, context, *args, **kwargs)
+
+    SendMessageToUserTool.call = _ms_send_to_user
+    setattr(SendMessageToUserTool, MS_SENDTOOL_FLAG, True)
+    logger.info("[mindscape_guard] 内置 send_message_to_user 已改成逐条发送")
+    return 1
 
 
 SI_DEFAULT_TOKEN = "[[silence]]"
@@ -2446,7 +2508,10 @@ MN_BUF_TAIL = 512 * 1024
 MN_PENDING_TTL = 120       # 排队的 @ 最多等这么久（跨轮了就丢掉，别挂到下一句去）
 
 
-MN_HOOK_PRIORITY = 100     # on_decorating_result：跑在 guard(999) 之后
+MN_HOOK_PRIORITY = 100
+
+
+MN_LINES_MAX = 3          # 连发工具一次最多几条（真人也顶多连发两三句）     # on_decorating_result：跑在 guard(999) 之后
 
 
 def mn_load_config():
@@ -2586,6 +2651,11 @@ class GuardMixin:
         g = cfg.section("guard")
         self.g_send = True if g.get("send_guard") is None else bool(g.get("send_guard"))
         armed = self._ms_arm_send_guard() if self.g_send else 0
+        try:
+            self.ms_lined = ms_patch_send_tool()
+        except Exception as e:
+            self.ms_lined = 0
+            logger.warning("[mindscape_guard] 逐条发送补丁失败: %s", str(e)[:120])
         logger.info("[mindscape_guard] loaded | %d 条拦截规则 | send 级兜底=%s（本次包了 %d 个类）",
                     len(self.patterns), self.g_send, armed)
 
@@ -3931,6 +4001,79 @@ class MentionMixin:
         logger.info("[mindscape_mention] 点名排队 self=%s 群=%s who=%s -> qq=%s key=%s obj=%s id=%s",
                     ev.get_self_id(), gid, who[:16], qq, key, type(self).__name__, id(self))
         return "点名排上了：它会加在你**这条回复的最前面** —— 接着把想说的话写完就行；不想多说，那就只发这个 @。"
+    @llm_tool(name="say_lines")
+    async def say_lines(self, *args, **kwargs):
+        """一口气连发几条短消息 —— 每条单独成一个气泡（像真人想到一句打一句）。
+
+        一条一句、最多 3 条，按顺序发出去。想先丢一句、再补一句的时候就用它。
+        别用 send_message_to_user 连发：它会把好几条并成一条消息（实测过）。
+
+        Args:
+            lines(array): 要连发的短消息列表，一条一句。
+        """
+        ev = None
+        for a in args:
+            if hasattr(a, "get_self_id"):
+                ev = a
+                break
+        if ev is None:
+            return "现在发不了"
+        try:
+            if not self.mn_hit(ev):
+                return "现在发不了"
+        except Exception:
+            pass
+        raw = kwargs.get("lines")
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, (list, tuple)):
+            return "给我一个字符串列表，一条一句"
+        parse = globals().get("parse_response")
+        fl = globals().get("flatten")
+        dp = globals().get("drop_period")
+        f_c = (cfg.section("format") or {})
+        join_with = f_c.get("join_with") or "，"
+        drop = bool(f_c.get("drop_last_if_short", False))
+        short_len = int(f_c.get("short_len") or 8)
+        no_period = bool(getattr(self, "f_np", None)) and scope_hit(self.f_np, ev.get_self_id())
+        items = []
+        for x in raw:
+            t = str(x or "").strip()
+            if not t:
+                continue
+            if parse:
+                try:
+                    t = (parse(t)[0] or t).strip()
+                except Exception:
+                    pass
+            if fl and scope_hit(getattr(self, "targets", []) or [], ev.get_self_id()):
+                try:
+                    t = fl(t, join_with, drop, short_len)
+                except Exception:
+                    pass
+            if no_period and dp:
+                try:
+                    t = dp(t)
+                except Exception:
+                    pass
+            t = t.strip()
+            if t:
+                items.append(t[:300])
+            if len(items) >= MN_LINES_MAX:
+                break
+        if not items:
+            return "没有可发的内容"
+        sent = 0
+        for t in items:
+            try:
+                await ev.send(t)
+                sent += 1
+            except Exception as exc:
+                logger.warning("[mindscape_mention] 连发失败: %s", str(exc)[:100])
+                break
+        logger.info("[mindscape_mention] 连发 self=%s 条数=%d/%d",
+                    ev.get_self_id(), sent, len(items))
+        return "发好了：%d 条（每条一个气泡）" % sent
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
 # ==================================================================

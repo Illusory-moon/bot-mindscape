@@ -8,6 +8,7 @@
 方案：在回复发送前检查内容，命中错误特征就清空整条回复（什么都不发）。
       对用户来说，bot 只是「这次没说话」，而不是「吐了一句报错」。
 """
+import asyncio
 import os
 import re
 
@@ -183,6 +184,65 @@ def is_error_text(text, patterns=None, regex=None):
     return False
 
 
+MS_SENDTOOL_FLAG = "_ms_sendtool_patched"
+MS_LINE_GAP = 0.8          # 连发之间的停顿（秒）—— 真人也是一句一句敲的
+
+
+def ms_patch_send_tool():
+    """把内置工具 `send_message_to_user` 改成「每个 plain 各发一条」。
+
+    实测（2026-10-06）：她和主人想连发短句时都爱用这个内置工具，而它把 components
+    拼成一个 MessageChain **一次**发出去 —— 群里只看到一条「火火兔 花花菇 嘻，测完就去睡呀」，
+    三段并成一句。规矩层劝不动、工具说明也劝不动，那就直接改它
+    （能用代码硬保证的，别指望提示词）。逐条发、之间停 MS_LINE_GAP 秒；
+    带非纯文本（图/语音/文件）或指定别的 session 的场景，原样交给原实现。
+    """
+    try:
+        from astrbot.core.tools.message_tools import SendMessageToUserTool
+    except Exception as e:
+        logger.warning("[mindscape_guard] 拿不到内置发送工具，跳过补丁: %s", type(e).__name__)
+        return 0
+    if getattr(SendMessageToUserTool, MS_SENDTOOL_FLAG, False):
+        return 0
+    orig = SendMessageToUserTool.call
+
+    async def _ms_send_to_user(self, context, *args, **kwargs):
+        msgs = kwargs.get("messages")
+        if msgs is None and args:
+            msgs = args[0]
+        if isinstance(msgs, (list, tuple)) and len(msgs) > 1:
+            plains = [m for m in msgs if isinstance(m, dict)
+                      and str(m.get("type")) == "plain"
+                      and str(m.get("text") or "").strip()]
+            others = [m for m in msgs
+                      if not (isinstance(m, dict) and str(m.get("type")) == "plain")]
+            if len(plains) > 1 and not others:
+                rest = {k: v for k, v in kwargs.items() if k != "messages"}
+                tail = tuple(args[1:]) if args else ()
+                n = 0
+                for m in plains:
+                    try:
+                        if tail:
+                            await orig(self, context, [m], *tail, **rest)
+                        else:
+                            await orig(self, context, messages=[m], **rest)
+                        n += 1
+                    except Exception as exc:
+                        logger.warning("[mindscape_guard] 逐条发送第 %d 条失败: %s",
+                                       n + 1, str(exc)[:80])
+                        break
+                    await asyncio.sleep(MS_LINE_GAP)
+                logger.info("[mindscape_guard] 内置工具逐条发送 %d 条（原本 %d 段会并成一条）",
+                            n, len(plains))
+                return "Already sent %d separate messages." % n
+        return await orig(self, context, *args, **kwargs)
+
+    SendMessageToUserTool.call = _ms_send_to_user
+    setattr(SendMessageToUserTool, MS_SENDTOOL_FLAG, True)
+    logger.info("[mindscape_guard] 内置 send_message_to_user 已改成逐条发送")
+    return 1
+
+
 class GuardMixin:
     def setup(self, context):
 
@@ -191,6 +251,11 @@ class GuardMixin:
         g = cfg.section("guard")
         self.g_send = True if g.get("send_guard") is None else bool(g.get("send_guard"))
         armed = self._ms_arm_send_guard() if self.g_send else 0
+        try:
+            self.ms_lined = ms_patch_send_tool()
+        except Exception as e:
+            self.ms_lined = 0
+            logger.warning("[mindscape_guard] 逐条发送补丁失败: %s", str(e)[:120])
         logger.info("[mindscape_guard] loaded | %d 条拦截规则 | send 级兜底=%s（本次包了 %d 个类）",
                     len(self.patterns), self.g_send, armed)
 
