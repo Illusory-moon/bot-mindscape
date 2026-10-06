@@ -103,6 +103,11 @@ def mn_take_pending(pending, key, now, ttl=MN_PENDING_TTL):
 
 # @ 排队：**模块级**字典（不挂插件实例）—— 模块级钩子拿得到，跨钩子/跨实例都稳
 MN_PENDING = {}
+# 「这一轮她已经连发过了」：同样是模块级（钩子与工具拿到的 event 不一定同源 ✓）。
+# 用途：say_lines 成功的这一轮**抑制正文** —— 不然她会同一轮答两遍（连发一次 + 正文一次），
+# 读起来割裂 ✗（实测 2026-10-06 19:33：3 条讲配装 + 1 条另起话头「货币战争？all in芳芳…」）。
+MN_SAID = {}
+MN_SAID_TTL = 300
 
 
 @filter.on_decorating_result(priority=MN_HOOK_PRIORITY)
@@ -119,10 +124,22 @@ async def mn_attach_hook(*args, **kwargs):
             if hasattr(a, "get_self_id"):
                 event = a
                 break
-        if event is None or not MN_PENDING:
+        if event is None:
             return
         key = "%s|%s" % (event.get_self_id(), event.get_group_id())
-        item = mn_take_pending(MN_PENDING, key, time.time())
+        item = mn_take_pending(MN_PENDING, key, time.time()) if MN_PENDING else None
+        said = MN_SAID.pop(key, None) if MN_SAID else None
+        if said and time.time() - float(said[1]) > MN_SAID_TTL:
+            said = None
+        if item is None and said is None:
+            return
+        # ① 她这一轮用 say_lines 说过了 → 不再另发正文（要补就该写进 lines 里 ✓）。
+        #    有 @ 排队时不抑制 —— @ 是挂在正文前面的，抑制会把它一起吞掉 ✗。
+        if said is not None and item is None:
+            event.clear_result()
+            logger.info("[mindscape_mention] 本轮已连发 %d 条 → 抑制正文 self=%s",
+                        said[0], event.get_self_id())
+            return
         if not item:
             logger.info("[mindscape_mention] 键对不上，丢弃排队（%s）", key)
             return
@@ -324,4 +341,12 @@ class MentionMixin:
             return "没发出去（这个功能现在有毛病）—— 把想说的话直接写在正文里就行，别绕路。"
         if sent < len(items):
             return "只发出去 %d 条（剩下的没发成）—— 剩下的话直接写在正文里。" % sent
-        return "发好了：%d 条（每条一个气泡）" % sent
+        # 全部成功 → 记一笔，让 decorating 钩子把这一轮的正文抑制掉（同一轮别答两遍 ✓）。
+        try:
+            gid = ev.get_group_id()
+        except Exception:
+            gid = None
+        if gid is not None:
+            MN_SAID["%s|%s" % (ev.get_self_id(), gid)] = (sent, time.time())
+        return ("发好了：%d 条（每条一个气泡）。这一轮要说的话就算说完了 —— "
+                "还想补就写进 lines 里，不用再另发正文。" % sent)
