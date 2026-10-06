@@ -318,4 +318,10 @@ class MentionMixin:
             await asyncio.sleep(MN_LINE_GAP)
         logger.info("[mindscape_mention] 连发 self=%s 条数=%d/%d",
                     ev.get_self_id(), sent, len(items))
+        # 失败时给**明确**的回话：以前写「发好了：0 条」自相矛盾 ——
+        # 她（或任何模型）会读成「没东西可发」，而不是「工具坏了」，于是内容整条丢掉（13:39 真丢过一次）。
+        if sent == 0:
+            return "没发出去（这个功能现在有毛病）—— 把想说的话直接写在正文里就行，别绕路。"
+        if sent < len(items):
+            return "只发出去 %d 条（剩下的没发成）—— 剩下的话直接写在正文里。" % sent
         return "发好了：%d 条（每条一个气泡）" % sent
