@@ -1285,6 +1285,39 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R31: 「#角色面板」这类**别的 bot 的指令**不许叫醒我们、也不许进上下文缓冲（2026-10-06 ✓）。
+    #      判据三条：① #/** 开头 ② 名字+查询词收尾 ③ 没有别的文字 ✓
+    #      ⚠️ 不许连关键词一起拉黑 ✗ —— 真问游戏知识（「火花，行迹怎么点」）必须照常回 ✓
+    try:
+        import json as _json2
+        import tempfile as _tf2
+        csrc = open(os.path.join(HERE, "patches", "astrbot",
+                                 "_waking_ctx_block.py"), encoding="utf-8").read()
+        cns = {}
+        exec(csrc, cns)
+        with _tf2.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                     encoding="utf-8") as _f2:
+            _json2.dump({"ignore_cmd": {
+                "enabled": True, "prefixes": ["#", "*"],
+                "keywords": ["面板", "排行", "圣遗物", "武器", "命座", "遗器",
+                             "天赋", "行迹", "光锥"]}}, _f2)
+            _tmp2 = _f2.name
+        cns["_MS_CMD_CFG_PATH"] = _tmp2
+        cns["_MS_CMD_CACHE"]["mtime"] = -1.0
+        _f = cns["_ms_is_cmd_query"]
+        _cases = [("#火花面板", True), ("*火花光锥", True), ("#面板", True),
+                  ("# 火花 圣遗物", True), ("#火花的面板", True),
+                  ("火花，行迹怎么点", False), ("#火花面板 帮我看看", False),
+                  ("#行迹怎么点", False), ("今天天气不错", False), ("#", False)]
+        _got = [(t, bool(_f(t))) for t, _ in _cases]
+        _bad2 = [t for (t, g), (_, e) in zip(_got, _cases) if g != e]
+        os.unlink(_tmp2)
+        (ok if not _bad2 else bad)(
+            "R31 别的 bot 的指令不唤醒/不进缓冲",
+            ("全部符合 ✓" if not _bad2 else "判错：" + "、".join(_bad2)))
+    except Exception as e:
+        bad("R31 指令拦截", str(e)[:140])
+
     # R29: 沉默令牌必须容忍「模型多吐零宽字符」—— 否则会退化成一条空回复：
     #      用户看到「叫它不理」，日志里却什么都没有（真踩过）。
     try:

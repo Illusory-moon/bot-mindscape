@@ -32,7 +32,19 @@ _ms_minint = float(_ms_pb.get("min_interval")
 _ms_now = _ms_time.time()
 _ms_ok_interval = (_ms_now - self._last_auto_wake_map.get(_ms_sid, 0.0)) >= _ms_minint
 _ms_sampled = _ms_random.random() < _ms_prob
-if (_ms_enabled and _ms_group_ok and not event.is_at_or_wake_command
+# 别的 bot 的查询指令（#角色面板 / *<名字>光锥 …）—— 不许叫醒我们 ✓，也不进上下文缓冲 ✓
+# 判据与配置见 install.py 插的 _ms_is_cmd_query（ctx 块，模块级 ✓）
+try:
+    _ms_is_cmd = _ms_is_cmd_query(_ms_text)
+except Exception:
+    _ms_is_cmd = False
+if _ms_is_cmd and (_ms_mentioned or _ms_sampled):
+    try:
+        logger.info("[auto_wake:skip-cmd] self=%s group=%s text=%s"
+                    % (_ms_sid, event.get_group_id(), _ms_text[:40]))
+    except Exception:
+        pass
+if (_ms_enabled and _ms_group_ok and not _ms_is_cmd and not event.is_at_or_wake_command
         and (_ms_mentioned or (_ms_sampled and _ms_ok_interval))):
     self._last_auto_wake_map[_ms_sid] = _ms_now
     event.is_wake = True

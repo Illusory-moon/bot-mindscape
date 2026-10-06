@@ -58,9 +58,65 @@ def _ms_image_refs(event) -> list:
     return out
 
 
+# ── 「别的 bot 的指令」识别（2026-10-06 加）─────────────────────────
+# 场景：群里还有别的机器人（典型是**云崽系**：Yunzai-Bot + miao-plugin 那一挂 ✓），
+# 它们的命令长这样：「#角色面板」「*<名字>光锥」「#<名字>圣遗物」——**恰好含 bot 的名字** ✗，
+# 于是被「提到名字」规则叫醒 ✗，还容易被她记成「又来问面板/配置」✗ 写进印象层。
+#
+# 判据（主人 2026-10-06 定）：① # 或 * 开头 ② 「名字 + 面板/圣遗物/…」这种查询格式
+# ③ **一般没有别的文字** ✗。三条同时满足才算指令 ✓。
+#
+# ⚠️ 不许把关键词直接拉黑 ✗ —— 有人真的问她游戏知识（「<名字>，行迹怎么点」）必须照常回 ✓；
+#    所以只拦「#/** 开头 + 纯查询」这一种形态 ✓，规则写在配置里（ignore_cmd ✓ 本文件无硬编码语义 ✓）。
+_MS_CMD_CFG_PATH = "/opt/astrbot/data/auto_wake_cfg.json"
+_MS_CMD_CACHE = {"mtime": -1.0, "cfg": {}}
+# 命令的「角色名」部分：允许空（#面板 ✓）或一个短名字（#<bot名>面板 ✓ / #<bot名>的面板 ✓），
+# 不许含空格与标点 —— 一旦有别的字，说明这是句人话，不是命令 ✓
+# 存**字符串**不是编译对象 ✓ —— 补丁插进别人的文件，不能假设顶层 import 过 re ✓
+_MS_CMD_NAME = r"^[^\s，。！？、,.!?#*：:；;~～\-_/|]{0,12}$"
+
+
+def _ms_cmd_cfg() -> dict:
+    """读配置里的 ignore_cmd 段（按 mtime 缓存，每条消息只 stat 一次 ✓）。"""
+    try:
+        import json as _j, os as _o
+        mt = _o.path.getmtime(_MS_CMD_CFG_PATH)
+        if mt != _MS_CMD_CACHE["mtime"]:
+            with open(_MS_CMD_CFG_PATH, encoding="utf-8") as _f:
+                _doc = _j.load(_f) or {}
+            _MS_CMD_CACHE["cfg"] = _doc.get("ignore_cmd") or {}
+            _MS_CMD_CACHE["mtime"] = mt
+    except Exception:
+        pass
+    return _MS_CMD_CACHE["cfg"]
+
+
+def _ms_is_cmd_query(text) -> bool:
+    """这条消息是不是「别的 bot 的查询指令」（是 → 不唤醒、不进缓冲 ✓）。"""
+    cfg = _ms_cmd_cfg()
+    if not cfg or not cfg.get("enabled", True):
+        return False
+    t = str(text or "").strip()
+    if len(t) < 2 or t[0] not in (cfg.get("prefixes") or ["#", "*"]):
+        return False
+    body = t[1:].strip()
+    if not body:
+        return False
+    import re as _r
+    for k in (cfg.get("keywords") or []):
+        if k and body.endswith(k):
+            head = body[: -len(k)].strip()
+            return bool(_r.match(_MS_CMD_NAME, head))
+    return False
+
+
 def _ms_record_ctx(event) -> None:
     """把群消息追加到缓冲文件（带文件锁 + 体积自截断）。"""
     try:
+        # 别的 bot 的查询指令不进缓冲 ✓ —— 否则她回复时会在上下文里看见「#<名字>面板」✗，
+        # 照样会以为有人在冲她问面板 ✓（拦截要在「到她手上之前」✓）。
+        if _ms_is_cmd_query(_ms_render_chain(event)):
+            return
         import json as _j, os as _o, time as _t, fcntl as _f
         _p = "/opt/astrbot/data/group_ctx_buffer.jsonl"
         _rec = {
