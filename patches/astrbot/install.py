@@ -8,6 +8,12 @@
 用法：
     python patches/astrbot/install.py              # 打补丁
     python patches/astrbot/install.py --revert     # 还原
+
+⚠️⚠️ 2026-10-06：**请在容器内跑**，或改完 `docker cp` 送进容器 ✓。
+    容器只挂载了 `data/` 等目录，**`.venv` 不在挂载里** ✗ —— 宿主机上的那份 stage.py
+    与容器内的是**两个不同文件**（2026-10-06 实测：宿主机 12432 字节 / 没打过补丁 ✗，
+    容器内 21572 字节 / 手写内联版 ✓）。在本脚本里直接跑，很可能改的是一份**没人加载**的文件 ✗。
+    改完务必自检：`python scripts/wake_stage_check.py <从容器取回的 stage.py>` ✓（见 README ✓）。
 """
 import argparse
 import datetime

@@ -102,6 +102,39 @@ bot 只看到后半句，回一句「吃什么？」）。
   docker exec qqbot-astrbot wc -l /opt/astrbot/.venv/lib/python3.13/site-packages/astrbot/core/pipeline/waking_check/stage.py
   ```
 
+### 🩺 一条命令自检（2026-10-06 加）
+
+上面这段话说得对，但**读过的人还是会踩** —— 2026-10-06 就真踩了：本鱼改完 `_waking_*_block.py` 再跑
+`install.py`，报「找不到备份文件」✗，查半天才发现线上跑的是**手工内联版** ✗、`install.py` 指的是
+**宿主机**那份（与容器内不是同一个文件 ✗）。→ 所以把「我们相信线上该有什么」写成一份**清单** ✓：
+
+```bash
+# 1) 把线上那份取出来（⚠️ 必须 docker cp；sftp 拿到的是宿主机那份 ✗）
+docker cp qqbot-astrbot:/opt/astrbot/.venv/lib/python3.13/site-packages/astrbot/core/pipeline/waking_check/stage.py /tmp/stage.py
+# 2) 逐项核对（配置 / 提到名字 / 抽样 / wake_reason / 群限制 / 上下文缓冲 / 指令拦截 …）
+python scripts/wake_stage_check.py /tmp/stage.py
+```
+
+全绿 = 线上与清单一致 ✓；有 `[MISS]` = **先别宣布改好了** ✗。
+（清单在 `scripts/wake_stage_check.py` 顶部，加功能时顺手加一行 ✓）
+
+### 改线上代码的正确流程（2026-10-06 实践 ✓）
+
+```bash
+docker cp qqbot-astrbot:<容器内路径> /tmp/live_stage.py          # 取出来
+# 本地改 /tmp/live_stage.py
+docker exec qqbot-astrbot cp -a <容器内路径> <容器内路径>.bak-<用途>-<ts>   # 备份也备在容器内
+docker cp /tmp/live_stage.py qqbot-astrbot:<容器内路径>          # 送回去
+docker exec qqbot-astrbot /opt/astrbot/.venv/bin/python -m py_compile <容器内路径>
+docker restart qqbot-astrbot
+docker exec qqbot-astrbot /opt/astrbot/.venv/bin/python -c \
+  "import astrbot.core.pipeline.waking_check.stage as s; print(s.<函数>(...))"   # 真 import 验行为 ✓
+```
+
+> 本目录的 `_waking_*_block.py`（`install.py` 用的那套）目前是**参考实现** ✓ ——
+> 线上实际跑的是**手写内联版**，两者功能相近但**不是同一份代码** ✗。
+> 「把线上对齐回这套块」是一件独立的重构（要把 `group_restrict` 等内联功能也搬进块里 ✓），见 `canon/_16-待办.md` ✓。
+
 ## 风险与恢复
 
 - 脚本**先备份**再改（`stage.py.bak-mindscape-<时间戳>`）
