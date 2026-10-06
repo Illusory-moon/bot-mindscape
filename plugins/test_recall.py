@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """混合检索效果对比测试"""
-import importlib.util, os, sys, types
+import importlib.util, os, sys, tempfile, types, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # 打桩 astrbot + mindscape_config
@@ -27,12 +27,26 @@ spec = importlib.util.spec_from_file_location('recall', os.path.join(HERE, 'mind
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
-DIARY = sys.argv[1] if len(sys.argv) > 1 else ''
-print('日记文件:', DIARY, '|', os.path.getsize(DIARY), 'bytes' if os.path.exists(DIARY) else 'MISSING')
-print()
-for kw in ['爬楼', '薯片', '猫儿猫儿', '下雨', '完全不存在的词汇xyz']:
-    hits = mod.search_diary(DIARY, kw, limit=4)
-    print('=== 搜「%s」-> %d 条 ===' % (kw, len(hits)))
-    for h in hits:
-        print('   ' + h[:100])
+class RecallTest(unittest.TestCase):
+    def test_full_search_across_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [os.path.join(tmp, 'a.md'), os.path.join(tmp, 'b.md')]
+            for path in paths:
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write('## 2026-10-01\n' + ''.join('- 示例记录 %d\n' % i for i in range(12)))
+            hits, total = mod.search_diary(paths, '示例记录', full=True)
+            self.assertEqual((len(hits), total), (24, 24))
+            hits, total = mod.search_diary(paths, '示例记录')
+            self.assertEqual((len(hits), total), (15, 24))
+
+
+if __name__ == '__main__':
+    diary = sys.argv[1] if len(sys.argv) > 1 else ''
+    print('日记文件:', diary, '|', os.path.getsize(diary) if os.path.exists(diary) else 'MISSING')
     print()
+    for kw in ['爬楼', '薯片', '猫儿猫儿', '下雨', '完全不存在的词汇xyz']:
+        hits, total = mod.search_diary(diary, kw, limit=4)
+        print('=== 搜「%s」-> %d/%d 条 ===' % (kw, len(hits), total))
+        for h in hits:
+            print('   ' + h[:100])
+        print()

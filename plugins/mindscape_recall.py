@@ -133,7 +133,8 @@ def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP,
     为什么要接受多个词：提问用的词往往不是记日记时用的词。实测同一件事换个
     说法，命中数量能差近十倍。所以关键词允许给一组近义词，命中任意一个都算。
     """
-    if not path or not os.path.exists(path):
+    paths = [path] if isinstance(path, str) else list(path or [])
+    if not paths:
         return [], 0
     terms = split_terms(keyword)
     if not terms:
@@ -145,38 +146,37 @@ def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP,
     wants = [d for d in (date_filter(t) for t in terms) if d]
     words = [t for t in terms if date_filter(t) is None]
     scored = []
-    head = ""
     n = 0
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            n += 1
-            if n > scan_lines:
-                break
-            line = line.rstrip()
-            if line.startswith("## "):
-                head = line[3:].strip()
-                continue
-            if not line.startswith("-"):
-                continue
-            body = line.lstrip("- ").strip()
-            text = head + " " + body
-            if wants:
-                # 日期以【条目头】为准：正文里提到别的日期不算
-                ld = date_key(head) or date_key(body)
-                if not any(date_match(ld, w) for w in wants):
+    for source in paths:
+        if not source or not os.path.exists(source):
+            continue
+        head = ""
+        with open(source, "r", encoding="utf-8", errors="replace") as f:
+            for scanned, line in enumerate(f, 1):
+                if scanned > scan_lines:
+                    break
+                n += 1
+                line = line.rstrip()
+                if line.startswith("## "):
+                    head = line[3:].strip()
                     continue
-            if words:
-                per = [score_line(text, t) for t in words]
-                hit = sum(1 for s in per if s > 0)
-                if not hit:
+                if not line.startswith("-"):
                     continue
-                # 命中词数优先，其次才是单词语义分。
-                # 旧实现取 max()：只沾 1 个词和沾满 5 个词同分，于是同分按行号倒序，
-                # 最新的永远排最前，旧事全被挤到 80 条之外。
-                sc = hit * 100.0 + (max(per) if per else 0.0)
-            else:
-                sc = 100.0
-            scored.append((sc, n, "[%s] %s" % (head, body)))
+                body = line.lstrip("- ").strip()
+                text = head + " " + body
+                if wants:
+                    ld = date_key(head) or date_key(body)
+                    if not any(date_match(ld, w) for w in wants):
+                        continue
+                if words:
+                    per = [score_line(text, t) for t in words]
+                    hit = sum(1 for s in per if s > 0)
+                    if not hit:
+                        continue
+                    sc = hit * 100.0 + max(per)
+                else:
+                    sc = 100.0
+                scored.append((sc, n, "[%s] %s" % (head, body)))
     if not scored:
         return [], 0
     # 先按分数降序；同分时越新越靠前
@@ -278,13 +278,7 @@ async def recall_memory(*args, **kwargs):
     if not paths:
         return "我还没有长期记忆文件。"
     full = _as_bool(kwargs.get("full"))
-    hits, total = [], 0
-    for p in paths:
-        h, t_all = search_diary(p, kw, full=full)
-        hits += h
-        total += t_all
-    if len(paths) > 1:
-        hits = hits[:DEFAULT_LIMIT]
+    hits, total = search_diary(paths, kw, full=full)
     if not hits:
         # 找不到就明确说找不到 —— 这是防幻觉的第一道闸
         return ("翻了翻记忆，没有找到跟「%s」有关的记录。"

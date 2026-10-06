@@ -154,7 +154,7 @@ def clean(db, table, column, max_mb, log_path=None):
     """脱图 + 清理超大行。返回 (脱图行, 替换处, 删图片行, 删超大行, 前MB, 后MB)。"""
     if not db or not os.path.exists(db):
         log("数据库不存在，跳过: %s" % db, log_path)
-        return (0, 0, 0.0, 0.0)
+        return (0, 0, 0, 0, 0.0, 0.0)
     table = _safe_ident(table, "conversations")
     column = _safe_ident(column, "content")
     con = sqlite3.connect(db, timeout=30)
@@ -201,7 +201,6 @@ def clean(db, table, column, max_mb, log_path=None):
 # （防连续对话断片）→ 会话里再也没有一墙自己的旧口气；她需要时用 recall_memory
 # 从档案里把原话取回来 ✓。
 # **通用** ✓：prefix / file / keep_last / labels 全在 config 里，代码里没有人名与号。
-ARCHIVE_MAX_LINE = 300
 # 机器文本（不是她说的话）：冒泡轮的任务描述有时会被原样存成一条 assistant 消息
 # （实测档案里混进过 `[CronJob] bubble-xxx: … triggered at …`）。这类**不入档、直接移出会话** ✓。
 ARCHIVE_NOISE = ("[CronJob]", "triggered at", "[auto_wake", "bubble-")
@@ -258,26 +257,29 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
                          if isinstance(m, dict) and m.get("role") == "assistant"
                          and not m.get("tool_calls") and _arch_text(m).strip()]
                 # 机器文本：不入档、也不留在会话里（它不是她的发言）
-                noise = [i for i in plain
-                         if any(k in _arch_text(msgs[i]) for k in ARCHIVE_NOISE)]
-                plain = [i for i in plain if i not in set(noise)]
+                noise = {i for i in plain
+                         if any(k in _arch_text(msgs[i]) for k in ARCHIVE_NOISE)}
+                plain = [i for i in plain if i not in noise]
                 if len(plain) <= keep and not noise:
                     continue
-                drop = (plain[:-keep] if keep else plain) + noise
+                drop = (plain[:-keep] if keep else plain) + list(noise)
                 drop = sorted(set(drop))
                 gid = str(uid).split(":")[-1]
                 label = str(labels.get(gid) or gid)
                 now = datetime.datetime.now().strftime("%m-%d %H:%M")
                 lines = []
                 for i in drop:
+                    if i in noise:
+                        continue
                     txt = _arch_text(msgs[i]).strip().replace("\n", " ")
-                    lines.append("- [%s][%s] %s" % (now, label, txt[:ARCHIVE_MAX_LINE]))
+                    lines.append("- [%s][%s] %s" % (now, label, txt))
                 try:
                     parent = os.path.dirname(path)
                     if parent:
                         os.makedirs(parent, exist_ok=True)
-                    with open(path, "a", encoding="utf-8") as fh:
-                        fh.write("\n".join(lines) + "\n")
+                    if lines:
+                        with open(path, "a", encoding="utf-8") as fh:
+                            fh.write("\n".join(lines) + "\n")
                 except Exception as e:
                     log("发言档案写入失败，本轮跳过: %s" % str(e)[:80], log_path)
                     continue

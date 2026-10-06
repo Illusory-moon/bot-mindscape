@@ -17,10 +17,11 @@ except Exception:
     cfg = None
 
 try:
-    from mindscape_core import load_index, save_index, IndexLock
+    from mindscape_core import load_index, save_index, IndexLock, safe_name
 except Exception:
     load_index = save_index = None
     IndexLock = None
+    safe_name = None
 
 
 def _abs(path):
@@ -74,6 +75,8 @@ def remove_item(category, filename, delete_file=False):
     """从索引移除（默认保留图片文件，可恢复）。"""
     if not (load_index and save_index and IndexLock):
         return False, "内部模块不可用"
+    if delete_file and (not safe_name or safe_name(filename) != filename):
+        return False, "文件名不安全"
     d, i = sticker_paths()
     try:
         with IndexLock(i):

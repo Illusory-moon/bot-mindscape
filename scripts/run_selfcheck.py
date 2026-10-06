@@ -691,6 +691,14 @@ def check_regressions():
         rows = NT.parse_notes(t)
         upsert_ok = (len(rows) == 2 and rows[0][0] == "丙"
                      and rows[1][1] == "乙来挂的（后来补挂）")
+        multiline = NT.parse_notes(NT.upsert_note("", "甲", "第一行\n第二行"))
+        invalid = []
+        for key in ("甲：乙", "甲" * 41):
+            try:
+                NT.upsert_note("", key, "值")
+            except ValueError:
+                invalid.append(key)
+        upsert_ok = upsert_ok and multiline == [("甲", "第一行 第二行")] and len(invalid) == 2
         f = os.path.join(HERE, "_sc_notes.md")
         NT.write_notes(f, t)
         with open(f, encoding="utf-8") as fp:
@@ -2012,6 +2020,32 @@ def check_regressions():
                               "取=%r 再取=%r 过期=%r" % (_a, _b, _c))
     except Exception as e:
         bad("R40 @ 排队", "%s: %s" % (type(e).__name__, str(e)[:140]))
+    try:
+        import asyncio as _aio_mn
+        import mindscape_mention as MN3
+        class _Result:
+            def __init__(self):
+                self.chain = [types.SimpleNamespace(text="你好 @某人(123456789) 再见")]
+        class _Event:
+            def __init__(self):
+                self.result = _Result()
+            def get_self_id(self):
+                return "bot-a"
+            def get_group_id(self):
+                return "group-a"
+            def get_result(self):
+                return self.result
+        old_load = MN3.mn_load_config
+        MN3.mn_load_config = lambda: (True, ["bot-a"])
+        try:
+            event = _Event()
+            _aio_mn.run(MN3.mn_attach_hook(event))
+            cleaned = event.result.chain[0].text
+        finally:
+            MN3.mn_load_config = old_load
+        (ok if "123456789" not in cleaned else bad)("R41 无排队时清掉手打 @ 中的号码", cleaned)
+    except Exception as e:
+        bad("R41 出站号码清理", "%s: %s" % (type(e).__name__, str(e)[:140]))
     # R36: 句尾去句号 —— 末尾留空、句中改逗号，且**绝不碰 ASCII 的「.」**
     #      （4.6 / 0+0 是版本号，剃了就出事故）；子选项空 = 关，不能沿用
     #      「空 = 全部 bot」那条旧语义，否则谁忘写一行全场的句号都没了。

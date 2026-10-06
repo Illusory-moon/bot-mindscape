@@ -157,17 +157,19 @@ async def mn_attach_hook(*args, **kwargs):
         said = MN_SAID.pop(key, None) if MN_SAID else None
         if said and time.time() - float(said[1]) > MN_SAID_TTL:
             said = None
+        enabled, targets = mn_load_config()
+        if enabled and scope_hit(targets, event.get_self_id()):
+            result = event.get_result()
+            chain = getattr(result, "chain", None) if result is not None else None
+            if chain:
+                removed = mn_clean_chain(chain, (item or (None, None))[0],
+                                         (item or (None, None))[1])
+                if removed:
+                    logger.info("[mindscape_mention] 清掉正文里手打的 @ %d 处", removed)
         if item is None and said is None:
             return
         # ① 她这一轮用 say_lines 说过了 → 不再另发正文（要补就该写进 lines 里 ✓）。
         #    有 @ 排队时不抑制 —— @ 是挂在正文前面的，抑制会把它一起吞掉 ✗。
-        # 无论有没有排队的 @，都先把正文里手打的 @ 清一遍（防号外泄 ✓）。
-        _res = event.get_result()
-        _chain = getattr(_res, "chain", None) if _res is not None else None
-        if _chain:
-            _n = mn_clean_chain(_chain, (item or (None, None))[0], (item or (None, None))[1])
-            if _n:
-                logger.info("[mindscape_mention] 清掉正文里手打的 @ %d 处（号不外泄 ✓）", _n)
         if said is not None and item is None:
             event.clear_result()
             logger.info("[mindscape_mention] 本轮已连发 %d 条 → 抑制正文 self=%s",

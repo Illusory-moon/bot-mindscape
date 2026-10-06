@@ -27,18 +27,6 @@ def _run(cmd, cwd):
     return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
 
 
-def _version():
-    """从主仓库 README 顶部的 badge 猜不到，就读 dist 的 metadata；再不行用 0.1.0。"""
-    p = os.path.join(HERE, "dist", "mindscape", "metadata.yaml")
-    try:
-        m = re.search(r"^version:\s*(\S+)", open(p, encoding="utf-8").read(), re.M)
-        if m:
-            return m.group(1)
-    except Exception:
-        pass
-    return "0.1.0"
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", default=DEFAULT_DIR, help="插件仓库目录")
@@ -70,7 +58,11 @@ def main():
     # 3) 版本号
     mf = os.path.join(dst, "metadata.yaml")
     txt = open(mf, encoding="utf-8").read()
-    ver = a.bump or _version()
+    current = re.search(r"^version:\s*(\S+)", txt, re.M)
+    if not current:
+        print("[失败] 市场仓 metadata.yaml 缺少 version")
+        return 1
+    ver = a.bump or current.group(1)
     txt2 = re.sub(r"^version:.*$", "version: " + ver, txt, count=1, flags=re.M)
     if txt2 != txt:
         open(mf, "w", encoding="utf-8").write(txt2)
@@ -80,14 +72,18 @@ def main():
     if not a.push:
         print("完成（未推送）。加 --push 直接提交推送。")
         return 0
-    for cmd in (["git", "add", "-A"],
-                ["git", "commit", "-m", "chore: 同步 main.py (" + ver + ")"],
+    for cmd in (["git", "commit", "--only", "-m", "chore: 同步 main.py (" + ver + ")",
+                 "--", "main.py", "metadata.yaml"],
                 ["git", "push"]):
         code, out = _run(cmd, dst)
         if code != 0 and "nothing to commit" not in out:
             print("[失败] " + " ".join(cmd) + "\n" + out)
             return 1
         print("  [git] " + " ".join(cmd[1:3]) + (" -> " + out.splitlines()[-1] if out else ""))
+    code, out = _run(["git", "rev-list", "--left-right", "--count", "HEAD...@{upstream}"], dst)
+    if code != 0 or out.replace("\t", " ").strip() != "0 0":
+        print("[失败] 推送后本地与远端未对齐: " + out)
+        return 1
     print("已推送到插件仓库。")
     return 0
 

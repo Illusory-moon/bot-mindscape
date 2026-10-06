@@ -63,7 +63,9 @@ def upsert_note(text, key, value):
     刚改过的条目一定进得去。
     """
     key = (key or "").strip()
-    value = (value or "").strip()
+    if not key or len(key) > 40 or any(c in key for c in ":：\r\n"):
+        raise ValueError("note key must be 1-40 characters without colon or newline")
+    value = " ".join((value or "").splitlines()).strip()
     lines = [l for l in (text or "").splitlines()]
     head = [l for l in lines if not LINE_RE.match(l.strip())]
     items = [(k, v) for k, v in parse_notes(text) if k != key]
@@ -117,6 +119,8 @@ async def save_note(*args, **kwargs):
         return "要记什么？给我一个名字和内容。"
     if not key:
         key = value[:12]
+    if not key or len(key) > 40 or any(c in key for c in ":：\r\n"):
+        return "名字请控制在 40 字以内，不要带冒号或换行。"
     sid = _find_self_id(args)
     path = notes_path(sid)
     if not path:

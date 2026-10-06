@@ -34,6 +34,7 @@ try:
     import mindscape_config as cfg
 except Exception:
     cfg = None
+from mindscape_core import safe_name
 
 
 def _abs(path):
@@ -61,7 +62,7 @@ def _connect(s=None):
     import paramiko
     s = s or sync_cfg()
     c = paramiko.SSHClient()
-    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    c.load_system_host_keys()
     kw = dict(hostname=s.get("host"), port=int(s.get("port") or 22),
               username=s.get("user") or "root",
               timeout=float(s.get("timeout") or 20),
@@ -83,13 +84,23 @@ def _paths(s):
     return rd, rd + "/" + idx_name
 
 
+def _items(data):
+    if not isinstance(data, list):
+        raise ValueError("图库索引必须是列表")
+    for item in data:
+        if not isinstance(item, dict):
+            raise ValueError("图库索引含非对象条目")
+        name = item.get("file")
+        if name is not None and (not safe_name(name) or safe_name(name) != name):
+            raise ValueError("图库索引含不安全的文件名")
+    return data
+
+
 def _load(path):
-    try:
-        with open(path, encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, list) else []
-    except Exception:
+    if not os.path.exists(path):
         return []
+    with open(path, encoding="utf-8") as f:
+        return _items(json.load(f))
 
 
 def _save(path, data):
@@ -119,9 +130,7 @@ def pull(local_index=None, local_dir=None, verbose=True):
     try:
         sftp = c.open_sftp()
         with sftp.file(rindex, "r") as f:
-            remote = json.loads(f.read().decode("utf-8"))
-        if not isinstance(remote, list):
-            remote = []
+            remote = _items(json.loads(f.read().decode("utf-8")))
         got = 0
         for it in remote:
             fn = str(it.get("file") or "")
@@ -160,13 +169,10 @@ def push(local_index=None, local_dir=None, verbose=True):
     c = _connect(s)
     try:
         sftp = c.open_sftp()
-        remote = []
         try:
             with sftp.file(rindex, "r") as f:
-                remote = json.loads(f.read().decode("utf-8"))
-            if not isinstance(remote, list):
-                remote = []
-        except Exception:
+                remote = _items(json.loads(f.read().decode("utf-8")))
+        except FileNotFoundError:
             remote = []
         local = _load(local_index)
 
@@ -203,11 +209,7 @@ def push(local_index=None, local_dir=None, verbose=True):
         tmp = rindex + ".tmp"
         with sftp.file(tmp, "w") as f:
             f.write(json.dumps(out_items, ensure_ascii=False, indent=2).encode("utf-8"))
-        try:
-            sftp.remove(rindex)
-        except Exception:
-            pass
-        sftp.rename(tmp, rindex)
+        sftp.posix_rename(tmp, rindex)
         sftp.close()
     finally:
         c.close()
@@ -234,8 +236,8 @@ def status(local_index=None):
         sftp = c.open_sftp()
         try:
             with sftp.file(rindex, "r") as f:
-                remote = json.loads(f.read().decode("utf-8"))
-        except Exception:
+                remote = _items(json.loads(f.read().decode("utf-8")))
+        except FileNotFoundError:
             remote = []
         sftp.close()
     finally:
