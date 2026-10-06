@@ -311,6 +311,17 @@ def rc_archives(self_id):
             p = os.path.join(os.path.dirname(cfg.config_path()), p)
         if p and os.path.exists(p):
             out.append(p)
+    # 顺带把「额外记忆文件」（extra_diaries：人格档案、私聊日记这类）也纳入检索 ✓ ——
+    # 它们平时是整份注入的，但问到细节（「你上次私聊我说了什么」）还得靠检索 ✓。
+    for b in _bot_entries():
+        if str(b.get("self_id", "")) != str(self_id):
+            continue
+        for x in (b.get("extra_diaries") or []):
+            p = str(x or "")
+            if p and not os.path.isabs(p):
+                p = os.path.join(os.path.dirname(cfg.config_path()), p)
+            if p and os.path.exists(p) and p not in out:
+                out.append(p)
     return out
 
 

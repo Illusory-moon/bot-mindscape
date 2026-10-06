@@ -338,6 +338,10 @@ janitor:
 # 通用：prefix / file / keep_last / labels 全在这里，代码里没有任何 bot 的名字或号。
 archive:
   id_column: "user_id"          # 会话表里存会话 id 的列（AstrBot 是 user_id）
+  # ⚠️ target 可以带自己的 `source:`（db / table / where / fields ✓）—— 顶层那份是默认值。
+  #    典型用法：群消息和私聊在同一个库里是两个 event_name，想让私聊也有一份日记，
+  #    就再写一个 target、把 where 换成私聊事件即可（输出另开一个文件 ✓，
+  #    再把它加进 memory.bots[].extra_diaries 就会被注入 ✓）。
   targets:
     - self_id: "20000000"       # 哪个 bot（与 memory.bots[].self_id 对上）
       prefix: "platform:GroupMessage:"   # 会话 id 前缀（形如 <平台实例>:GroupMessage:<群号>）

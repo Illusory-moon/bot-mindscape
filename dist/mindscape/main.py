@@ -1434,6 +1434,17 @@ def rc_archives(self_id):
             p = os.path.join(os.path.dirname(cfg.config_path()), p)
         if p and os.path.exists(p):
             out.append(p)
+    # 顺带把「额外记忆文件」（extra_diaries：人格档案、私聊日记这类）也纳入检索 ✓ ——
+    # 它们平时是整份注入的，但问到细节（「你上次私聊我说了什么」）还得靠检索 ✓。
+    for b in _bot_entries():
+        if str(b.get("self_id", "")) != str(self_id):
+            continue
+        for x in (b.get("extra_diaries") or []):
+            p = str(x or "")
+            if p and not os.path.isabs(p):
+                p = os.path.join(os.path.dirname(cfg.config_path()), p)
+            if p and os.path.exists(p) and p not in out:
+                out.append(p)
     return out
 
 
@@ -1678,6 +1689,7 @@ DEFAULT_PERSONA = (
     # 记忆按群分房（2026-10-06 主人裁定）：模型在生成时**看得到**每条记录来自哪个群，
     # 只是以前没要求它写下来 → 存进日记后来源就丢了，注入时自然分不清是哪群的事。
     "每条日记前面用【群名】标出这件事发生在哪个群（群名在记录的方括号里）。"
+    "方括号里写「私聊」的，就是一对一私聊、不是群 —— 照写「【私聊】」就好，别自己编群名。"
     "同一个群的条目排在一起，绝不把两个群的事混进同一句。"
     '只输出一个 JSON 对象，格式：'
     '{"diary":["条目1","条目2"], "people":{"昵称":"一句话描述"}}'
@@ -1731,6 +1743,10 @@ def save_state(path, st):
 
 
 def fetch(src, target, since_ts, since_seq, only_user=None):
+    # target 可以带自己的 source（db/table/where/fields）—— 顶层那份是默认 ✓。
+    # 用途：同一个源库里，群消息和私聊是两个 event_name（group_message / private_message），
+    # 想各写一份日记，就得能按 target 换 where ✓（2026-10-06 加）。
+    src = ((target or {}).get("source") or src) or {}
     """从 SQLite 增量读取消息（表名/字段名来自配置）。
 
     only_user：只取这个 user_id 的消息（mindscape_learn 用它学某人的风格）。
@@ -1790,6 +1806,9 @@ def fetch(src, target, since_ts, since_seq, only_user=None):
     return rows
 
 
+DM_LABEL = "私聊"
+
+
 def dy_render(msgs):
     """把一批消息渲染成发给模型的那段文本。
 
@@ -1797,7 +1816,7 @@ def dy_render(msgs):
     两边不一致就会出现「按 5000 字分好批、发出去却是 6000 字被砍」。
     """
     return "群聊记录：\n" + "\n".join(
-        "[" + m["time"] + "][" + m["gname"] + "] " + m["who"] + ": " + m["txt"]
+        "[" + m["time"] + "][" + (m.get("gname") or DM_LABEL) + "] " + m["who"] + ": " + m["txt"]
         for m in msgs)
 
 
