@@ -22,7 +22,8 @@ class FakeSftp:
     def stat(self, path):
         if path not in self.files:
             raise OSError(2, "No such file")
-        return types.SimpleNamespace(st_mode=stat.S_IFREG, st_size=len(self.files[path]))
+        return types.SimpleNamespace(st_mode=stat.S_IFREG, st_size=len(self.files[path]),
+                                     st_mtime=1700000000)
 
     def open(self, path, mode):
         return io.BytesIO(self.files[path])
@@ -68,6 +69,9 @@ class ObserveTest(unittest.TestCase):
             self.assertEqual(observe.pull("logs"), {"count": 3, "missing": 0, "errors": 0})
             memory = observe.listing("memory")
             logs = observe.listing("logs")
+            self.assertEqual(memory[0]["mtime"], 1700000000)
+            self.assertEqual(memory[0]["size"], len(files["/data/a.md"]))
+            self.assertTrue(any(e.get("missing") and "mtime" not in e for e in memory))
             self.assertIn("memory", observe.preview("memory", memory[0]["id"])["text"])
             self.assertTrue(any(e["path"] == "docker:bot" for e in logs))
             with self.assertRaises(FileNotFoundError):

@@ -81,21 +81,91 @@ def remote_hash(sftp, path):
     return digest.hexdigest()
 
 
-def check_persona(client, db, prefix, expected=""):
+def persona_rows(client, db):
     code = ("import json,sqlite3\n"
             "db=sqlite3.connect('file:' + " + repr(db) + " + '?mode=ro',uri=True)\n"
-            "rows=db.execute(\"select scope_id,value from preferences where key='session_service_config' and scope_id like ?\",(" + repr(prefix + "%") + ",)).fetchall()\n"
+            "rows=db.execute(\"select scope_id,value from preferences where key='session_service_config'\").fetchall()\n"
             "print(json.dumps([(scope,(json.loads(value).get('val') or {}).get('persona_id')) for scope,value in rows]))")
     _, stdout, stderr = client.exec_command("python3 -c " + shlex.quote(code), timeout=20)
     raw = stdout.read()
     if stdout.channel.recv_exit_status():
         raise RuntimeError("读取会话人格绑定失败: " + stderr.read().decode("utf-8", "replace")[:100])
-    rows = json.loads(raw)
+    return json.loads(raw)
+
+
+def check_persona(client, db, prefix, expected=""):
+    rows = [(scope, persona) for scope, persona in persona_rows(client, db)
+            if scope.startswith(prefix)]
     if not rows:
         return ["未找到该通道的显式会话人格绑定"]
     if any(not persona or (expected and persona != expected) for _, persona in rows):
         return ["该通道存在缺失或不符合预期的人格绑定"]
     return []
+
+
+def channels_report(text_channel=""):
+    if not sync.available():
+        raise RuntimeError("请先配置 ui.sync")
+    text_channel = text_channel or str(sync.sync_cfg().get("text_channel") or "")
+    client = sync._connect()
+    try:
+        sftp = client.open_sftp()
+        with sftp.open(managed._paths()["config"], "rb") as f:
+            raw = f.read(5 * 1024 * 1024 + 1)
+        if len(raw) > 5 * 1024 * 1024:
+            raise ValueError("服务器配置超过 5 MB")
+        data = yaml.safe_load(raw)
+        if not isinstance(data, dict):
+            raise ValueError("服务器配置格式不正确")
+        expected = sync.sync_cfg().get("expected_personas") or {}
+        if not isinstance(expected, dict):
+            raise ValueError("ui.sync.expected_personas 必须是对象")
+        db = (data.get("janitor") or {}).get("db")
+        bindings = persona_rows(client, db) if db else []
+        issues = check_config(data, text_channel)
+        if text_channel and not db:
+            issues.append("未配置会话数据库，无法核对人格绑定")
+        rows = []
+        fmt = data.get("format") or {}
+        sections = {k: (data.get(k) or {}).get("targets") or []
+                    for k in ("diary", "digest", "archive", "stickers", "vision", "groupctx")}
+        digest_outputs = {t.get("output") for t in sections["digest"] if isinstance(t, dict)}
+        for bot in (data.get("memory") or {}).get("bots") or []:
+            if not isinstance(bot, dict) or not bot.get("self_id"):
+                continue
+            sid = str(bot["self_id"])
+            found = [persona for scope, persona in bindings if scope.startswith(sid + ":")]
+            want = str(expected.get(sid) or "")
+            if sid != text_channel:
+                status = "未核对"
+            elif not found or any(not p for p in found):
+                status = "未绑定"
+            elif want and any(p != want for p in found):
+                status = "与预期不符"
+            elif want:
+                status = "符合预期"
+            else:
+                status = "已绑定（未设预期）"
+            if sid == text_channel:
+                if status in ("未绑定", "与预期不符"):
+                    issues.append("文字通道人格绑定" + status)
+                elif not want:
+                    issues.append("文字通道未配置预期人格，无法核对归属")
+            rows.append({"id": sid, "name": str(bot.get("name") or sid),
+                         "targets": {"format": sid in _ids(fmt.get("targets")),
+                                     "no_period": sid in _ids(fmt.get("no_period")),
+                                     "diary": sid in _ids(sections["diary"]),
+                                     "digest": bool(bot.get("digest") and bot["digest"] in digest_outputs),
+                                     "archive": sid in _ids(sections["archive"]),
+                                     "stickers": sid in _ids(sections["stickers"]),
+                                     "vision": sid in _ids(sections["vision"]),
+                                     "groupctx": sid in _ids(sections["groupctx"])},
+                         "persona": status, "bindings": len(found) if sid == text_channel else None,
+                         "actual_personas": sorted({str(p) for p in found if p}),
+                         "expected_persona": want})
+        return {"channels": rows, "issues": issues, "text_channel": text_channel}
+    finally:
+        client.close()
 
 
 def main():

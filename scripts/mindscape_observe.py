@@ -108,13 +108,13 @@ def _capture(sftp, path):
         raw = f.read(MAX_FILE + 1)
     if len(raw) > MAX_FILE:
         raise ValueError("超过 5 MB")
-    return raw
+    return raw, info
 
 
-def _save_entry(kind, key, label, raw):
+def _save_entry(kind, key, label, raw, mtime=None):
     ident = hashlib.sha256(key.encode("utf-8")).hexdigest()[:20]
     _atomic(os.path.join(_dir(kind), ident + ".txt"), raw)
-    return {"id": ident, "path": key, "label": label, "size": len(raw)}
+    return {"id": ident, "path": key, "label": label, "size": len(raw), "mtime": mtime}
 
 
 def pull(kind):
@@ -124,7 +124,7 @@ def pull(kind):
     client = sync._connect()
     try:
         sftp = client.open_sftp()
-        config_raw = _capture(sftp, managed._paths()["config"])
+        config_raw, _ = _capture(sftp, managed._paths()["config"])
         config = yaml.safe_load(config_raw)
         if not isinstance(config, dict):
             raise ValueError("服务器配置格式不正确")
@@ -132,10 +132,10 @@ def pull(kind):
         entries, total = [], 0
         for path, label in list(paths.items())[:MAX_FILES]:
             try:
-                raw = _capture(sftp, path)
+                raw, info = _capture(sftp, path)
                 if total + len(raw) > MAX_TOTAL:
                     raise ValueError("本次总量超过 30 MB")
-                entries.append(_save_entry(kind, path, label, raw))
+                entries.append(_save_entry(kind, path, label, raw, info.st_mtime))
                 total += len(raw)
             except (OSError, ValueError) as e:
                 if isinstance(e, OSError) and e.errno == errno.ENOENT:

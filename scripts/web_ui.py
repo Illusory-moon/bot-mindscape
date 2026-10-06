@@ -48,6 +48,11 @@ try:
 except Exception:
     observe = None
 
+try:
+    import check_live as live
+except Exception:
+    live = None
+
 TOKEN = secrets.token_urlsafe(16)
 ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 MAX_BODY = 512 * 1024
@@ -150,6 +155,7 @@ let CONFIG = null;
 let BOT = null;
 let SAVE_QUEUE = Promise.resolve();
 const PENDING_SAVES = new Map();
+const OBSERVED = {memory:[], logs:[]};
 
 // 草稿存取：写不进去也只是丢草稿，绝不能让功能挂掉
 function ls(k, v){
@@ -369,27 +375,62 @@ async function observeList(kind){
   try {
     const j = await post('/api/observe/' + kind + '/list', '');
     if (!j.ok) throw Error(j.error);
+    OBSERVED[kind] = j.files;
     select.replaceChildren();
-    j.files.forEach(item => {
+    j.files.forEach((item, i) => {
       const option = document.createElement('option');
-      option.value = item.id || '';
+      option.value = String(i);
       option.textContent = item.label + ' · ' + item.path + (item.error ? ' · ' + item.error : '');
-      option.disabled = !item.id;
       select.append(option);
     });
-    const first = j.files.find(item => item.id === selected) || j.files.find(item => item.id);
-    if (first) { select.value = first.id; await observeRead(kind); }
-    else document.getElementById(kind + '-text').textContent = '';
+    if (j.files.length) { select.value = selected && Number(selected) < j.files.length ? selected : '0'; await observeRead(kind); }
+    else { document.getElementById(kind + '-text').textContent = ''; document.getElementById(kind + '-meta').textContent = ''; }
     if (!j.files.length) status.textContent = '暂无本机快照';
   } catch(e) { status.textContent = '读取失败：' + e.message; }
 }
 async function observeRead(kind){
   const select = document.getElementById(kind + '-files');
-  if (!select.value) return;
-  const j = await post('/api/observe/' + kind + '/read', JSON.stringify({id:select.value}));
+  const item = OBSERVED[kind][Number(select.value)];
+  if (!item) return;
+  const meta = document.getElementById(kind + '-meta');
+  const age = item.mtime ? (Date.now() / 1000 - item.mtime) : 0;
+  meta.textContent = item.missing ? '尚未生成' : item.error ? '读取失败：' + item.error
+    : item.mtime ? '服务器更新：' + new Date(item.mtime * 1000).toLocaleString() + ' · ' + item.size.toLocaleString() + ' 字节'
+      + (age > 48 * 3600 ? ' · 超过 48 小时未更新（空闲通道可能正常）' : '')
+    : item.size.toLocaleString() + ' 字节 · 服务器时间未记录';
   const pre = document.getElementById(kind + '-text');
+  if (!item.id) { pre.textContent = ''; return; }
+  const j = await post('/api/observe/' + kind + '/read', JSON.stringify({id:item.id}));
   pre.textContent = j.ok ? j.text : ('读取失败：' + j.error);
   document.getElementById(kind + '-msg').textContent = j.ok && j.truncated ? '显示末尾 200 KB；完整文件已保存到本机' : '';
+}
+
+async function loadChannels(){
+  const status = document.getElementById('channels-msg');
+  const select = document.getElementById('channel-select');
+  status.textContent = '正在核对服务器...';
+  try {
+    const j = await post('/api/channels/check', JSON.stringify({text_channel:select.value}));
+    if (!j.ok) throw Error(j.error);
+    const chosen = select.value || j.text_channel;
+    select.replaceChildren();
+    const none = document.createElement('option'); none.value = ''; none.textContent = '选择文字通道'; select.append(none);
+    j.channels.forEach(c => { const o = document.createElement('option'); o.value = c.id; o.textContent = c.name + ' · ' + c.id; select.append(o); });
+    select.value = chosen;
+    const body = document.getElementById('channel-rows'); body.replaceChildren();
+    const fields = ['format','no_period','diary','digest','archive','stickers','vision','groupctx'];
+    j.channels.forEach(c => {
+      const tr = document.createElement('tr');
+      [c.name + ' · ' + c.id, ...fields.map(f => c.targets[f] ? '已列入' : '未列入'),
+       c.persona + (c.bindings === null ? '' : ' (' + c.bindings + ' 会话)') + (c.expected_persona ? ' · 预期 ' + c.expected_persona : '')].forEach(v => {
+        const td = document.createElement('td'); td.textContent = v; tr.append(td);
+      });
+      if (c.id === chosen) tr.className = 'selected-channel';
+      body.append(tr);
+    });
+    status.textContent = j.issues.length ? j.issues.join('；') : '已检查通道配置与会话人格绑定';
+    status.classList.toggle('error', !!j.issues.length);
+  } catch(e) { status.textContent = '核对失败：' + e.message; status.classList.add('error'); }
 }
 async function observePull(kind){
   const status = document.getElementById(kind + '-msg');
@@ -420,6 +461,7 @@ cfgRestore();
 loadManaged();
 observeList('memory');
 observeList('logs');
+loadChannels();
 async function rmSeen(btn){
   const tr = btn.closest('tr');
   const j = await post('/api/seen/remove', JSON.stringify({key: tr.dataset.k}));
@@ -504,6 +546,11 @@ border:1px solid #48585b;border-radius:4px;cursor:pointer}}
 pre{{background:#20282b;border:1px solid #48585b;border-radius:7px;padding:12px;overflow:auto;max-height:60vh}}
 .observe-select{{display:block;width:100%;max-width:100%;background:#20282b;color:#edf0ef;border:1px solid #48585b;border-radius:5px;padding:8px;margin:10px 0}}
 .observe-text{{white-space:pre-wrap;overflow-wrap:anywhere;min-height:180px}}
+.observe-meta{{color:#b8c5c3;font-size:13px;min-height:20px}}
+.channels{{display:block;width:100%;border-collapse:collapse;font-size:12px;overflow-x:auto;margin-top:12px}}
+.channels th,.channels td{{padding:8px 10px;text-align:left;white-space:nowrap;border-bottom:1px solid #394246}}
+.channels th{{color:#b8c5c3}}
+.channels .selected-channel{{background:#293337}}
 h2.cat{{font-size:14px;color:#c9bfe0;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid #2e2a3a}}
 h2.cat:first-child{{margin-top:4px}}
 h2.cat span{{color:#6f6880;font-weight:400;font-size:12px;margin-left:8px}}
@@ -540,6 +587,7 @@ table.seen button:hover{{border-color:#e85a9b}}
 <button onclick="show(2,this)">记忆</button>
 <button onclick="show(3,this)">日志</button>
 <button onclick="show(4,this)">去重表</button>
+<button onclick="show(5,this)">通道</button>
 </div>
 
 <div class="panel on">
@@ -583,12 +631,14 @@ table.seen button:hover{{border-color:#e85a9b}}
 <div class="panel">
 <div class="bar"><button onclick="observePull('memory')">从服务器拉取记忆</button><span class="msg" id="memory-msg"></span></div>
 <select class="observe-select" id="memory-files" aria-label="记忆文件" onchange="observeRead('memory')"></select>
+<div class="observe-meta" id="memory-meta"></div>
 <pre class="observe-text" id="memory-text"></pre>
 </div>
 
 <div class="panel">
 <div class="bar"><button onclick="observePull('logs')">从服务器拉取日志</button><span class="msg" id="logs-msg"></span></div>
 <select class="observe-select" id="logs-files" aria-label="日志文件" onchange="observeRead('logs')"></select>
+<div class="observe-meta" id="logs-meta"></div>
 <pre class="observe-text" id="logs-text"></pre>
 </div>
 
@@ -600,6 +650,13 @@ table.seen button:hover{{border-color:#e85a9b}}
 <p class="hint">bot 靠这张表判断「这张图处理过了」。共 <b>{seencount}</b> 条，
 其中 <b>{stale}</b> 条已不在图库（<b>墓碑</b>）—— 它们会让那张图再发也收不进来。</p>
 <table class="seen">{seenrows}</table>
+</div>
+
+<div class="panel">
+<div class="bar"><label>文字通道 <select id="channel-select" onchange="loadChannels()"></select></label>
+<button onclick="loadChannels()">核对服务器</button><span class="msg" id="channels-msg"></span></div>
+<table class="channels"><thead><tr><th>通道</th><th>格式</th><th>句号</th><th>日记</th><th>摘要</th><th>档案</th><th>图库</th><th>识图</th><th>群缓冲</th><th>人格绑定</th></tr></thead>
+<tbody id="channel-rows"></tbody></table>
 </div>
 
 <div class="modal" id="modal">
@@ -829,6 +886,19 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"ok": True, **observe.preview(kind, json.loads(body or "{}").get("id"))})
                 else:
                     self._json({"ok": False, "error": "未知操作"}, 404)
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)[:180]})
+            return
+
+        if path == "/api/channels/check":
+            if not live:
+                self._json({"ok": False, "error": "通道检查模块不可用"})
+                return
+            try:
+                selected = json.loads(body or "{}").get("text_channel") or ""
+                if not isinstance(selected, str):
+                    raise ValueError("通道编号不合法")
+                self._json({"ok": True, **live.channels_report(selected)})
             except Exception as e:
                 self._json({"ok": False, "error": str(e)[:180]})
             return

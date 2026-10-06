@@ -392,6 +392,9 @@ ui:
     # Web 管理台完整配置同步（远端路径可按实际部署覆盖）
     remote_config: "/opt/astrbot/data/plugin_data/astrbot_plugin_mindscape/config.yaml"
     remote_wake: "/opt/astrbot/data/auto_wake_cfg.json"
+    # 通道页会核对文字通道的目标白名单和显式会话人格绑定。
+    # text_channel: "webchat"
+    # expected_personas: {"webchat": "your-persona-id"}
     # restart_command: "docker restart your-bot-container"  # 同步后自动生效
     # 日志页默认抓 janitor.log 所在目录的 .log；若 restart_command 是 docker restart，
     # 也抓对应容器最近 2000 行。其他来源可在本机配置里追加：

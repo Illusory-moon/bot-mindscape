@@ -481,6 +481,33 @@ def check_regressions():
     except Exception as e:
         bad("R12 救援挂点", str(e)[:140])
 
+    # R12b: 身份提问的空回复救援必须先读该 bot 自己的日记。
+    try:
+        import tempfile as _tf12
+        import mindscape_config as cfg12
+        rescue = load("mindscape_rescue")
+        old_bots = cfg12.bot_entries
+        with _tf12.TemporaryDirectory() as folder:
+            diary = os.path.join(folder, "diary.md")
+            with open(diary, "w", encoding="utf-8") as f:
+                f.write("## 今天\n- 小甲来聊过天\n")
+            cfg12.bot_entries = lambda: [{"self_id": "bot-a", "diary": diary}]
+            sender = types.SimpleNamespace(nickname="小甲")
+            msg = types.SimpleNamespace(sender=sender)
+            class Event12:
+                message_obj = msg
+                def get_self_id(self): return "bot-a"
+            got = rescue.RescueMixin._identity_memory(Event12(), "我是谁")
+            miss = rescue.RescueMixin._identity_memory(Event12(), "今天天气如何")
+            cfg12.bot_entries = lambda: [{"self_id": "bot-b", "diary": diary}]
+            isolated = rescue.RescueMixin._identity_memory(Event12(), "我是谁")
+        cfg12.bot_entries = old_bots
+        (ok if "小甲来聊过天" in got and not miss and not isolated else bad)("R12b 救援按 bot 与发言者检索日记")
+    except Exception as e:
+        if "old_bots" in locals():
+            cfg12.bot_entries = old_bots
+        bad("R12b 救援身份检索", str(e)[:140])
+
     # R13: 人物画像必须让「关系与称呼」这类权威条目压过自动摘要。
     #      实测：某位重要的人被自动摘要写成「群友，常发图」，而人格档案里她明明是
     #      「Alice（小爱）→ 重要的人」。关系是作者写死的，不该交给摘要模型猜。

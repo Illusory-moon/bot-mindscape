@@ -3704,13 +3704,16 @@ class RescueMixin:
             last = str(getattr(data, "message_str", "") or "")[:200]
         except Exception:
             last = ""
+        related = self._identity_memory(event, last)
         prompt = (
             "下面是你的人设、记忆和说话风格（照着来，不要照抄原文）：\n"
             + persona
             + (("\n\n最近几轮对话：\n" + recent) if recent else "")
             + "\n\n刚才对方说了：\n" + (last or "（一条消息）")
+            + (("\n\n关于当前发言者，你记下的往事：\n" + related) if related else "")
             + "\n\n请用你自己的口吻补一句自然的回应（不超过30字）。"
               "不要解释、不要客套、不要提及你是 AI，也不要提你刚才没说话。"
+              "记忆片段不完整；不要因为眼前没有记录就断言不认识对方或没有档案。"
         )
         try:
             async with httpx.AsyncClient(timeout=float(self.r_cfg.get("timeout") or 20)) as cli:
@@ -3733,6 +3736,36 @@ class RescueMixin:
             return txt
         except Exception as e:
             logger.warning("[mindscape_rescue] 补话失败: %s", str(e)[:100])
+            return ""
+
+    @staticmethod
+    def _identity_memory(event, last):
+        if not re.search(r"我是谁|你认识我|还记得我|认得我吗|我叫什么", last):
+            return ""
+        try:
+            sender = getattr(getattr(event, "message_obj", None), "sender", None)
+            name = str(getattr(sender, "nickname", "") or getattr(sender, "name", "") or "").strip()
+            if len(name) < 2:
+                return ""
+            sid = str(event.get_self_id())
+            bot = next((b for b in cfg.bot_entries() if str(b.get("self_id")) == sid), {})
+            paths = list(bot.get("extra_diaries") or []) + [bot.get("diary")]
+            hits = deque(maxlen=4)
+            # ponytail: rare rescue scans files once; reuse recall's index if these files grow large.
+            for path in paths:
+                if not isinstance(path, str) or not path:
+                    continue
+                if not os.path.isabs(path):
+                    path = os.path.join(os.path.dirname(cfg.config_path()), path)
+                if not os.path.isfile(path):
+                    continue
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        if line.startswith("- ") and name in line:
+                            hits.append(line.strip())
+            return "\n".join(hits)[:700]
+        except Exception as e:
+            logger.warning("[mindscape_rescue] 身份记忆检索失败: %s", type(e).__name__)
             return ""
 
 
