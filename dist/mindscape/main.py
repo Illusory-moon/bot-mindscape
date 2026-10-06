@@ -2511,7 +2511,10 @@ MN_PENDING_TTL = 120       # 排队的 @ 最多等这么久（跨轮了就丢掉
 MN_HOOK_PRIORITY = 100
 
 
-MN_LINES_MAX = 3          # 连发工具一次最多几条（真人也顶多连发两三句）     # on_decorating_result：跑在 guard(999) 之后
+MN_LINES_MAX = 3          # 连发工具一次最多几条（真人也顶多连发两三句）
+
+
+MN_LINE_GAP = 0.8         # 连发之间的停顿（秒）—— 真人也是一句一句敲的     # on_decorating_result：跑在 guard(999) 之后
 
 
 def mn_load_config():
@@ -2549,6 +2552,25 @@ def mn_match_member(who, members):
     if len(hits) == 1 and hits[0][0]:
         return hits[0]
     return "", ""
+
+
+def mn_line_chain(text):
+    """把一段纯文本包成 MessageChain。
+
+    `event.send()` 的签名是 `send(message: MessageChain)` —— 传字符串会炸
+    （实测 2026-10-06：她调 say_lines 三次，全都是 `'str' object has no attribute 'chain'`）。
+    路径随版本变，兜两层。"""
+    for mod_path in ('astrbot.api.message_components', 'astrbot.core.message.components'):
+        try:
+            mod = __import__(mod_path, fromlist=['Plain', 'MessageChain'])
+            plain = getattr(mod, 'Plain')
+            chain = getattr(mod, 'MessageChain', None)
+            if chain is None:
+                from astrbot.core.message.message_event_result import MessageChain as chain
+            return chain([plain(text)])
+        except Exception:
+            continue
+    return None
 
 
 def mn_take_pending(pending, key, now, ttl=MN_PENDING_TTL):
@@ -4065,12 +4087,17 @@ class MentionMixin:
             return "没有可发的内容"
         sent = 0
         for t in items:
+            chain = mn_line_chain(t)
+            if chain is None:
+                logger.warning("[mindscape_mention] 连发失败: 拿不到 MessageChain")
+                break
             try:
-                await ev.send(t)
+                await ev.send(chain)          # 一条一次 → 单独气泡；也走 guard 的 send 级兜底
                 sent += 1
             except Exception as exc:
                 logger.warning("[mindscape_mention] 连发失败: %s", str(exc)[:100])
                 break
+            await asyncio.sleep(MN_LINE_GAP)
         logger.info("[mindscape_mention] 连发 self=%s 条数=%d/%d",
                     ev.get_self_id(), sent, len(items))
         return "发好了：%d 条（每条一个气泡）" % sent
