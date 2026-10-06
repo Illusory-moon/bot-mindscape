@@ -2627,6 +2627,26 @@ def mn_line_chain(text):
     return None
 
 
+def mn_clean_chain(chain, qq=None, name=None):
+    """把正文里**手打的 @** 清掉（@ 已经由 At 组件负责 ✓）。
+
+    两类都清：① `@昵称(123456)`（号会外泄 ✗）② 紧接着真 @ 的那份纯文本 `@昵称`
+    （否则名字出现两遍 ✗）。返回改动次数。
+    """
+    n = 0
+    for comp in chain or []:
+        txt = getattr(comp, "text", None)
+        if not isinstance(txt, str) or "@" not in txt:
+            continue
+        new = MN_AT_LITERAL.sub("", txt)
+        if name:
+            new = re.sub(r"^\s*@" + re.escape(str(name)) + r"\s*", "", new)
+        if new != txt:
+            comp.text = new
+            n += 1
+    return n
+
+
 def mn_take_pending(pending, key, now, ttl=MN_PENDING_TTL):
     """取出一条排队的点名（过期的丢掉）→ (qq, name) 或 None。纯函数，自检直接跑。"""
     item = (pending or {}).pop(key, None)
@@ -2648,6 +2668,9 @@ MN_SAID = {}
 
 
 MN_SAID_TTL = 300
+
+
+MN_AT_LITERAL = re.compile(r"@[^\s@()（）]{1,24}[（(]\d{5,12}[)）]")
 
 
 @filter.on_decorating_result(priority=MN_HOOK_PRIORITY)
@@ -2675,6 +2698,13 @@ async def mn_attach_hook(*args, **kwargs):
             return
         # ① 她这一轮用 say_lines 说过了 → 不再另发正文（要补就该写进 lines 里 ✓）。
         #    有 @ 排队时不抑制 —— @ 是挂在正文前面的，抑制会把它一起吞掉 ✗。
+        # 无论有没有排队的 @，都先把正文里手打的 @ 清一遍（防号外泄 ✓）。
+        _res = event.get_result()
+        _chain = getattr(_res, "chain", None) if _res is not None else None
+        if _chain:
+            _n = mn_clean_chain(_chain, (item or (None, None))[0], (item or (None, None))[1])
+            if _n:
+                logger.info("[mindscape_mention] 清掉正文里手打的 @ %d 处（号不外泄 ✓）", _n)
         if said is not None and item is None:
             event.clear_result()
             logger.info("[mindscape_mention] 本轮已连发 %d 条 → 抑制正文 self=%s",
@@ -2688,6 +2718,7 @@ async def mn_attach_hook(*args, **kwargs):
         chain = getattr(result, "chain", None) if result is not None else None
         if chain:
             chain.insert(0, At(qq=qq, name=name))
+            mn_clean_chain(chain, qq, name)      # 手打的那份 @ 一并清掉（名字别出现两遍 ✓）
             logger.info("[mindscape_mention] @ 挂在回复前 self=%s qq=%s（带正文）",
                         event.get_self_id(), qq)
         else:
@@ -4054,6 +4085,8 @@ class MentionMixin:
         不想说别的也可以，那就只发一个 @。
 
         什么时候用：有人明确让你「@ 一下 / 艾特一下 / 点名」某人，或者你自己真想喊谁过来看。
+        ⚠️ 点了名之后，**别再在正文里手打「@某人」**（更不要写「@某人(QQ号)」）——
+        @ 会自动挂在你这条回复的最前面 ✓，正文里直接写你要说的话就行。
         什么时候别用：只是嘴上提到某人、群里闲聊 —— 那种直接用嘴说；一次只点一个人，别连点。
 
         Args:
