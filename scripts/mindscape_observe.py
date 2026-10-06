@@ -24,7 +24,7 @@ PREVIEW = 200 * 1024
 
 
 def _dir(kind):
-    if kind not in ("memory", "logs"):
+    if kind not in ("memory", "impression", "logs"):
         raise ValueError("未知资料类型")
     return os.path.join(ROOT, kind)
 
@@ -128,7 +128,15 @@ def pull(kind):
         config = yaml.safe_load(config_raw)
         if not isinstance(config, dict):
             raise ValueError("服务器配置格式不正确")
-        paths = _paths(config) if kind == "memory" else _log_paths(sftp, config)
+        if kind == "memory":
+            paths = _paths(config)
+        elif kind == "impression":
+            path = sync.sync_cfg().get("remote_impression") or "/opt/astrbot/data/plugin_data/astrbot_plugin_impression/states.json"
+            if not isinstance(path, str) or not posixpath.isabs(path) or "\0" in path:
+                raise ValueError("ui.sync.remote_impression 必须是绝对路径")
+            paths = {posixpath.normpath(path): "人物印象"}
+        else:
+            paths = _log_paths(sftp, config)
         entries, total = [], 0
         for path, label in list(paths.items())[:MAX_FILES]:
             try:

@@ -1655,11 +1655,11 @@ def check_regressions():
             second = open(out, encoding="utf-8").read()
         finally:
             _ur2.urlopen = _real
-        # 留意：3 条消息在同一批里，桩每批只回 1 条日记 —— 所以 - 一条 本来就只该有 1 行。
+        # 留意：3 条消息在同一批里，桩每批只回 1 条日记。
         # 要证的是「重跑不追加」：内容一模一样、且**只有 1 个批次标记**。
         once_ok = (first == second
                    and first.count("ms-seq:") == 1
-                   and first.count("- 一条") == 1)
+                   and first.count("】一条") == 1)
 
         # (b) 画像原子替换：不留 .tmp，且内容完整
         people_ok = (os.path.exists(people)
@@ -1716,7 +1716,7 @@ def check_regressions():
             "重跑无重复=%s 画像原子写=%s 摘要:首次%d 无改%d 改一天后%d 重算的=%s | "
             "诊断: 首=%d 次=%d 条首=%d 条次=%d 标记=%s 相同=%s"
             % (once_ok, people_ok, n1, n2, n3, calls3,
-               len(first), len(second), first.count("- 一条"), second.count("- 一条"),
+               len(first), len(second), first.count("】一条"), second.count("】一条"),
                ("ms-seq:" in first), (first == second)))
     except Exception as e:
         bad("R33 记忆链一致性", "%s: %s" % (type(e).__name__, str(e)[:140]))

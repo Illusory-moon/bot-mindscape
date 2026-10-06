@@ -123,6 +123,8 @@ def channels_report(text_channel=""):
         db = (data.get("janitor") or {}).get("db")
         bindings = persona_rows(client, db) if db else []
         issues = check_config(data, text_channel)
+        if not text_channel:
+            issues.append("ui.sync.text_channel 未配置，无法核对文字通道")
         if text_channel and not db:
             issues.append("未配置会话数据库，无法核对人格绑定")
         rows = []

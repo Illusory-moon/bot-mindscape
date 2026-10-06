@@ -55,6 +55,9 @@ class LiveCheckTest(unittest.TestCase):
             report = check_live.channels_report()
             self.assertEqual(report["issues"], [])
             self.assertEqual(report["channels"][0]["persona"], "符合预期")
+            settings["text_channel"] = ""
+            report = check_live.channels_report()
+            self.assertTrue(any("text_channel 未配置" in x for x in report["issues"]))
 
 
 if __name__ == "__main__":

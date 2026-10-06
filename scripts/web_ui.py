@@ -155,7 +155,7 @@ let CONFIG = null;
 let BOT = null;
 let SAVE_QUEUE = Promise.resolve();
 const PENDING_SAVES = new Map();
-const OBSERVED = {memory:[], logs:[]};
+const OBSERVED = {memory:[], impression:[], logs:[]};
 
 // 草稿存取：写不进去也只是丢草稿，绝不能让功能挂掉
 function ls(k, v){
@@ -407,16 +407,12 @@ async function observeRead(kind){
 
 async function loadChannels(){
   const status = document.getElementById('channels-msg');
-  const select = document.getElementById('channel-select');
   status.textContent = '正在核对服务器...';
   try {
-    const j = await post('/api/channels/check', JSON.stringify({text_channel:select.value}));
+    const j = await post('/api/channels/check', '');
     if (!j.ok) throw Error(j.error);
-    const chosen = select.value || j.text_channel;
-    select.replaceChildren();
-    const none = document.createElement('option'); none.value = ''; none.textContent = '选择文字通道'; select.append(none);
-    j.channels.forEach(c => { const o = document.createElement('option'); o.value = c.id; o.textContent = c.name + ' · ' + c.id; select.append(o); });
-    select.value = chosen;
+    const chosen = j.text_channel;
+    document.getElementById('channel-label').textContent = chosen || '未配置';
     const body = document.getElementById('channel-rows'); body.replaceChildren();
     const fields = ['format','no_period','diary','digest','archive','stickers','vision','groupctx'];
     j.channels.forEach(c => {
@@ -460,6 +456,7 @@ window.addEventListener('beforeunload', e => {
 cfgRestore();
 loadManaged();
 observeList('memory');
+observeList('impression');
 observeList('logs');
 loadChannels();
 async function rmSeen(btn){
@@ -585,9 +582,10 @@ table.seen button:hover{{border-color:#e85a9b}}
 <button class="on" onclick="show(0,this)">配置</button>
 <button onclick="show(1,this)">图库</button>
 <button onclick="show(2,this)">记忆</button>
-<button onclick="show(3,this)">日志</button>
-<button onclick="show(4,this)">去重表</button>
-<button onclick="show(5,this)">通道</button>
+<button onclick="show(3,this)">印象</button>
+<button onclick="show(4,this)">日志</button>
+<button onclick="show(5,this)">去重表</button>
+<button onclick="show(6,this)">通道</button>
 </div>
 
 <div class="panel on">
@@ -636,6 +634,13 @@ table.seen button:hover{{border-color:#e85a9b}}
 </div>
 
 <div class="panel">
+<div class="bar"><button onclick="observePull('impression')">从服务器拉取印象</button><span class="msg" id="impression-msg"></span></div>
+<select class="observe-select" id="impression-files" aria-label="人物印象文件" onchange="observeRead('impression')"></select>
+<div class="observe-meta" id="impression-meta"></div>
+<pre class="observe-text" id="impression-text"></pre>
+</div>
+
+<div class="panel">
 <div class="bar"><button onclick="observePull('logs')">从服务器拉取日志</button><span class="msg" id="logs-msg"></span></div>
 <select class="observe-select" id="logs-files" aria-label="日志文件" onchange="observeRead('logs')"></select>
 <div class="observe-meta" id="logs-meta"></div>
@@ -653,7 +658,7 @@ table.seen button:hover{{border-color:#e85a9b}}
 </div>
 
 <div class="panel">
-<div class="bar"><label>文字通道 <select id="channel-select" onchange="loadChannels()"></select></label>
+<div class="bar">文字通道 <strong id="channel-label"></strong>
 <button onclick="loadChannels()">核对服务器</button><span class="msg" id="channels-msg"></span></div>
 <table class="channels"><thead><tr><th>通道</th><th>格式</th><th>句号</th><th>日记</th><th>摘要</th><th>档案</th><th>图库</th><th>识图</th><th>群缓冲</th><th>人格绑定</th></tr></thead>
 <tbody id="channel-rows"></tbody></table>
@@ -895,10 +900,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "error": "通道检查模块不可用"})
                 return
             try:
-                selected = json.loads(body or "{}").get("text_channel") or ""
-                if not isinstance(selected, str):
-                    raise ValueError("通道编号不合法")
-                self._json({"ok": True, **live.channels_report(selected)})
+                self._json({"ok": True, **live.channels_report()})
             except Exception as e:
                 self._json({"ok": False, "error": str(e)[:180]})
             return

@@ -1798,7 +1798,8 @@ def fetch(src, target, since_ts, since_seq, only_user=None):
             sender = (d.get("sender") or {}).get("card") or (d.get("sender") or {}).get("nickname") or uid
             rows.append({
                 "ts": ts, "seq": seq,
-                "gname": str(d.get("group_name", ""))[:20],
+                "gid": gid,
+                "gname": str(d.get("group_name") or gid or "")[:20],
                 "who": str(sender)[:16], "uid": uid,
                 "time": datetime.datetime.fromtimestamp(ts).strftime("%m-%d %H:%M"),
                 "txt": txt[:200],
@@ -1822,7 +1823,7 @@ def dy_render(msgs):
         for m in msgs)
 
 
-def chunk_by_budget(rows, batch, max_input_chars):
+def chunk_by_budget(rows, batch, max_input_chars, split_group=False):
     """先按条数切、再按【真实渲染长度】细分，保证每条消息都进得了某一次请求。
 
     为什么要这么麻烦：以前是固定 batch 条一组，再在 call_llm 里把文本砍到
@@ -1836,6 +1837,9 @@ def chunk_by_budget(rows, batch, max_input_chars):
     for i in range(0, len(rows), batch):
         cur = []
         for r in rows[i:i + batch]:
+            if split_group and cur and (r.get("gid"), r.get("gname")) != (cur[0].get("gid"), cur[0].get("gname")):
+                out.append(cur)
+                cur = []
             trial = cur + [r]
             if cur and len(dy_render(trial)) > max_input_chars:
                 out.append(cur)
@@ -2066,7 +2070,7 @@ def run_target(d):
         total_read += len(rows)
         all_people = {}
         try:
-            batches = chunk_by_budget(rows, batch, max_in)
+            batches = chunk_by_budget(rows, batch, max_in, split_group=True)
         except ValueError as e:
             # 分不出合法的批：停在原游标，等主人调大 max_input_chars
             print("[mindscape_diary] 分批失败，本轮不动游标: %s" % str(e)[:140])
@@ -2102,8 +2106,12 @@ def run_target(d):
                 with open(out_file, "a", encoding="utf-8") as fp:
                     fp.write("<!-- ms-seq:" + rng + " -->\n")
                     fp.write("## " + stamp + "\n")
+                    label = chunk[0].get("gname") or DM_LABEL
                     for e in entries:
-                        fp.write("- " + str(e) + "\n")
+                        entry = str(e).strip()
+                        if entry.startswith("【") and "】" in entry:
+                            entry = entry.split("】", 1)[1].lstrip()
+                        fp.write("- 【" + label + "】" + entry + "\n")
                     fp.write("\n")
                 total_added += len(entries)
             elif entries:
