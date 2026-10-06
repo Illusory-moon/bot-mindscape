@@ -6,6 +6,7 @@
 """
 import os
 import re
+from collections import deque
 
 from astrbot.api import llm_tool, logger
 
@@ -152,13 +153,16 @@ def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP,
             continue
         head = ""
         with open(source, "r", encoding="utf-8", errors="replace") as f:
-            for scanned, line in enumerate(f, 1):
-                if scanned > scan_lines:
-                    break
+            # ponytail: O(file) to retain the latest lines; seek backwards if archives grow large.
+            tail = deque(maxlen=max(0, scan_lines))
+            for line in f:
+                if line.startswith("## "):
+                    head = line[3:].strip()
+                tail.append((head, line))
+            for head, line in tail:
                 n += 1
                 line = line.rstrip()
                 if line.startswith("## "):
-                    head = line[3:].strip()
                     continue
                 if not line.startswith("-"):
                     continue

@@ -43,6 +43,11 @@ try:
 except Exception:
     managed = None
 
+try:
+    import mindscape_observe as observe
+except Exception:
+    observe = None
+
 TOKEN = secrets.token_urlsafe(16)
 ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 MAX_BODY = 512 * 1024
@@ -357,6 +362,47 @@ async function doSync(a){
   if (a !== 'status' && j.ok) setTimeout(()=>location.reload(), 900);
 }
 
+async function observeList(kind){
+  const select = document.getElementById(kind + '-files');
+  const selected = select.value;
+  const status = document.getElementById(kind + '-msg');
+  try {
+    const j = await post('/api/observe/' + kind + '/list', '');
+    if (!j.ok) throw Error(j.error);
+    select.replaceChildren();
+    j.files.forEach(item => {
+      const option = document.createElement('option');
+      option.value = item.id || '';
+      option.textContent = item.label + ' · ' + item.path + (item.error ? ' · ' + item.error : '');
+      option.disabled = !item.id;
+      select.append(option);
+    });
+    const first = j.files.find(item => item.id === selected) || j.files.find(item => item.id);
+    if (first) { select.value = first.id; await observeRead(kind); }
+    else document.getElementById(kind + '-text').textContent = '';
+    if (!j.files.length) status.textContent = '暂无本机快照';
+  } catch(e) { status.textContent = '读取失败：' + e.message; }
+}
+async function observeRead(kind){
+  const select = document.getElementById(kind + '-files');
+  if (!select.value) return;
+  const j = await post('/api/observe/' + kind + '/read', JSON.stringify({id:select.value}));
+  const pre = document.getElementById(kind + '-text');
+  pre.textContent = j.ok ? j.text : ('读取失败：' + j.error);
+  document.getElementById(kind + '-msg').textContent = j.ok && j.truncated ? '显示末尾 200 KB；完整文件已保存到本机' : '';
+}
+async function observePull(kind){
+  const status = document.getElementById(kind + '-msg');
+  status.textContent = '正在拉取...';
+  try {
+    const j = await post('/api/observe/' + kind + '/pull', '');
+    if (!j.ok) throw Error(j.error);
+    await observeList(kind);
+    status.textContent = '已拉取 ' + j.count + ' 份' + (j.missing ? '，' + j.missing + ' 份尚未生成' : '')
+      + (j.errors ? '，' + j.errors + ' 份失败' : '');
+  } catch(e) { status.textContent = '拉取失败：' + e.message; }
+}
+
 // ── 启动 ──
 ['mname','mtags','mdesc'].forEach(id => document.getElementById(id).addEventListener('input', mDraft));
 document.getElementById('cfg').addEventListener('input', function(){
@@ -372,6 +418,8 @@ window.addEventListener('beforeunload', e => {
 });
 cfgRestore();
 loadManaged();
+observeList('memory');
+observeList('logs');
 async function rmSeen(btn){
   const tr = btn.closest('tr');
   const j = await post('/api/seen/remove', JSON.stringify({key: tr.dataset.k}));
@@ -454,6 +502,8 @@ margin:0 3px 3px 0;font-size:10px}}
 border:1px solid #48585b;border-radius:4px;cursor:pointer}}
 .msg{{color:#7dd87d;font-size:13px;margin-left:10px}}
 pre{{background:#20282b;border:1px solid #48585b;border-radius:7px;padding:12px;overflow:auto;max-height:60vh}}
+.observe-select{{display:block;width:100%;max-width:100%;background:#20282b;color:#edf0ef;border:1px solid #48585b;border-radius:5px;padding:8px;margin:10px 0}}
+.observe-text{{white-space:pre-wrap;overflow-wrap:anywhere;min-height:180px}}
 h2.cat{{font-size:14px;color:#c9bfe0;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid #2e2a3a}}
 h2.cat:first-child{{margin-top:4px}}
 h2.cat span{{color:#6f6880;font-weight:400;font-size:12px;margin-left:8px}}
@@ -488,7 +538,8 @@ table.seen button:hover{{border-color:#e85a9b}}
 <button class="on" onclick="show(0,this)">配置</button>
 <button onclick="show(1,this)">图库</button>
 <button onclick="show(2,this)">记忆</button>
-<button onclick="show(3,this)">去重表</button>
+<button onclick="show(3,this)">日志</button>
+<button onclick="show(4,this)">去重表</button>
 </div>
 
 <div class="panel on">
@@ -529,7 +580,17 @@ table.seen button:hover{{border-color:#e85a9b}}
 {gallery}
 </div>
 
-<div class="panel"><pre>{memory}</pre></div>
+<div class="panel">
+<div class="bar"><button onclick="observePull('memory')">从服务器拉取记忆</button><span class="msg" id="memory-msg"></span></div>
+<select class="observe-select" id="memory-files" aria-label="记忆文件" onchange="observeRead('memory')"></select>
+<pre class="observe-text" id="memory-text"></pre>
+</div>
+
+<div class="panel">
+<div class="bar"><button onclick="observePull('logs')">从服务器拉取日志</button><span class="msg" id="logs-msg"></span></div>
+<select class="observe-select" id="logs-files" aria-label="日志文件" onchange="observeRead('logs')"></select>
+<pre class="observe-text" id="logs-text"></pre>
+</div>
 
 <div class="panel">
 <div class="bar">
@@ -598,7 +659,7 @@ def render():
             "tags": " ".join(str(x) for x in (it.get("tags") or [])),
             "desc": str(it.get("desc") or ""),
         })
-    items_js = json.dumps(items, ensure_ascii=False)
+    items_js = json.dumps(items, ensure_ascii=False).replace("<", "\\u003c")
 
     def figure(it):
         fn = str(it.get("file") or "")
@@ -609,17 +670,18 @@ def render():
         esc_fn = html.escape(fn, quote=True)
         n = item_index.get((cat, fn), -1)
         return (
-            '<figure data-i="%d"><img loading="lazy" src="/img/%s">'
+            '<figure data-i="%d" data-cat="%s" data-file="%s">'
+            '<img loading="lazy" src="/img/%s">'
             '<figcaption><b class="cname">%s</b>'
             '<div style="font-size:10px;color:#5d5768">%s</div>'
             '<span class="ctags">%s</span>'
             '<p class="cdesc" style="margin:4px 0 0;font-size:11px">%s</p>'
-            '<div class="row"><button onclick="editItem(\'%s\',\'%s\')">编辑</button>'
-            '<button onclick="removeItem(\'%s\',\'%s\')">移除</button></div>'
+            '<div class="row"><button onclick="editItem(this.closest(\'figure\').dataset.cat,this.closest(\'figure\').dataset.file)">编辑</button>'
+            '<button onclick="removeItem(this.closest(\'figure\').dataset.cat,this.closest(\'figure\').dataset.file)">移除</button></div>'
             '</figcaption></figure>' % (
-                n, urllib.parse.quote(fn), html.escape(str(it.get("name") or "?")),
+                n, esc_cat, esc_fn, urllib.parse.quote(fn), html.escape(str(it.get("name") or "?")),
                 html.escape(cat), tags, html.escape(str(it.get("desc") or "")),
-                esc_cat, esc_fn, esc_cat, esc_fn))
+                ))
 
     # 每个分类一个标题 + 一个网格：不同 bot 的图库一眼分得开
     blocks = []
@@ -631,28 +693,6 @@ def render():
     gallery = "".join(blocks) or '<p style="color:#6f6880">图库还是空的</p>'
     gcount = sum(len(v) for v in by_cat.values())
 
-
-    # 记忆页：本地配置通常没有 memory.bots（长期记忆在 bot 所在的那台机器上），
-    # 空着是正常的 —— 把「为什么空」和「正在读哪个文件」直接写出来。
-    mem_parts = []
-    s = (cfg.section("memory") if cfg else {}) or {}
-    for b in (s.get("bots") or []):
-        dp = _abs(b.get("diary"))
-        mem_parts.append("### %s\n%s" % (b.get("name") or b.get("self_id"),
-                                         read_text(dp, 4000) if dp else "(未配置 diary)"))
-    if mem_parts:
-        memory = "\n\n".join(mem_parts)
-    else:
-        memory = (
-            "这个标签页会列出 memory.bots 里每个 bot 的长期记忆文件，方便直接翻看。\n\n"
-            "当前「memory.bots」是空的 —— 本地这边只管图库，长期记忆在 bot 所在的那台\n"
-            "机器上，所以这里空着是正常的。想在本地看记忆，就在「配置」页加一条：\n\n"
-            "memory:\n"
-            "  bots:\n"
-            "    - self_id: \"20000000\"\n"
-            "      name: \"bot-name\"\n"
-            "      diary: \"/path/to/bot-name.md\"\n\n"
-            "当前读取的配置文件：" + config_path())
 
     sync_ok = bool(edit) and edit.sync_available()
     syncmsg = "" if sync_ok else "（未配置 ui.sync，同步功能不可用）"
@@ -668,7 +708,7 @@ def render():
         % ("" if r["live"] else ' class="tomb"', html.escape(r["key"], quote=True),
            html.escape(r["cat"]), html.escape(r["label"])) for r in srows
     ) or '<tr><td colspan="3" style="color:#6f6880">去重表是空的</td></tr>'
-    page = PAGE.format(config=html.escape(raw), gallery=gallery, memory=html.escape(memory),
+    page = PAGE.format(config=html.escape(raw), gallery=gallery,
                        token=TOKEN, syncmsg=html.escape(syncmsg),
                        restartmsg=html.escape(restartmsg),
                        gdir=html.escape(stickers_dir()), gcount=gcount,
@@ -766,6 +806,27 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"ok": True, "message": "已读取服务器配置"})
                 elif action == "push":
                     self._json({"ok": True, "message": managed.push()})
+                else:
+                    self._json({"ok": False, "error": "未知操作"}, 404)
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)[:180]})
+            return
+
+        if path.startswith("/api/observe/"):
+            if not observe:
+                self._json({"ok": False, "error": "观测模块不可用"})
+                return
+            try:
+                parts = path.split("/")
+                if len(parts) != 5:
+                    raise ValueError("未知接口")
+                kind, action = parts[3:]
+                if action == "pull":
+                    self._json({"ok": True, **observe.pull(kind)})
+                elif action == "list":
+                    self._json({"ok": True, "files": observe.listing(kind)})
+                elif action == "read":
+                    self._json({"ok": True, **observe.preview(kind, json.loads(body or "{}").get("id"))})
                 else:
                     self._json({"ok": False, "error": "未知操作"}, 404)
             except Exception as e:

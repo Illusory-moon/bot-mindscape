@@ -393,6 +393,10 @@ ui:
     remote_config: "/opt/astrbot/data/plugin_data/astrbot_plugin_mindscape/config.yaml"
     remote_wake: "/opt/astrbot/data/auto_wake_cfg.json"
     # restart_command: "docker restart your-bot-container"  # 同步后自动生效
+    # 日志页默认抓 janitor.log 所在目录的 .log；若 restart_command 是 docker restart，
+    # 也抓对应容器最近 2000 行。其他来源可在本机配置里追加：
+    # remote_logs: ["/opt/your-bot/other.log"]
+    # log_containers: ["another-container"]
 # ── 前置黑名单（可选）──
 # 命中的人：消息在【事件最早阶段】就被 stop_event 拦掉 ——
 # 不回复、不采集图片、不进任何插件的视野。

@@ -28,6 +28,18 @@ mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
 class RecallTest(unittest.TestCase):
+    def test_scan_limit_uses_latest_lines_and_keeps_heading(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'long.md')
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('## 2026-10-01\n- older target\n## 2026-10-07\n')
+                f.write('- filler\n' * 4)
+                f.write('- newest target\n')
+            hits, total = mod.search_diary(path, 'target', scan_lines=3)
+            self.assertEqual(total, 1)
+            self.assertIn('2026-10-07', hits[0])
+            self.assertIn('newest target', hits[0])
+
     def test_full_search_across_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = [os.path.join(tmp, 'a.md'), os.path.join(tmp, 'b.md')]

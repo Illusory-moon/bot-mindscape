@@ -27,6 +27,7 @@ from astrbot.core.message.components import Image
 from astrbot.core.message.message_event_result import MessageEventResult
 from astrbot.core.provider.entities import ProviderRequest
 from astrbot.core.star.filter.event_message_type import EventMessageType
+from collections import deque
 
 
 class IndexLock:
@@ -1275,13 +1276,16 @@ def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP,
             continue
         head = ""
         with open(source, "r", encoding="utf-8", errors="replace") as f:
-            for scanned, line in enumerate(f, 1):
-                if scanned > scan_lines:
-                    break
+            # ponytail: O(file) to retain the latest lines; seek backwards if archives grow large.
+            tail = deque(maxlen=max(0, scan_lines))
+            for line in f:
+                if line.startswith("## "):
+                    head = line[3:].strip()
+                tail.append((head, line))
+            for head, line in tail:
                 n += 1
                 line = line.rstrip()
                 if line.startswith("## "):
-                    head = line[3:].strip()
                     continue
                 if not line.startswith("-"):
                     continue
