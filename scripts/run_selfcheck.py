@@ -1285,6 +1285,26 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R32: 唤醒补丁「站点表」完整 —— 仓库要能**逐字节复现线上那份 stage.py** ✓（2026-10-06 加 ✓）。
+    #      背景：线上是手工内联补丁 ✗，仓库那套块只是参考实现 ✗ → 把差异固化成站点表 ✓，
+    #      从此「仓库=线上」可被验证 ✓（build 出来的 md5 必须等于表里记的 live_md5 ✓）。
+    try:
+        import json as _j3
+        _sp = os.path.join(HERE, "patches", "astrbot", "waking_sites.json")
+        _doc3 = _j3.load(open(_sp, encoding="utf-8"))
+        _sites3 = _doc3.get("sites") or []
+        _shape = all(("i1" in s and "i2" in s and isinstance(s.get("new"), list)) for s in _sites3)
+        _order = all(_sites3[k]["i2"] <= _sites3[k + 1]["i1"] for k in range(len(_sites3) - 1))
+        _ok3 = (bool(_doc3.get("base_md5")) and bool(_doc3.get("live_md5"))
+                and len(_sites3) >= 10 and _shape and _order)
+        (ok if _ok3 else bad)(
+            "R32 唤醒补丁站点表",
+            "站点 %d 个，底本 %s / 线上 %s，%s" % (
+                len(_sites3), str(_doc3.get("base_md5"))[:8], str(_doc3.get("live_md5"))[:8],
+                "区间有序不重叠 ✓" if _order else "区间有问题 ✗"))
+    except Exception as e:
+        bad("R32 站点表", str(e)[:140])
+
     # R31: 「#角色面板」这类**别的 bot 的指令**不许叫醒我们、也不许进上下文缓冲（2026-10-06 ✓）。
     #      判据三条：① #/** 开头 ② 名字+查询词收尾 ③ 没有别的文字 ✓
     #      ⚠️ 不许连关键词一起拉黑 ✗ —— 真问游戏知识（「火花，行迹怎么点」）必须照常回 ✓

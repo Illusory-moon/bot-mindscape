@@ -131,9 +131,22 @@ docker exec qqbot-astrbot /opt/astrbot/.venv/bin/python -c \
   "import astrbot.core.pipeline.waking_check.stage as s; print(s.<函数>(...))"   # 真 import 验行为 ✓
 ```
 
-> 本目录的 `_waking_*_block.py`（`install.py` 用的那套）目前是**参考实现** ✓ ——
-> 线上实际跑的是**手写内联版**，两者功能相近但**不是同一份代码** ✗。
-> 「把线上对齐回这套块」是一件独立的重构（要把 `group_restrict` 等内联功能也搬进块里 ✓），见 `canon/_16-待办.md` ✓。
+> ⚠️ 本目录的 `_waking_*_block.py`（`install.py` 用的那套）是**参考实现** ✗，**线上不跑它** ✓。
+>
+> ### ✅ 线上那份现在**可被逐字节复现**（2026-10-06 立 ✓）
+>
+> 线上 = **底本 + `waking_sites.json`**（12~14 个「站点」= 底本行区间 → 新内容 ✓ 纯行号拼接 ✓ 不依赖 `patch` 命令 ✓）：
+>
+> ```bash
+> # 取底本（容器内 stage.py.bak-wakefix，md5 6018bd99…；宿主机 .venv 那份同 md5 ✓ 双份保险）
+> docker cp qqbot-astrbot:<容器内路径>.bak-wakefix /tmp/base_stage.py
+> # 取线上（⚠️ 必须 docker cp；sftp 拿到的是宿主机那份 ✗）
+> docker cp qqbot-astrbot:<容器内路径> /tmp/live_stage.py
+> python scripts/wake_stage_apply.py check /tmp/base_stage.py patches/astrbot/waking_sites.json /tmp/live_stage.py
+> ```
+>
+> `[一致] 线上 = 底本 + 站点表 ✓✓` = 仓库与线上没有分歧 ✓。**改线上的流程**：改线上文件 → `regen` 重生成站点表 → `build` 验 md5 → 部署 ✓。
+> （2026-10-06 实测：重建 md5 `b792249d…` 与线上完全一致 ✓ 自检 130/130 ✓）
 
 ## 风险与恢复
 
