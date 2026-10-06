@@ -1368,7 +1368,8 @@ async def recall_memory(*args, **kwargs):
     当问题指的是更早的时间（以前、上次、第一次、这几天），或者你打算回答
     「只有」「就这些」「没有」的时候，都必须先用这个工具查一遍再开口。
 
-    返回的是你当时记下的原话，可以自然地讲出来，别照本宣科念。
+    返回的是你当时记下的原话（**也包括你自己以前在群里说过的话** ✓），
+    可以自然地讲出来，别照本宣科念。
 
     Args:
         keyword(string): 搜索关键词。可以给**一组近义词**，用空格或逗号分开
@@ -1393,10 +1394,19 @@ async def recall_memory(*args, **kwargs):
     except Exception:
         sid = ""
     path = _diary_for(sid)
-    if not path:
+    # 日记 + 发言档案（她自己以前说过的话）一起翻 ——
+    # 会话里只留最近几条，所以「我上次说过什么」必须来档案里找 ✓。
+    paths = ([path] if path else []) + rc_archives(sid)
+    if not paths:
         return "我还没有长期记忆文件。"
     full = _as_bool(kwargs.get("full"))
-    hits, total = search_diary(path, kw, full=full)
+    hits, total = [], 0
+    for p in paths:
+        h, t_all = search_diary(p, kw, full=full)
+        hits += h
+        total += t_all
+    if len(paths) > 1:
+        hits = hits[:DEFAULT_LIMIT]
     if not hits:
         # 找不到就明确说找不到 —— 这是防幻觉的第一道闸
         return ("翻了翻记忆，没有找到跟「%s」有关的记录。"
@@ -1404,6 +1414,26 @@ async def recall_memory(*args, **kwargs):
                 "或者那件事里的另一个说法）；如果还是没有，就直接说你想不起来了，"
                 "不要编。") % kw
     return format_hits(kw, hits, total, full)
+
+
+def rc_archives(self_id):
+    """这个 bot 的「发言档案」文件 —— 她自己以前说过的话（按群归档、原样保存）。
+
+    档案是 janitor 搬出来的（会话里只留最近几条，免得她照着自己的旧口气抄），
+    所以她要看自己说过什么，就来这里翻 ✓。路径与归属都由 `archive.targets` 配 ✓。
+    """
+    out = []
+    for t in (cfg.section("archive") or {}).get("targets") or []:
+        if not isinstance(t, dict):
+            continue
+        if str(t.get("self_id") or "") != str(self_id):
+            continue
+        p = str(t.get("file") or "")
+        if p and not os.path.isabs(p):
+            p = os.path.join(os.path.dirname(cfg.config_path()), p)
+        if p and os.path.exists(p):
+            out.append(p)
+    return out
 
 
 def rc_knowledge_for(self_id):
@@ -1644,6 +1674,10 @@ DEFAULT_PERSONA = (
     "注意：只记「别人说了什么、发生了什么有趣的事、谁和谁怎么了」，"
     "绝对不要去分析、模仿或总结任何人的说话风格。"
     "用第一人称、短句、轻松的语气写，每条一两句话。"
+    # 记忆按群分房（2026-10-06 主人裁定）：模型在生成时**看得到**每条记录来自哪个群，
+    # 只是以前没要求它写下来 → 存进日记后来源就丢了，注入时自然分不清是哪群的事。
+    "每条日记前面用【群名】标出这件事发生在哪个群（群名在记录的方括号里）。"
+    "同一个群的条目排在一起，绝不把两个群的事混进同一句。"
     '只输出一个 JSON 对象，格式：'
     '{"diary":["条目1","条目2"], "people":{"昵称":"一句话描述"}}'
     "diary：每条一句话，最多6条，没有值得记的就输出空数组。"

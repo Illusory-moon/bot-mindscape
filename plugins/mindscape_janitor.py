@@ -193,6 +193,106 @@ def clean(db, table, column, max_mb, log_path=None):
     return (n_srow, n_shit, n_img, n_big, before / 1048576.0, after / 1048576.0)
 
 
+# ── 发言档案（2026-10-06 主人裁定）────────────────────────────────────────
+# 为什么：她自己在这个会话里的历史回复，是**最强的风格锚** —— 她会照着自己抄，
+# 逐日滚雪球（实测：旧群 19 条回复里 18 条同一个开头；同期新建的群 13 条里 0 条）。
+# 但那些话又是她的记忆，不能删 ✗。
+# 做法：把她的**纯回复**原样搬进「发言档案」文件，会话里只留最近 keep_last 条
+# （防连续对话断片）→ 会话里再也没有一墙自己的旧口气；她需要时用 recall_memory
+# 从档案里把原话取回来 ✓。
+# **通用** ✓：prefix / file / keep_last / labels 全在 config 里，代码里没有人名与号。
+ARCHIVE_MAX_LINE = 300
+# 机器文本（不是她说的话）：冒泡轮的任务描述有时会被原样存成一条 assistant 消息
+# （实测档案里混进过 `[CronJob] bubble-xxx: … triggered at …`）。这类**不入档、直接移出会话** ✓。
+ARCHIVE_NOISE = ("[CronJob]", "triggered at", "[auto_wake", "bubble-")
+
+
+def _arch_text(msg):
+    """取一条消息的可见文本（忽略 think 段）。"""
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            p.get("text") for p in content
+            if isinstance(p, dict) and isinstance(p.get("text"), str))
+    return ""
+
+
+def archive_talk(db, table, column, id_column, targets, log_path=None):
+    """把指定会话里「自己的纯回复」搬进档案文件，会话里只留最近 keep_last 条。
+
+    返回 (处理会话数, 归档条数)。**先写档案、后改库** —— 宁可重复，不可丢失 ✓。
+    带 tool_calls 的 assistant 消息**不碰**（删了会让 tool 结果变孤儿、API 报错 ✗）。
+    """
+    targets = targets or []
+    if not db or not os.path.exists(db) or not targets:
+        return (0, 0)
+    con = sqlite3.connect(db, timeout=30)
+    con.execute("PRAGMA busy_timeout = 30000")
+    cur = con.cursor()
+    n_sess = n_arch = 0
+    try:
+        for t in targets:
+            if not isinstance(t, dict):
+                continue
+            prefix = str(t.get("prefix") or "")
+            path = jn_abs(t.get("file"))
+            keep = max(0, int(t.get("keep_last", 1)))
+            labels = t.get("labels") or {}
+            if not prefix or not path:
+                continue
+            rows = list(cur.execute(
+                "SELECT rowid, %s, %s FROM %s WHERE %s LIKE ?"
+                % (id_column, column, table, id_column), (prefix + "%",)))
+            for rid, uid, content in rows:
+                if not isinstance(content, str):
+                    continue
+                try:
+                    msgs = json.loads(content)
+                except Exception:
+                    continue
+                if not isinstance(msgs, list):
+                    continue
+                plain = [i for i, m in enumerate(msgs)
+                         if isinstance(m, dict) and m.get("role") == "assistant"
+                         and not m.get("tool_calls") and _arch_text(m).strip()]
+                # 机器文本：不入档、也不留在会话里（它不是她的发言）
+                noise = [i for i in plain
+                         if any(k in _arch_text(msgs[i]) for k in ARCHIVE_NOISE)]
+                plain = [i for i in plain if i not in set(noise)]
+                if len(plain) <= keep and not noise:
+                    continue
+                drop = (plain[:-keep] if keep else plain) + noise
+                drop = sorted(set(drop))
+                gid = str(uid).split(":")[-1]
+                label = str(labels.get(gid) or gid)
+                now = datetime.datetime.now().strftime("%m-%d %H:%M")
+                lines = []
+                for i in drop:
+                    txt = _arch_text(msgs[i]).strip().replace("\n", " ")
+                    lines.append("- [%s][%s] %s" % (now, label, txt[:ARCHIVE_MAX_LINE]))
+                try:
+                    parent = os.path.dirname(path)
+                    if parent:
+                        os.makedirs(parent, exist_ok=True)
+                    with open(path, "a", encoding="utf-8") as fh:
+                        fh.write("\n".join(lines) + "\n")
+                except Exception as e:
+                    log("发言档案写入失败，本轮跳过: %s" % str(e)[:80], log_path)
+                    continue
+                drop_set = set(drop)
+                keep_msgs = [m for i, m in enumerate(msgs) if i not in drop_set]
+                cur.execute("UPDATE %s SET %s = ? WHERE rowid = ?" % (table, column),
+                            (json.dumps(keep_msgs, ensure_ascii=False), rid))
+                n_sess += 1
+                n_arch += len(drop)
+        con.commit()
+    finally:
+        con.close()
+    return (n_sess, n_arch)
+
+
 def jn_main():
     c = cfg.section("janitor")
     if not c:
@@ -210,6 +310,15 @@ def jn_main():
             % (n_srow, n_shit, n_img, n_big, before, after), log_path)
     else:
         log("无需清理 | 当前 %.2f MB" % after, log_path)
+
+    # 发言档案：把她的历史回复从会话搬进档案（风格锚 vs 记忆，两全）
+    ac = cfg.section("archive") or {}
+    n_sess, n_arch = archive_talk(db, table, column,
+                                  str(ac.get("id_column") or "user_id"),
+                                  ac.get("targets") or [], log_path)
+    if n_arch:
+        log("发言归档: %d 个会话 / %d 条 -> 档案（keep_last 已在会话里保留）"
+            % (n_sess, n_arch), log_path)
 
 
 if __name__ == "__main__":

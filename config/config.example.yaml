@@ -329,6 +329,27 @@ janitor:
   max_mb: 2.0            # 单行超过这个大小直接删（脱图兜不住的那种）
   log: "./data/janitor.log"
 
+# ── 发言档案：把 bot 自己的历史回复搬出会话 ──
+# 为什么：会话里「它自己的历史回复」是最强的风格锚 —— 它会照着自己抄，逐日滚雪球
+#   （实测：某群 19 条回复里 18 条同一个开头；同期新建的群 13 条里 0 条）。
+#   但那些话是它的记忆，不能删 ✗。
+# 做法：janitor 每次运行时把它的**纯回复**原样搬进档案文件，会话里只留最近 keep_last 条
+#   （防连续对话断片）；它需要时用 recall_memory 从档案里把原话取回来 ✓。
+# 通用：prefix / file / keep_last / labels 全在这里，代码里没有任何 bot 的名字或号。
+archive:
+  id_column: "user_id"          # 会话表里存会话 id 的列（AstrBot 是 user_id）
+  targets:
+    - self_id: "20000000"       # 哪个 bot（与 memory.bots[].self_id 对上）
+      prefix: "platform:GroupMessage:"   # 会话 id 前缀（形如 <平台实例>:GroupMessage:<群号>）
+      file: "./data/said.md"    # 档案文件（追加式 markdown）
+      keep_last: 1              # 会话里保留它最近几条纯回复（1 = 只留最新一条）
+      labels:                   # 可选：让档案里的群名可读；缺省用会话里的号
+        "123456789": "某个群"
+    - self_id: "20000001"
+      prefix: "another:GroupMessage:"
+      file: "./data/said2.md"
+      keep_last: 1
+
 # ── 唤醒层：什么时候该回应 ──
 # 注意：原生框架一般只支持「前缀唤醒」和「@唤醒」。
 #       「提到名字必回 + 低概率冒泡 + 每 bot 独立配置」需要框架层支持，
