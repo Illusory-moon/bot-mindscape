@@ -101,6 +101,10 @@ diary:
     - self_id: "20000000"
       name: "bot-name"
       groups: ["20000001"]                     # 只记这些群（留空=全部）
+      # senders: 只记这些发送者（留空=全部）。**私聊日记一定要写** ✓：
+      # 网关库连「被平台白名单拦掉、bot 根本没收到」的会话也存 ✓ ——
+      # 不写名单，它就会「记得」自己从没看过的话 ✗。
+      # senders: ["20000002"]
       output: "./data/bot-name.md"
       state: "./data/bot-name.state.json"
       # relations: 从人格档案里取「关系与称呼」这类段落，作为不会被自动摘要
