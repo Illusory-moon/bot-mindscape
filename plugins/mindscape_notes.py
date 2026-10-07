@@ -130,9 +130,16 @@ async def save_note(*args, **kwargs):
         if os.path.exists(path):
             with open(path, encoding="utf-8", errors="replace") as f:
                 old = f.read()
-        write_notes(path, upsert_note(old, key, value))
+        new_text = upsert_note(old, key, value)
+        # ⚠️ 2026-10-07 实测：她 12 秒里把**同一条**记了 6 遍 ✗（回话只说「记下了」✗
+        #    没有「别再记」的信号 ✓）→ 白烧 6 轮、那一轮卡了 24 秒 ✗。
+        #    判据用「写一遍看看会不会变」✓ —— 不变就是已经在了 ✓，格式无关、最稳 ✓。
+        if new_text == old:
+            logger.info("[mindscape_notes] %s 内容重复，跳过重复记账: %s", sid, key)
+            return "这条你**刚刚记过**了，不用再记 —— 直接回答就行。"
+        write_notes(path, new_text)
         logger.info("[mindscape_notes] %s 记下 %s: %s", sid, key, value[:40])
-        return "记下了：%s —— %s" % (key, value)
+        return "记下了：%s —— %s（已入账，**不用再记一遍**）" % (key, value)
     except Exception as e:
         logger.warning("[mindscape_notes] 记账失败: %s", str(e)[:120])
         return "这本账我一时写不进去，先记在心里。"

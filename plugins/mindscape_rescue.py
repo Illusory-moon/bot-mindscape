@@ -106,6 +106,12 @@ class RescueMixin:
                 logger.info("[mindscape_rescue] 本轮已用工具说过话 → 不补 ✓")
                 return
             text = await self._ask_once(event)
+            if not text:
+                # 补话彻底失败（没 key / 超时 / 报错）→ 至少留一句**可配置**的兜底 ✓，
+                # 免得退化成一次静默的「叫它不理」✗。文案进配置 ✓（代码里不留人格措辞 ✓）。
+                text = str(self.r_cfg.get("fallback_line") or "").strip()
+                if text:
+                    logger.info("[mindscape_rescue] 补话不成，用兜底话术 ✓")
             if text:
                 response.completion_text = text
                 logger.info("[mindscape_rescue] 空回复已补（%s）: %s",
@@ -125,7 +131,11 @@ class RescueMixin:
         try:
             sp = getattr(request, "system_prompt", "") or ""
             if sp:
-                event.set_extra("_ms_ctx_prompt", sp[-1400:])
+                # ⚠️ 2026-10-07 实测：只取**尾部** → 拿到的是规矩/记忆/账本 ✗，
+                # **人格在开头** ✓（AstrBot 先写人格 ✓ 各模块往后追加 ✓）→
+                # 于是救援补出来的话毫无人格 ✗（「这俩本来不就是一个人吗」✗）。
+                event.set_extra("_ms_ctx_persona", sp[:1500])   # 头部 = 人格正文 ✓
+                event.set_extra("_ms_ctx_prompt", sp[-1400:])   # 尾部 = 当下守的规矩/记忆 ✓
             rows = []
             for m in (getattr(request, "contexts", None) or [])[-5:]:
                 if not isinstance(m, dict):
@@ -205,8 +215,10 @@ class RescueMixin:
         if not api_base or not key:
             return ""
         # 优先用「这一轮真实的人设/记忆/风格」快照；配置里的 persona 只当兜底
-        persona = (str(event.get_extra("_ms_ctx_prompt") or "").strip()
-                   or self.r_cfg.get("persona") or "一个自然的聊天伙伴")
+        head = str(event.get_extra("_ms_ctx_persona") or "").strip()
+        tail = str(event.get_extra("_ms_ctx_prompt") or "").strip()
+        persona = head or self.r_cfg.get("persona") or "一个自然的聊天伙伴"
+        style_now = tail if (tail and tail != head) else ""
         recent = str(event.get_extra("_ms_ctx_recent") or "").strip()
         last = ""
         try:
@@ -216,9 +228,9 @@ class RescueMixin:
             last = ""
         related = self._identity_memory(event, last)
         prompt = (
-            "下面是你的人设、记忆和说话风格（照着来，不要照抄原文）：\n"
-            + persona
-            + (("\n\n最近几轮对话：\n" + recent) if recent else "")
+            (("下面是你此刻正守着的规矩与记忆（照着来，不要照抄原文）：\n" + style_now + "\n\n")
+             if style_now else "")
+            + (("最近几轮对话（注意「我」是怎么说话的）：\n" + recent) if recent else "")
             + "\n\n刚才对方说了：\n" + (last or "（一条消息）")
             + (("\n\n关于当前发言者，你记下的往事：\n" + related) if related else "")
             + "\n\n请用你自己的口吻补一句自然的回应（不超过30字）。"
@@ -231,7 +243,13 @@ class RescueMixin:
                     api_base + "/chat/completions",
                     headers={"Authorization": "Bearer " + key},
                     json={"model": self.r_cfg.get("model") or "gpt-4o-mini",
-                          "messages": [{"role": "user", "content": prompt}],
+                          "messages": [
+                              # 人格放 **system** ✓（2026-10-07 改：以前全塞 user ✗ 遵从度低 ✓）
+                              {"role": "system",
+                               "content": persona +
+                               "\n\n（补话要求：**用上面这个人物的口吻**说一句 —— 称呼、口癖、句尾习惯都照它来；"
+                               "不超过 30 字；不要客套、不要提 AI、不要提你刚才没说话。）"},
+                              {"role": "user", "content": prompt}],
                           "max_tokens": int(self.r_cfg.get("max_tokens") or 120)},
                 )
             if resp.status_code != 200:

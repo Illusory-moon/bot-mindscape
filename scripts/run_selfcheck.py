@@ -1320,6 +1320,34 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R44: 救援补话必须带**人格** —— 人格在 system_prompt **开头** ✗ 尾部是规矩/记忆 ✓
+    #      （2026-10-07 实测：只取尾部 → 补出「这俩本来不就是一个人吗」✗ 毫无人格 ✓）；
+    #      且补话彻底失败时要有**可配置**兜底句 ✓（代码里不留人格措辞 ✓）。
+    try:
+        _sr = open(os.path.join(HERE, "plugins", "mindscape_rescue.py"), encoding="utf-8").read()
+        _a44 = "_ms_ctx_persona" in _sr and "sp[:1500]" in _sr
+        _b44 = '"role": "system"' in _sr
+        _c44 = "fallback_line" in _sr
+        (ok if (_a44 and _b44 and _c44) else bad)(
+            "R44 救援带人格",
+            "人格头=%s system=%s 可配兜底=%s" % (_a44, _b44, _c44))
+    except Exception as e:
+        bad("R44 救援带人格", str(e)[:140])
+
+    # R45: 账本重复记账必须拦住（实测她 12 秒把**同一条**记了 6 遍 ✗ → 白烧 6 轮、那一轮卡 24 秒 ✗）
+    try:
+        import mindscape_notes as NT5
+        importlib.reload(NT5)
+        _t1 = NT5.upsert_note("", "测试键", "测试值（来源：甲）")
+        _t2 = NT5.upsert_note(_t1, "测试键", "测试值（来源：甲）")
+        _t3 = NT5.upsert_note(_t1, "测试键", "改过的值")
+        _okk7 = (_t1 == _t2) and (_t3 != _t1) and ("测试键" in _t1)
+        (ok if _okk7 else bad)(
+            "R45 账本重复记账拦住",
+            "同值不重复写=%s 改值会写=%s" % (_t1 == _t2, _t3 != _t1))
+    except Exception as e:
+        bad("R45 账本重复记账拦住", str(e)[:140])
+
     # R43: 救援不许抢话 —— 本轮用**出站类工具**说过话时，正文被抑制 ≠ 空回复 ✗
     #      （2026-10-07 实测：她 say_lines 连发 2 条 ✓ → mention 抑制正文 ✓ →
     #        rescue 误判空回复 ✗ → 补出一条**没人格**的话发进群 ✗）
