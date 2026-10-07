@@ -1320,6 +1320,23 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R43: 救援不许抢话 —— 本轮用**出站类工具**说过话时，正文被抑制 ≠ 空回复 ✗
+    #      （2026-10-07 实测：她 say_lines 连发 2 条 ✓ → mention 抑制正文 ✓ →
+    #        rescue 误判空回复 ✗ → 补出一条**没人格**的话发进群 ✗）
+    try:
+        import mindscape_rescue as RS3
+        importlib.reload(RS3)
+        _need3 = {"send_message_to_user", "say_lines", "at_user"}
+        _got3 = set(getattr(RS3, "RC_OUTBOUND_TOOLS", set()))
+        _src3 = open(os.path.join(HERE, "plugins", "mindscape_rescue.py"), encoding="utf-8").read()
+        _has3 = "rc_sent_recent(event)" in _src3 and "RC_SENT" in _src3
+        _okk3 = _need3 <= _got3 and _has3
+        (ok if _okk3 else bad)(
+            "R43 救援不抢话",
+            "出站工具=%s 判据在=%s" % (sorted(_got3), _has3))
+    except Exception as e:
+        bad("R43 救援不抢话", str(e)[:140])
+
     # R42: 群名清洗 —— 外部字符串（群名）必须先洗再进日记/prompt ✓（2026-10-07 加）。
     #      实测某群名在库里带控制字符（表情被网关存坏 ✗）→ 被原样写了 1670 条 ✗ 还会进她的 prompt ✗。
     try:

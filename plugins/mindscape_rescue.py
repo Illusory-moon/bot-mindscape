@@ -44,6 +44,21 @@ from astrbot.api.event import AstrMessageEvent, filter
 import mindscape_config as cfg
 
 
+# 「出站类工具」—— 用了它们就等于这一轮已经把话发出去了 ✓ 救援不该再抢一句 ✗。
+# 2026-10-07 加：实测她 say_lines 说完后，救援把「正文被抑制」误判为空回复 ✗。
+RC_OUTBOUND_TOOLS = {"send_message_to_user", "say_lines", "at_user"}
+RC_SENT = {}          # key = "self_id|group_id" → 时间戳 ✓ 跨钩子用模块级（event 存储不可靠 ✓）
+RC_SENT_TTL = 180
+
+
+def rc_sent_recent(event, now=None):
+    """本轮（近 RC_SENT_TTL 秒）有没有出站类工具发过话。"""
+    import time as _t
+    key = "%s|%s" % (event.get_self_id(), event.get_group_id())
+    ts = RC_SENT.get(key) or 0
+    return (float(now if now is not None else _t.time()) - float(ts)) < RC_SENT_TTL
+
+
 class RescueMixin:
     def setup(self, context):
         self.r_cfg = cfg.section("rescue") or {}
@@ -82,6 +97,13 @@ class RescueMixin:
             if any(type(_c).__name__ in _media for _c in _chain):
                 return
             if getattr(response, "tools_call_name", None):
+                return
+            # ⚠️ 2026-10-07 实测踩坑：她这轮用 say_lines 连发 2 条 ✓，正文被 mention 模块
+            # **主动抑制**掉了 ✓ —— 但这里把「被抑制」当成了「模型没吐字」✗，于是补了一条
+            # **完全不属于她人格**的话发进群 ✗（`tools_call_name` 在这一步还是空的 ✗ 判据形同虚设 ✓）。
+            # 规矩：**本轮只要已经用「出站类工具」说过话，就不许补** ✓（跨钩子状态存模块级 ✓）。
+            if rc_sent_recent(event):
+                logger.info("[mindscape_rescue] 本轮已用工具说过话 → 不补 ✓")
                 return
             text = await self._ask_once(event)
             if text:
@@ -122,9 +144,13 @@ class RescueMixin:
 
     @filter.on_using_llm_tool()
     async def rc_capture_sent(self, event: AstrMessageEvent, tool, tool_args):
-        """记下这一轮真正发出去的话 —— 冒泡轮要用它替换任务黑话。"""
+        """记下这一轮真正发出去的话 —— 冒泡轮要用它替换任务黑话；顺便记「这轮已经出站过」✓。"""
         try:
-            if getattr(tool, "name", "") != "send_message_to_user":
+            _name = getattr(tool, "name", "")
+            if _name in RC_OUTBOUND_TOOLS:
+                import time as _t
+                RC_SENT["%s|%s" % (event.get_self_id(), event.get_group_id())] = _t.time()
+            if _name != "send_message_to_user":
                 return
             if not isinstance(tool_args, dict):
                 return
