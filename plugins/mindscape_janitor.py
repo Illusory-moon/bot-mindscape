@@ -295,8 +295,35 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
     return (n_sess, n_arch)
 
 
+def jn_single_instance(lock_path=None):
+    """拿一把单实例锁 —— 拿不到就返回 None（本轮跳过）✓。
+
+    ⚠️ 2026-10-08 实测踩坑：线上那份 bundle 曾经**带着** janitor 上传 ✗（用了完整构建 ✓
+    该用 `--market` 的 ✓），而宿主 timer 也在跑 ✓ → 两个进程同时读到同一批未归档的回复 ✗
+    → 各自「先写档案」✗ → **档案里出现成块的重复**（实测两个 bot 分别脏了 4 条和 12 条 ✗ 已清 ✓）。
+
+    本函数**不做**文本去重 ✗：archive_talk 的设计是「先写档案、后改库 —— 宁可重复，不可丢失」✓
+    （这条是**故意**的 ✓ 别改成先删后写 ✗），而且她**确实可能**说两遍一样的话 ✓。
+    所以这里只保证一件事：**同一时刻只有一个 janitor 在跑** ✓。
+    """
+    import fcntl
+    path = jn_abs(lock_path or "/tmp/mindscape_janitor.lock")
+    try:
+        fh = open(path, "w")
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return None
+    except Exception:
+        return None
+    return fh          # 必须由调用方持有引用 ✓ 函数返回/进程结束才释放 ✓
+
+
 def jn_main():
     c = cfg.section("janitor")
+    _lock = jn_single_instance()
+    if _lock is None:
+        print("[mindscape_janitor] 已有一个实例在跑（或拿不到锁），本轮跳过 ✓")
+        return
     if not c:
         print("[mindscape_janitor] 未找到 janitor 配置，跳过")
         return

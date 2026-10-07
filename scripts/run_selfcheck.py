@@ -1322,6 +1322,40 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R49: janitor 必须**单实例** —— 两个同时跑会各自「先写档案」✗ → 档案成块重复 ✗
+    #      （2026-10-08 实测：线上 bundle 误用完整构建带上 janitor ✗ 而宿主 timer 也在跑 ✓
+    #        → 水梦梦 4 条 / 火花 12 条重复 ✗ 已清 ✓；**不按文本去重** ✗ —— archive_talk 的
+    #        「先写档案、后改库 · 宁可重复不可丢失」是**故意**的 ✓ 别改 ✗）
+    try:
+        import mindscape_janitor as JN
+        importlib.reload(JN)
+        _has49 = hasattr(JN, "jn_single_instance")
+        _src49 = open(os.path.join(HERE, "plugins", "mindscape_janitor.py"), encoding="utf-8").read()
+        _use49 = "_lock = jn_single_instance()" in _src49 and "fcntl.flock" in _src49
+        # 行为验证：先占住锁 → 第二次拿不到 ✓（fcntl 只在 POSIX 有 ✓ Windows 上跳过行为部分 ✓）
+        _beh = "（本平台无 fcntl，跳过行为验证 ✓）"
+        _beh_ok = True
+        try:
+            import tempfile as _tf
+            _lk = os.path.join(_tf.gettempdir(), "mindscape_janitor_selftest.lock")
+            _h1 = JN.jn_single_instance(_lk)
+            _h2 = JN.jn_single_instance(_lk)
+            _beh_ok = (_h1 is not None) and (_h2 is None)
+            _beh = "首个拿到=%s 第二个被挡=%s" % (_h1 is not None, _h2 is None)
+            try:
+                import fcntl as _f
+                _f.flock(_h1, _f.LOCK_UN); _h1.close()
+            except Exception:
+                pass
+        except ImportError:
+            pass
+        _ok49 = _has49 and _use49 and _beh_ok
+        (ok if _ok49 else bad)(
+            "R49 janitor 单实例锁",
+            "有函数=%s 有调用=%s %s" % (_has49, _use49, _beh))
+    except Exception as e:
+        bad("R49 janitor 单实例锁", str(e)[:140])
+
     # R48: 私聊日记要 ①标成「私聊」②只收允许的发送者（2026-10-07 实测两个坑 ✓）
     #      ① 清洗器把「空群名」兜底成「群聊」✗ → 私聊日记被标成【群聊】✗
     #      ② 网关库连「被白名单拦掉、bot 根本没收到」的私聊也存 ✗ →
