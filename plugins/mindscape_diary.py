@@ -15,6 +15,21 @@ import os
 import sqlite3
 import urllib.request
 
+import re
+
+# 群名清洗（2026-10-07 加）：实测某群的 group_name 在库里带**控制字符**（\x11\x10 ✗ ——
+# 群名里的表情被网关存坏了 ✓），原样写进日记 → 1670 条【群名】带坏字节 ✗，还会进她的 prompt ✗。
+# 规矩：只留可打印字符 ✓；去掉网关的表情占位 `<…>` ✓；清完为空就退回群号 ✓。
+_GFX_JUNK = re.compile(r"<[^<>]{0,24}>")
+
+
+def dy_gname(raw, gid=""):
+    """把群名洗成可安全进 prompt 的短标签（详见上面注释）。"""
+    s = "".join(ch for ch in str(raw or "") if ch.isprintable())
+    s = _GFX_JUNK.sub("", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:20] or str(gid or "").strip() or "群聊"
+
 import mindscape_config as cfg
 
 DEFAULT_SEG_SYMBOLS = {
@@ -139,7 +154,7 @@ def fetch(src, target, since_ts, since_seq, only_user=None):
             rows.append({
                 "ts": ts, "seq": seq,
                 "gid": gid,
-                "gname": str(d.get("group_name") or gid or "")[:20],
+                "gname": dy_gname(d.get("group_name"), gid),
                 "who": str(sender)[:16], "uid": uid,
                 "time": datetime.datetime.fromtimestamp(ts).strftime("%m-%d %H:%M"),
                 "txt": txt[:200],

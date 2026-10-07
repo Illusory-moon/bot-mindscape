@@ -1676,6 +1676,17 @@ async def save_note(*args, **kwargs):
         return "这本账我一时写不进去，先记在心里。"
 
 
+_GFX_JUNK = re.compile(r"<[^<>]{0,24}>")
+
+
+def dy_gname(raw, gid=""):
+    """把群名洗成可安全进 prompt 的短标签（详见上面注释）。"""
+    s = "".join(ch for ch in str(raw or "") if ch.isprintable())
+    s = _GFX_JUNK.sub("", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:20] or str(gid or "").strip() or "群聊"
+
+
 DEFAULT_SEG_SYMBOLS = {
     "text": "{text}", "at": "@{qq}", "image": "[图]", "face": "[表情]",
     "reply": "[回复]", "video": "[视频]", "record": "[语音]",
@@ -1799,7 +1810,7 @@ def fetch(src, target, since_ts, since_seq, only_user=None):
             rows.append({
                 "ts": ts, "seq": seq,
                 "gid": gid,
-                "gname": str(d.get("group_name") or gid or "")[:20],
+                "gname": dy_gname(d.get("group_name"), gid),
                 "who": str(sender)[:16], "uid": uid,
                 "time": datetime.datetime.fromtimestamp(ts).strftime("%m-%d %H:%M"),
                 "txt": txt[:200],

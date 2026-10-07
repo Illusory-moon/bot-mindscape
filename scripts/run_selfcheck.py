@@ -1320,6 +1320,22 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R42: 群名清洗 —— 外部字符串（群名）必须先洗再进日记/prompt ✓（2026-10-07 加）。
+    #      实测某群名在库里带控制字符（表情被网关存坏 ✗）→ 被原样写了 1670 条 ✗ 还会进她的 prompt ✗。
+    try:
+        import mindscape_diary as DY4
+        importlib.reload(DY4)
+        dirty = "测试群A<$x" + chr(17) + chr(16) + "y>"
+        gotA = DY4.dy_gname(dirty, "123")
+        gotB = DY4.dy_gname("", "870863632")
+        gotC = DY4.dy_gname("测试群B", "1")
+        _okk4 = (gotA == "测试群A" and gotB == "870863632" and gotC == "测试群B")
+        (ok if _okk4 else bad)(
+            "R42 群名清洗",
+            "坏串→%r（期望 '测试群A'）空→%r 正常→%r" % (gotA, gotB, gotC))
+    except Exception as e:
+        bad("R42 群名清洗", str(e)[:140])
+
     # R32: 唤醒补丁「站点表」完整 —— 仓库要能**逐字节复现线上那份 stage.py** ✓（2026-10-06 加 ✓）。
     #      背景：线上是手工内联补丁 ✗，仓库那套块只是参考实现 ✗ → 把差异固化成站点表 ✓，
     #      从此「仓库=线上」可被验证 ✓（build 出来的 md5 必须等于表里记的 live_md5 ✓）。
