@@ -1320,6 +1320,25 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R48: 私聊日记要 ①标成「私聊」②只收允许的发送者（2026-10-07 实测两个坑 ✓）
+    #      ① 清洗器把「空群名」兜底成「群聊」✗ → 私聊日记被标成【群聊】✗
+    #      ② 网关库连「被白名单拦掉、bot 根本没收到」的私聊也存 ✗ →
+    #         不按发送者过滤，她就会记得自己从没看过的话 ✗（真混进过陌生人的私聊 ✓）
+    try:
+        import mindscape_diary as DY8
+        importlib.reload(DY8)
+        _g1 = DY8.dy_gname("", "")
+        _g2 = DY8.dy_gname("测试群", "")
+        _g3 = DY8.dy_gname("", "123456")
+        _src8 = open(os.path.join(HERE, "plugins", "mindscape_diary.py"), encoding="utf-8").read()
+        _okk9 = (_g1 == "" and _g2 == "测试群" and _g3 == "123456"
+                 and "_senders" in _src8 and 'target or {}).get("senders")' in _src8)
+        (ok if _okk9 else bad)(
+            "R48 私聊日记（标签 + 发送者过滤）",
+            "空群名=%r 群名=%r 仅群号=%r 过滤=%s" % (_g1, _g2, _g3, "_senders" in _src8))
+    except Exception as e:
+        bad("R48 私聊日记（标签 + 发送者过滤）", str(e)[:140])
+
     # R47: 工具箱按 bot 隔离 —— 不属于这个 bot 的工具要摘掉 ✗（2026-10-07 加 ✓）
     #      实测代价：火花看到一个**不属于她**的工具 → 调了 → 被拒 ✗ →
     #      她把那条报错读成了「对方那句话不属于我」✗ → 群里冒出一句自言自语 ✗。

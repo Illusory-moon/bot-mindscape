@@ -24,11 +24,17 @@ _GFX_JUNK = re.compile(r"<[^<>]{0,24}>")
 
 
 def dy_gname(raw, gid=""):
-    """把群名洗成可安全进 prompt 的短标签（详见上面注释）。"""
+    """把**群名**洗成可安全进 prompt 的短标签（详见上面注释）。
+
+    ⚠️ 2026-10-07 踩坑：这里原本在「群名与群号都为空」时回退成「群聊」✗ ——
+    可**私聊记录**正是这种情况 ✓ → 于是私聊日记的标签被写成了「【群聊】」✗，
+    还把下游 `m["gname"] or DM_LABEL` 那句「私聊」兜底**整个抢走**了 ✗。
+    修法：**这里只负责群名** ✓ —— 取不到就返回空串 ✓，让调用方自己决定怎么称呼 ✓。
+    """
     s = "".join(ch for ch in str(raw or "") if ch.isprintable())
     s = _GFX_JUNK.sub("", s)
     s = re.sub(r"\s+", " ", s).strip()
-    return s[:20] or str(gid or "").strip() or "群聊"
+    return s[:20] or str(gid or "").strip()
 
 import mindscape_config as cfg
 
@@ -112,6 +118,10 @@ def fetch(src, target, since_ts, since_seq, only_user=None):
     db = dy_abs(src.get("db"))
     if not db or not os.path.exists(db):
         return []
+    # 只收指定发送者的消息（2026-10-07 加 ✓）：
+    # 网关库**什么都存** ✗ —— 连「被平台白名单拦掉、bot 根本没收到」的私聊也在里面 ✗；
+    # 不按发送者过滤，她就会「记得」自己从没看过的话 ✗（实测混进过陌生人的私聊 ✓）。
+    _senders = {str(x).strip() for x in ((target or {}).get("senders") or []) if str(x).strip()}
     table = src.get("table") or "messages"
     fields = src.get("fields") or {}
     f_time = fields.get("time") or "timestamp"
@@ -144,6 +154,8 @@ def fetch(src, target, since_ts, since_seq, only_user=None):
                     continue
             elif uid and uid == self_id:
                 continue
+            if _senders and uid not in _senders:
+                continue          # 只收允许的发送者 ✓（见上面注释 ✓）
             gid = str(d.get("group_id", ""))
             if groups and gid not in groups:
                 continue
