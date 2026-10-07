@@ -2,7 +2,6 @@
 setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
-set "URL=http://127.0.0.1:8777/"
 
 if exist ".venv\Scripts\python.exe" (
     set "PY=.venv\Scripts\python.exe"
@@ -20,13 +19,30 @@ if exist ".venv\Scripts\python.exe" (
 %PY% -c "import yaml" >nul 2>nul
 if errorlevel 1 goto missing_deps
 
-call :ready
-if not errorlevel 1 goto open
+for /l %%P in (8777,1,8787) do (
+    call :ready %%P
+    if not errorlevel 1 (
+        set "PORT=%%P"
+        goto open
+    )
+)
 
+for /l %%P in (8777,1,8787) do (
+    call :free %%P
+    if not errorlevel 1 (
+        set "PORT=%%P"
+        goto launch
+    )
+)
+echo 8777-8787 端口都已占用，请关闭旧管理台后重试。
+pause
+exit /b 1
+
+:launch
 echo 正在启动管理台...
-start "bot-mindscape 管理台" /min cmd /k "%PY% scripts\web_ui.py"
+start "bot-mindscape 管理台" /min cmd /k "%PY% scripts\web_ui.py --port %PORT%"
 for /l %%I in (1,1,30) do (
-    call :ready
+    call :ready %PORT%
     if not errorlevel 1 goto open
     timeout /t 1 /nobreak >nul
 )
@@ -35,11 +51,15 @@ pause
 exit /b 1
 
 :open
-start "" "%URL%"
+start "" "http://127.0.0.1:%PORT%/"
 exit /b 0
 
 :ready
-%PY% -c "import http.client,sys; c=http.client.HTTPConnection('127.0.0.1',8777,timeout=1); c.request('GET','/'); r=c.getresponse(); sys.exit(0 if r.status==200 and b'bot-mindscape' in r.read(4096) else 1)" >nul 2>nul
+%PY% -c "import http.client,sys; c=http.client.HTTPConnection('127.0.0.1',%~1,timeout=1); c.request('GET','/'); r=c.getresponse(); body=r.read(); sys.exit(0 if r.status==200 and b'bot-mindscape' in body and b'impression-files' in body else 1)" >nul 2>nul
+exit /b
+
+:free
+%PY% -c "import socket,sys; s=socket.socket(); s.settimeout(1); result=s.connect_ex(('127.0.0.1',%~1)); s.close(); sys.exit(0 if result else 1)" >nul 2>nul
 exit /b
 
 :no_python
