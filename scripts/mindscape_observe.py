@@ -14,6 +14,7 @@ import yaml
 
 import mindscape_sync as sync
 import mindscape_webconfig as managed
+from mindscape_gate import pg_current
 
 
 ROOT = os.path.join(managed.ROOT, "data", "observe")
@@ -24,7 +25,7 @@ PREVIEW = 200 * 1024
 
 
 def _dir(kind):
-    if kind not in ("memory", "impression", "logs"):
+    if kind not in ("memory", "impression", "notes", "logs"):
         raise ValueError("未知资料类型")
     return os.path.join(ROOT, kind)
 
@@ -41,7 +42,7 @@ def _atomic(path, raw):
             os.unlink(tmp)
 
 
-def _paths(config):
+def _paths(config, kind="memory", sid=""):
     base = posixpath.dirname(managed._paths()["config"])
     found = {}
 
@@ -55,16 +56,18 @@ def _paths(config):
     for bot in (config.get("memory") or {}).get("bots") or []:
         if not isinstance(bot, dict):
             continue
+        if str(bot.get("self_id")) != str(sid):
+            continue
         owner = str(bot.get("name") or bot.get("self_id") or "bot")
-        for field in ("diary", "people", "digest", "notes"):
+        for field in (("notes",) if kind == "notes" else ("diary", "people", "digest")):
             add(bot.get(field), owner + " / " + field)
-        for path in bot.get("extra_diaries") or []:
-            add(path, owner + " / extra")
-    for section, field in (("diary", "output"), ("digest", "output"),
-                           ("archive", "file")):
-        for target in (config.get(section) or {}).get("targets") or []:
-            if isinstance(target, dict):
-                add(target.get(field), section)
+        if kind == "memory":
+            for path in bot.get("extra_diaries") or []:
+                add(path, owner + " / extra")
+            for section, field in (("diary", "output"), ("archive", "file")):
+                for target in (config.get(section) or {}).get("targets") or []:
+                    if isinstance(target, dict) and str(target.get("self_id")) == str(sid):
+                        add(target.get(field), owner + " / " + section)
     return found
 
 
@@ -111,13 +114,37 @@ def _capture(sftp, path):
     return raw, info
 
 
-def _save_entry(kind, key, label, raw, mtime=None):
+def _log_codes(sftp, config):
+    gate = config.get("privacy_gate") or {}
+    if not gate.get("enabled"):
+        return []
+    codes = []
+    for sid in gate.get("private_self_ids") or []:
+        paths = _paths(config, "notes", sid)
+        if not paths:
+            raise RuntimeError("隐私账本不可用，拒绝读取日志")
+        for path in paths:
+            raw, _ = _capture(sftp, path)
+            code, _ = pg_current(raw.decode("utf-8"))
+            if code:
+                codes.append(code.encode("ascii"))
+    return codes
+
+
+def _redact_logs(raw, codes):
+    for code in codes:
+        raw = re.sub(re.escape(code), "[口令已隐去]".encode("utf-8"), raw, flags=re.IGNORECASE)
+    return raw
+
+
+def _save_entry(kind, key, label, raw, mtime=None, owner=""):
     ident = hashlib.sha256(key.encode("utf-8")).hexdigest()[:20]
     _atomic(os.path.join(_dir(kind), ident + ".txt"), raw)
-    return {"id": ident, "path": key, "label": label, "size": len(raw), "mtime": mtime}
+    return {"id": ident, "path": key, "label": label, "size": len(raw), "mtime": mtime,
+            "owner": owner}
 
 
-def pull(kind):
+def pull(kind, sid=""):
     _dir(kind)
     if not sync.available():
         raise RuntimeError("请先配置 ui.sync")
@@ -128,8 +155,8 @@ def pull(kind):
         config = yaml.safe_load(config_raw)
         if not isinstance(config, dict):
             raise ValueError("服务器配置格式不正确")
-        if kind == "memory":
-            paths = _paths(config)
+        if kind in ("memory", "notes"):
+            paths = _paths(config, kind, sid)
         elif kind == "impression":
             path = sync.sync_cfg().get("remote_impression") or "/opt/astrbot/data/plugin_data/astrbot_plugin_impression/states.json"
             if not isinstance(path, str) or not posixpath.isabs(path) or "\0" in path:
@@ -137,19 +164,29 @@ def pull(kind):
             paths = {posixpath.normpath(path): "人物印象"}
         else:
             paths = _log_paths(sftp, config)
+        codes = _log_codes(sftp, config) if kind == "logs" else []
         entries, total = [], 0
         for path, label in list(paths.items())[:MAX_FILES]:
             try:
                 raw, info = _capture(sftp, path)
+                if kind == "logs":
+                    raw = _redact_logs(raw, codes)
+                if kind == "impression":
+                    state = json.loads(raw)
+                    raw = json.dumps({"version": state.get("version"),
+                                      "bots": {sid: (state.get("bots") or {}).get(sid, {})}},
+                                     ensure_ascii=False, indent=2).encode("utf-8")
                 if total + len(raw) > MAX_TOTAL:
                     raise ValueError("本次总量超过 30 MB")
-                entries.append(_save_entry(kind, path, label, raw, info.st_mtime))
+                entries.append(_save_entry(kind, path, label, raw, info.st_mtime, sid))
                 total += len(raw)
             except (OSError, ValueError) as e:
                 if isinstance(e, OSError) and e.errno == errno.ENOENT:
-                    entries.append({"path": path, "label": label, "error": "尚未生成", "missing": True})
+                    entries.append({"path": path, "label": label, "error": "尚未生成", "missing": True,
+                                    "owner": sid})
                 else:
-                    entries.append({"path": path, "label": label, "error": str(e)[:100]})
+                    entries.append({"path": path, "label": label, "error": str(e)[:100],
+                                    "owner": sid})
         if kind == "logs":
             for name in _containers():
                 if len(entries) >= MAX_FILES:
@@ -163,6 +200,7 @@ def pull(kind):
                 elif len(raw) > MAX_FILE or total + len(raw) > MAX_TOTAL:
                     entries.append({"path": key, "label": "容器", "error": "日志超过大小限制"})
                 else:
+                    raw = _redact_logs(raw, codes)
                     entries.append(_save_entry(kind, key, "容器", raw))
                     total += len(raw)
         _atomic(os.path.join(_dir(kind), "index.json"), json.dumps(entries, ensure_ascii=False).encode("utf-8"))
@@ -173,18 +211,19 @@ def pull(kind):
         client.close()
 
 
-def listing(kind):
+def listing(kind, sid=""):
     path = os.path.join(_dir(kind), "index.json")
     if not os.path.exists(path):
         return []
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        rows = json.load(f)
+    return [row for row in rows if kind == "logs" or row.get("owner") == sid]
 
 
-def preview(kind, ident):
+def preview(kind, ident, sid=""):
     if not isinstance(ident, str) or not re.fullmatch(r"[0-9a-f]{20}", ident):
         raise ValueError("文件编号不合法")
-    if ident not in {e.get("id") for e in listing(kind)}:
+    if ident not in {e.get("id") for e in listing(kind, sid)}:
         raise FileNotFoundError("本地没有这份文件")
     with open(os.path.join(_dir(kind), ident + ".txt"), "rb") as f:
         f.seek(0, os.SEEK_END)

@@ -81,17 +81,27 @@ def sc_style_lines(secs, cutoff=None, exclude=None):
     return out
 
 
-def sc_sanitize(text, exclude):
+def sc_sanitize(text, exclude, rewrite=None):
     """把禁词从**产出**里再剔一遍 —— LLM 不一定听话，确定性过滤才可靠。
 
     只删词、不删行：一行里往往还有别的有用信息
     （「自称变体：窝、沃、小灰灰」里前两个是对的）。删完清掉悬空的分隔符。
+
+    rewrite：`[{"from": "...", "to": "..."}]` —— 给某条加情景限定。
     """
     exclude = [w for w in (exclude or []) if w]
-    if not exclude:
+    pairs = []
+    for item in (rewrite or []):
+        if isinstance(item, dict):
+            a, b = str(item.get("from") or ""), str(item.get("to") or "")
+            if a:
+                pairs.append((a, b))
+    if not exclude and not pairs:
         return text
     out = []
     for ln in (text or "").splitlines():
+        for a, b in pairs:
+            ln = ln.replace(a, b)
         if any(w in ln for w in exclude):
             for w in exclude:
                 ln = ln.replace(w, "")
@@ -160,6 +170,7 @@ def sc_run_target(d):
     max_tok = int(d.get("max_tokens") or 900)
 
     exclude = [str(x) for x in (d.get("exclude") or []) if str(x).strip()]
+    rewrite = [x for x in (d.get("rewrite") or []) if isinstance(x, dict)]
     text = open(src, encoding="utf-8").read()
     secs = sc_parse(text)
     all_lines = sc_style_lines(secs, exclude=exclude)
@@ -172,10 +183,10 @@ def sc_run_target(d):
               - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
     recent = sc_style_lines(secs, cutoff=cutoff, exclude=exclude)
     if recent:
-        body = sc_sanitize("\n".join("- " + x for x in recent), exclude)
+        body = sc_sanitize("\n".join("- " + x for x in recent), exclude, rewrite)
         sc_write(recent_out, RECENT_HEADER, body)
-    print("[mindscape_style] 近期层 %d 条（%s 起，禁词 %d 个）"
-          % (len(recent), cutoff, len(exclude)))
+    print("[mindscape_style] 近期层 %d 条（%s 起，禁词 %d 个，改写 %d 条）"
+          % (len(recent), cutoff, len(exclude), len(rewrite)))
 
     # 稳定层：全周期均匀抽样后压一遍，覆盖写
     stable = ""
@@ -186,7 +197,7 @@ def sc_run_target(d):
         print("[mindscape_style] 压缩失败，保留上一版稳定层: %s" % str(e)[:120])
         stable = ""
     if stable:
-        stable = sc_sanitize(stable, exclude)
+        stable = sc_sanitize(stable, exclude, rewrite)
         # 自我封顶：**在行边界上**截断，别让注入端去硬切。
         cap = int(d.get("max_stable_chars") or 0)
         if cap and len(stable) > cap:

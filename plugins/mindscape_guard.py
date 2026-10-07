@@ -9,6 +9,7 @@
       对用户来说，bot 只是「这次没说话」，而不是「吐了一句报错」。
 """
 import asyncio
+import logging
 import os
 import re
 
@@ -16,6 +17,7 @@ from astrbot.api import logger, star
 from astrbot.api.event import AstrMessageEvent, filter
 
 import mindscape_config as cfg
+from mindscape_gate import pg_audit, pg_config, pg_private, pg_redact, pg_secret_in
 
 # 默认拦截特征（可在配置里覆盖）
 DEFAULT_PATTERNS = [
@@ -90,7 +92,27 @@ def redact(text, limit=100):
     t = (text or "").replace(chr(10), " ").replace(chr(13), " ")
     for rx, rep in _SECRET_PATTERNS:
         t = rx.sub(rep, t)
-    return t[:limit]
+    return pg_redact(t[:limit])
+
+
+class _PrivacyLogFilter(logging.Filter):
+    def filter(self, record):
+        message = record.getMessage()
+        clean = pg_redact(message)
+        if clean != message:
+            record.msg = clean
+            record.args = ()
+        return True
+
+
+def pg_install_log_filter():
+    loggers = [logging.getLogger(), *(
+        value for value in logging.Logger.manager.loggerDict.values()
+        if isinstance(value, logging.Logger))]
+    for current in loggers:
+        for handler in current.handlers:
+            if not any(isinstance(f, _PrivacyLogFilter) for f in handler.filters):
+                handler.addFilter(_PrivacyLogFilter())
 
 
 # ── send 级兜底：框架有两条「直接 send」的报错出口，根本不过结果管线 ──
@@ -106,6 +128,8 @@ MS_SEND_WRAPPED = "_mindscape_send_guard"
 
 def ms_chain_text(message):
     """从 MessageChain 里取纯文本（拿不到就返回空串，不抛）。"""
+    if isinstance(message, str):
+        return message
     try:
         got = message.get_plain_text()
         if isinstance(got, str):
@@ -150,6 +174,13 @@ def ms_install_send_guard(check):
             except Exception:
                 txt = ""
             if txt.strip():
+                if pg_config().get("enabled") and pg_secret_in(self.get_self_id(), txt):
+                    if not pg_private(self):
+                        pg_audit("blocked_group", self.get_self_id(), self.get_group_id() or "")
+                        return None
+                    private_code = True
+                else:
+                    private_code = False
                 try:
                     hit = check(txt)
                 except Exception:
@@ -159,7 +190,10 @@ def ms_install_send_guard(check):
                         "[mindscape_guard] 拦下直接发送的报错（这条不走结果管线）: %s",
                         redact(txt))
                     return None
-            return await _orig(self, message, **kw)
+            sent = await _orig(self, message, **kw)
+            if txt.strip() and private_code:
+                pg_audit("given", self.get_self_id(), self.get_sender_id() or "")
+            return sent
 
         _ms_send.__name__ = getattr(orig, "__name__", "send")
         setattr(cls, MS_SEND_WRAPPED, True)
@@ -210,6 +244,11 @@ def ms_patch_send_tool():
         msgs = kwargs.get("messages")
         if msgs is None and args:
             msgs = args[0]
+        if pg_config().get("enabled") and isinstance(msgs, (list, tuple)):
+            for part in msgs:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    if pg_redact(part["text"]) != part["text"]:
+                        return "口令只能在当前私聊里直接回复，不能用跨会话发送工具。"
         if isinstance(msgs, (list, tuple)) and len(msgs) > 1:
             plains = [m for m in msgs if isinstance(m, dict)
                       and str(m.get("type")) == "plain"
@@ -247,6 +286,7 @@ class GuardMixin:
     def setup(self, context):
 
         self.patterns, self.regex = _load_config()
+        pg_install_log_filter()
         self.blocked = 0
         g = cfg.section("guard")
         self.g_send = True if g.get("send_guard") is None else bool(g.get("send_guard"))
@@ -301,3 +341,15 @@ class GuardMixin:
                 event.stop_event()
         except Exception as e:
             logger.warning("[mindscape_guard] 检查失败: %s", str(e)[:120])
+
+
+@filter.on_decorating_result(priority=101)
+async def pg_block_group_result(*args, **kwargs):
+    event = next((a for a in args if hasattr(a, "get_self_id")), None)
+    if event is None or not pg_config().get("enabled"):
+        return
+    result = event.get_result()
+    text = result.get_plain_text() if result else ""
+    if text and pg_secret_in(event.get_self_id(), text) and not pg_private(event):
+        pg_audit("blocked_group", event.get_self_id(), event.get_group_id() or "")
+        event.clear_result()

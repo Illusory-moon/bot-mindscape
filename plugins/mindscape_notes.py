@@ -121,6 +121,8 @@ async def save_note(*args, **kwargs):
         key = value[:12]
     if not key or len(key) > 40 or any(c in key for c in ":：\r\n"):
         return "名字请控制在 40 字以内，不要带冒号或换行。"
+    if key == "口令":
+        return "这条由框架维护，不用手动改。"
     sid = _find_self_id(args)
     path = notes_path(sid)
     if not path:
@@ -138,7 +140,7 @@ async def save_note(*args, **kwargs):
             logger.info("[mindscape_notes] %s 内容重复，跳过重复记账: %s", sid, key)
             return "这条你**刚刚记过**了，不用再记 —— 直接回答就行。"
         write_notes(path, new_text)
-        logger.info("[mindscape_notes] %s 记下 %s: %s", sid, key, value[:40])
+        logger.info("[mindscape_notes] %s 记下 %s", sid, key)
         return "记下了：%s —— %s（已入账，**不用再记一遍**）" % (key, value)
     except Exception as e:
         logger.warning("[mindscape_notes] 记账失败: %s", str(e)[:120])

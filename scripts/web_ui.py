@@ -49,6 +49,11 @@ except Exception:
     observe = None
 
 try:
+    import privacy_gate_auth as privacy
+except Exception:
+    privacy = None
+
+try:
     import check_live as live
 except Exception:
     live = None
@@ -155,7 +160,10 @@ let CONFIG = null;
 let BOT = null;
 let SAVE_QUEUE = Promise.resolve();
 const PENDING_SAVES = new Map();
-const OBSERVED = {memory:[], impression:[], logs:[]};
+const OBSERVED = {memory:[], impression:[], notes:[], logs:[]};
+let CREDENTIAL = '';
+let GATE_BOT = '';
+let GATE_EXPIRES = 0;
 
 // 草稿存取：写不进去也只是丢草稿，绝不能让功能挂掉
 function ls(k, v){
@@ -175,7 +183,8 @@ function show(i, btn){
 }
 
 async function post(url, body){
-  const r = await fetch(url, {method:'POST', headers:{'X-Mindscape-Token':TK}, body:body});
+  const r = await fetch(url, {method:'POST', headers:{'X-Mindscape-Token':TK,
+    'X-Privacy-Credential':CREDENTIAL}, body:body});
   return await r.json();
 }
 
@@ -199,6 +208,11 @@ async function loadManaged(){
     });
     BOT = CONFIG.bots.some(b => b.id === BOT) ? BOT : CONFIG.bots[0]?.id;
     select.value = BOT || '';
+    document.querySelectorAll('.gate-bot').forEach(g => {
+      g.replaceChildren();
+      CONFIG.gate_bots.forEach(b => { const o=document.createElement('option'); o.value=b.id; o.textContent=b.name; g.append(o); });
+      g.value = GATE_BOT || BOT || '';
+    });
     renderFields();
     configStatus(CONFIG.dirty ? '已保存到本机，等待同步服务器' : '本机与服务器一致');
   } catch(e) { configStatus('读取失败：' + e.message, true); }
@@ -369,6 +383,7 @@ async function doSync(a){
 }
 
 async function observeList(kind){
+  if (kind !== 'logs' && !CREDENTIAL) return;
   const select = document.getElementById(kind + '-files');
   const selected = select.value;
   const status = document.getElementById(kind + '-msg');
@@ -429,6 +444,7 @@ async function loadChannels(){
   } catch(e) { status.textContent = '核对失败：' + e.message; status.classList.add('error'); }
 }
 async function observePull(kind){
+  if (kind !== 'logs' && !CREDENTIAL) return;
   const status = document.getElementById(kind + '-msg');
   status.textContent = '正在拉取...';
   try {
@@ -438,6 +454,26 @@ async function observePull(kind){
     status.textContent = '已拉取 ' + j.count + ' 份' + (j.missing ? '，' + j.missing + ' 份尚未生成' : '')
       + (j.errors ? '，' + j.errors + ' 份失败' : '');
   } catch(e) { status.textContent = '拉取失败：' + e.message; }
+}
+
+async function unlockView(kind){
+  const select = document.getElementById(kind + '-gate-bot');
+  const input = document.getElementById(kind + '-gate-code');
+  const status = document.getElementById(kind + '-gate-msg');
+  status.textContent = '正在核验...';
+  try {
+    const j = await post('/api/privacy/authorize', JSON.stringify({bot:select.value, code:input.value}));
+    input.value = '';
+    if (!j.ok) throw Error(j.error);
+    CREDENTIAL = j.credential;
+    GATE_BOT = select.value;
+    GATE_EXPIRES = Date.now() + j.ttl * 1000;
+    document.querySelectorAll('.gate-bot').forEach(g => { g.value = GATE_BOT; });
+    document.querySelectorAll('.gate-msg').forEach(g => { g.textContent = '已解锁 ' +
+      Math.floor((GATE_EXPIRES-Date.now())/3600000) + ' 小时 ' +
+      Math.ceil(((GATE_EXPIRES-Date.now())%3600000)/60000) + ' 分'; });
+    await Promise.all(['memory','notes','impression'].map(observeList));
+  } catch(e) { status.textContent = e.message; input.value = ''; }
 }
 
 // ── 启动 ──
@@ -456,6 +492,7 @@ window.addEventListener('beforeunload', e => {
 cfgRestore();
 loadManaged();
 observeList('memory');
+observeList('notes');
 observeList('impression');
 observeList('logs');
 loadChannels();
@@ -544,6 +581,9 @@ pre{{background:#20282b;border:1px solid #48585b;border-radius:7px;padding:12px;
 .observe-select{{display:block;width:100%;max-width:100%;background:#20282b;color:#edf0ef;border:1px solid #48585b;border-radius:5px;padding:8px;margin:10px 0}}
 .observe-text{{white-space:pre-wrap;overflow-wrap:anywhere;min-height:180px}}
 .observe-meta{{color:#b8c5c3;font-size:13px;min-height:20px}}
+.gate-bar{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}}
+.gate-bar select,.gate-bar input{{background:#20282b;color:#edf0ef;border:1px solid #48585b;border-radius:5px;padding:8px}}
+.gate-bar input{{width:120px}}
 .channels{{display:block;width:100%;border-collapse:collapse;font-size:12px;overflow-x:auto;margin-top:12px}}
 .channels th,.channels td{{padding:8px 10px;text-align:left;white-space:nowrap;border-bottom:1px solid #394246}}
 .channels th{{color:#b8c5c3}}
@@ -582,10 +622,11 @@ table.seen button:hover{{border-color:#e85a9b}}
 <button class="on" onclick="show(0,this)">配置</button>
 <button onclick="show(1,this)">图库</button>
 <button onclick="show(2,this)">记忆</button>
-<button onclick="show(3,this)">印象</button>
-<button onclick="show(4,this)">日志</button>
-<button onclick="show(5,this)">去重表</button>
-<button onclick="show(6,this)">通道</button>
+<button onclick="show(3,this)">账本</button>
+<button onclick="show(4,this)">印象</button>
+<button onclick="show(5,this)">日志</button>
+<button onclick="show(6,this)">去重表</button>
+<button onclick="show(7,this)">通道</button>
 </div>
 
 <div class="panel on">
@@ -627,6 +668,7 @@ table.seen button:hover{{border-color:#e85a9b}}
 </div>
 
 <div class="panel">
+<div class="gate-bar"><select class="gate-bot" id="memory-gate-bot" aria-label="通道"></select><input id="memory-gate-code" type="password" maxlength="12" autocomplete="off" aria-label="口令"><button onclick="unlockView('memory')">解锁</button><span class="gate-msg" id="memory-gate-msg"></span></div>
 <div class="bar"><button onclick="observePull('memory')">从服务器拉取记忆</button><span class="msg" id="memory-msg"></span></div>
 <select class="observe-select" id="memory-files" aria-label="记忆文件" onchange="observeRead('memory')"></select>
 <div class="observe-meta" id="memory-meta"></div>
@@ -634,6 +676,15 @@ table.seen button:hover{{border-color:#e85a9b}}
 </div>
 
 <div class="panel">
+<div class="gate-bar"><select class="gate-bot" id="notes-gate-bot" aria-label="通道"></select><input id="notes-gate-code" type="password" maxlength="12" autocomplete="off" aria-label="口令"><button onclick="unlockView('notes')">解锁</button><span class="gate-msg" id="notes-gate-msg"></span></div>
+<div class="bar"><button onclick="observePull('notes')">从服务器拉取账本</button><span class="msg" id="notes-msg"></span></div>
+<select class="observe-select" id="notes-files" aria-label="账本文件" onchange="observeRead('notes')"></select>
+<div class="observe-meta" id="notes-meta"></div>
+<pre class="observe-text" id="notes-text"></pre>
+</div>
+
+<div class="panel">
+<div class="gate-bar"><select class="gate-bot" id="impression-gate-bot" aria-label="通道"></select><input id="impression-gate-code" type="password" maxlength="12" autocomplete="off" aria-label="口令"><button onclick="unlockView('impression')">解锁</button><span class="gate-msg" id="impression-gate-msg"></span></div>
 <div class="bar"><button onclick="observePull('impression')">从服务器拉取印象</button><span class="msg" id="impression-msg"></span></div>
 <select class="observe-select" id="impression-files" aria-label="人物印象文件" onchange="observeRead('impression')"></select>
 <div class="observe-meta" id="impression-meta"></div>
@@ -850,6 +901,18 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": False, "error": "请求体过大"}, 413)
             return
 
+        if path == "/api/privacy/authorize":
+            if not privacy:
+                self._json({"ok": False, "error": "隐私模块不可用"}, 503)
+                return
+            try:
+                data = json.loads(body or "{}")
+                credential, ttl = privacy.authorize(data.get("bot"), data.get("code"), self.client_address[0])
+                self._json({"ok": True, "credential": credential, "ttl": ttl})
+            except Exception as exc:
+                self._json({"ok": False, "error": str(exc)[:100]}, 403)
+            return
+
         if path.startswith("/api/managed/"):
             if not managed:
                 self._json({"ok": False, "error": "配置编辑模块不可用（需要 PyYAML）"})
@@ -883,12 +946,19 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) != 5:
                     raise ValueError("未知接口")
                 kind, action = parts[3:]
+                if kind in ("memory", "notes", "impression"):
+                    sid = privacy.session(self.headers.get("X-Privacy-Credential"), self.client_address[0]) if privacy else ""
+                    if not sid:
+                        self._json({"ok": False, "error": "请先向她取得口令"}, 403)
+                        return
+                else:
+                    sid = ""
                 if action == "pull":
-                    self._json({"ok": True, **observe.pull(kind)})
+                    self._json({"ok": True, **observe.pull(kind, sid)})
                 elif action == "list":
-                    self._json({"ok": True, "files": observe.listing(kind)})
+                    self._json({"ok": True, "files": observe.listing(kind, sid)})
                 elif action == "read":
-                    self._json({"ok": True, **observe.preview(kind, json.loads(body or "{}").get("id"))})
+                    self._json({"ok": True, **observe.preview(kind, json.loads(body or "{}").get("id"), sid)})
                 else:
                     self._json({"ok": False, "error": "未知操作"}, 404)
             except Exception as e:

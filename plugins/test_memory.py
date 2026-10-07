@@ -49,10 +49,12 @@ os.remove(tmp)
 
 # read_recent 仍工作
 d = os.path.join(HERE, '_tmp.md')
-open(d, 'w', encoding='utf-8').write('## 2026-01-01 10:00\n- 甲说了一件事\n\n## 2026-01-02 10:00\n- 乙说了另一件事\n')
+open(d, 'w', encoding='utf-8').write('## 2026-01-01 10:00\n- 甲说了一件事\n\n## 2026-01-02 10:00\n- 乙说了另一件事\n- 口令：A2B3C4 —— 24 小时内有效\n')
 rr = mod.read_recent(d, 2000)
 print('read_recent:', rr.replace(chr(10), ' | ')[:120])
 assert '乙说了另一件事' in rr
+assert 'A2B3C4' in rr
+assert 'A2B3C4' not in mod.read_recent(d, 2000, skip_prefix='- 口令：')
 print('read_recent: OK')
 os.remove(d)
 print()

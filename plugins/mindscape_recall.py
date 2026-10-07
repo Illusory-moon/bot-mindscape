@@ -279,6 +279,13 @@ async def recall_memory(*args, **kwargs):
     # 日记 + 发言档案（她自己以前说过的话）一起翻 ——
     # 会话里只留最近几条，所以「我上次说过什么」必须来档案里找 ✓。
     paths = ([path] if path else []) + rc_archives(sid)
+    for bot in _bot_entries():
+        if str(bot.get("self_id")) == sid and bot.get("notes"):
+            note = str(bot["notes"])
+            if not os.path.isabs(note):
+                note = os.path.join(os.path.dirname(cfg.config_path()), note)
+            paths.append(note)
+            break
     if not paths:
         return "我还没有长期记忆文件。"
     full = _as_bool(kwargs.get("full"))

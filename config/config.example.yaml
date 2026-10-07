@@ -21,6 +21,7 @@ memory:
       #        生成的、检索只读 —— bot 能承诺却没地方落笔，于是同一件细节问几次
       #        能答出几个样。给它一本账，细节才有稳定答案。
       notes: "./data/bot-name.notes.md"
+
       # style: 「说话风格」文件（由下面的 learn 段学出来）。
       #        留空 = 不注入，这个 bot 完全不受影响 —— 想给哪个 bot 开就写哪个。
       #        单独成层是因为它回答的是「怎么说」，而日记回答「发生了什么」。
@@ -56,6 +57,21 @@ memory:
       #    每个 bot 的问法都该不一样。
       #   - "听不懂就问，别装懂：群里出现按字面讲不通的说法（谐音、缩写、圈内黑话、梗），
       #      不要当成错别字去纠正，也不要硬接一个不相干的。用你自己的口吻问回去。"
+
+# ── 认知层：潘多拉闸门（账本中的每日口令）──
+privacy_gate:
+  enabled: false  # 先配置私聊 bot、账本、审计路径和每日轮换任务
+  length: 6
+  charset: alnum
+  ttl_hours: 24
+  max_tries: 5
+  lockout_minutes: 30
+  audit_file: "/absolute/path/to/privacy-gate.audit.jsonl"
+  private_self_ids: ["20000000"]
+  developer_ids: ["20000002"]
+  ask_from: private
+  ask_words: ["口令", "密码", "密钥", "暗号"]
+  ask_hint: "对方在问你的口令。你的账本里记着一条（可以用 recall_memory 搜『口令』找到）。要不要告诉他由你决定；他拿到就可以看你的记忆和印象，24 小时内有效。不给也完全没问题。"
 
 # ── 认知层：上下文补齐（群聊缓冲，**默认关闭**）──
 # 唤醒判定发生在框架的**消息分发阶段**，比插件更早 —— 没被唤醒的群消息不进上下文。

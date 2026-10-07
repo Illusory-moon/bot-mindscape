@@ -23,16 +23,16 @@ OUT_DIR = os.path.join(HERE, "dist", "mindscape")
 
 # 顺序有意义：core/config 是共享层；Mixin 的先后决定 MRO
 ORDER = [
-    "mindscape_core", "mindscape_config", "mindscape_groupctx",
+    "mindscape_core", "mindscape_config", "mindscape_gate", "mindscape_groupctx",
     "mindscape_block", "mindscape_guard", "mindscape_silence", "mindscape_vision",
-    "mindscape_memory", "mindscape_recall", "mindscape_notes",
+    "mindscape_memory", "mindscape_privacy", "mindscape_recall", "mindscape_notes",
     "mindscape_diary", "mindscape_learn", "mindscape_stickers", "mindscape_sticker_use",
     "mindscape_format", "mindscape_trace", "mindscape_rescue", "mindscape_janitor",
     "mindscape_mention", "mindscape_toolscope",
 ]
 
 # 这些模块里的类是 Mixin，需要被主类继承（按此顺序）
-MIXIN_ORDER = ["BlockMixin", "GuardMixin", "MemoryMixin", "StickersMixin",
+MIXIN_ORDER = ["BlockMixin", "GuardMixin", "MemoryMixin", "PrivacyMixin", "StickersMixin",
                "StickerUseMixin", "FormatMixin", "RescueMixin",
                "SilenceMixin", "VisionMixin", "GroupctxMixin", "TraceMixin",
                "MentionMixin", "ToolscopeMixin"]
@@ -160,6 +160,7 @@ def main(exclude=()):
         "    load = staticmethod(load)",
         "    bot_entries = staticmethod(bot_entries)",
         "    config_path = staticmethod(config_path)",
+        "    data_dir = staticmethod(data_dir)",
         "    abs_path = staticmethod(abs_path)",
         "",
         "",

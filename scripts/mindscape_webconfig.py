@@ -189,7 +189,9 @@ def snapshot():
     if base.get("server") != _server_id():
         raise RuntimeError("服务器连接已更换，请先重新读取服务器配置")
     dirty = any(_digest(_read(LOCAL[k])) != base.get(k) for k in LOCAL)
-    return dict(bots=bots, fields=CATALOG, values=values, dirty=dirty)
+    allowed = {str(x) for x in data["config"].get("privacy_gate", {}).get("private_self_ids") or []}
+    return dict(bots=bots, gate_bots=[b for b in bots if b["id"] in allowed],
+                fields=CATALOG, values=values, dirty=dirty)
 
 
 def _value(field, value):

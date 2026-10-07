@@ -1,0 +1,10 @@
+[Unit]
+Description=Rotate bot privacy gate codes at 04:00
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 Asia/Shanghai
+Persistent=true
+Unit=mindscape-privacy-gate.service
+
+[Install]
+WantedBy=timers.target

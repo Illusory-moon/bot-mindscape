@@ -1114,6 +1114,8 @@ def check_regressions():
         san = SC.sc_sanitize("- 自称变体：窝、沃、阿明\n- 阿明\n- 别的", ["阿明"])
         san_ok = ("窝" in san and "沃" in san and "阿明" not in san
                   and "别的" in san and "\n- \n" not in san)
+        rewrite_ok = SC.sc_sanitize("- 用编号分条", [],
+                                    [{"from": "用编号分条", "to": "认真回答时用编号分条"}]) == "- 认真回答时用编号分条"
         sysw_ok = "不要把别人的昵称" in SC.DEFAULT_SYSTEM
 
         # 覆盖写：写两次，第二次必须把第一次顶掉
@@ -1165,12 +1167,12 @@ def check_regressions():
 
         (ok if (parse_ok and cat_ok and win_ok and ovw_ok and off_ok and on_ok
                 and slot_ok and order_ok and guard_ok and clean_ok
-                and exc_ok and san_ok and sysw_ok and cron_ok) else bad)(
+                and exc_ok and san_ok and rewrite_ok and sysw_ok and cron_ok) else bad)(
             "R26 风格分层无认知 bug",
             "解析=%s 只收风格=%s 窗口=%s 覆盖写=%s 默认关=%s 开了会跑=%s "
-            "双槽=%s 顺序=%s 四守卫=%s 去注释=%s 禁词=%s 产出再剔=%s 提示词=%s 冒泡轮=%s"
+            "双槽=%s 顺序=%s 四守卫=%s 去注释=%s 禁词=%s 产出再剔=%s 改写=%s 提示词=%s 冒泡轮=%s"
             % (parse_ok, cat_ok, win_ok, ovw_ok, off_ok, on_ok,
-               slot_ok, order_ok, guard_ok, clean_ok, exc_ok, san_ok, sysw_ok, cron_ok))
+               slot_ok, order_ok, guard_ok, clean_ok, exc_ok, san_ok, rewrite_ok, sysw_ok, cron_ok))
     except Exception as e:
         bad("R26 风格分层", str(e)[:140])
 

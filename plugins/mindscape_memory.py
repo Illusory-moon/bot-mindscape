@@ -63,7 +63,7 @@ def _tail_lines(text, budget):
     return "\n".join(out)
 
 
-def read_recent(path, max_chars):
+def read_recent(path, max_chars, skip_prefix=""):
     """取最近的记忆，严格不超过 max_chars（从最新条目向前累计）。
 
     做法：从文件尾部往前扫，按「条目 / 标题」为单位累加，
@@ -80,7 +80,7 @@ def read_recent(path, max_chars):
             f.readline()                       # 丢掉被截断的半行
         tail = f.read()
 
-    lines = tail.splitlines()
+    lines = [line for line in tail.splitlines() if not skip_prefix or not line.startswith(skip_prefix)]
     # 从后往前，以「条目块」为单位累加（块 = 连续的非空行，遇到 ## 标题另起一块）
     blocks = []
     cur = []
@@ -256,7 +256,8 @@ class MemoryMixin:
             if nt_path:
                 n_chars = int(bot.get("notes_chars")
                               or self.m_cfg.get("notes_chars") or DEFAULT_NOTES_CHARS)
-                notes = read_recent(nt_path, n_chars)
+                skip = "- 口令：" if cfg.section("privacy_gate").get("enabled") else ""
+                notes = read_recent(nt_path, n_chars, skip_prefix=skip)
 
             sty = ""
             st_path = _resolve(bot.get("style"))

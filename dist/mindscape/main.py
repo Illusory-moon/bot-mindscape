@@ -8,10 +8,13 @@ import asyncio
 import base64
 import datetime
 import hashlib
+import hmac
 import json
+import logging
 import os
 import random
 import re
+import secrets
 import shutil
 import sqlite3
 import struct
@@ -29,6 +32,7 @@ from astrbot.core.message.message_event_result import MessageEventResult
 from astrbot.core.provider.entities import ProviderRequest
 from astrbot.core.star.filter.event_message_type import EventMessageType
 from collections import deque
+from zoneinfo import ZoneInfo
 
 
 class IndexLock:
@@ -67,6 +71,16 @@ class IndexLock:
         except Exception:
             pass
         return False
+
+
+class _PrivacyLogFilter(logging.Filter):
+    def filter(self, record):
+        message = record.getMessage()
+        clean = pg_redact(message)
+        if clean != message:
+            record.msg = clean
+            record.args = ()
+        return True
 DEFAULT_PROMPT = (
     "看这张图，判断它适不适合当一个「{persona}」用的表情包。\n\n"
     "判断标准：\n"
@@ -317,6 +331,120 @@ def bot_entries():
     mem = section("memory")
     bots = mem.get("bots")
     return bots if isinstance(bots, list) else []
+
+
+PG_LINE = re.compile(r"^- 口令：([A-Za-z0-9]+) —— 24 小时内有效（至 ([0-9-]+ [0-9:]+)）")
+
+
+PG_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+PG_ZONE = ZoneInfo("Asia/Shanghai")
+
+
+def pg_config():
+    return cfg.section("privacy_gate")
+
+
+def pg_notes(self_id):
+    for bot in cfg.bot_entries():
+        if str(bot.get("self_id")) == str(self_id):
+            path = bot.get("notes") or ""
+            return path if os.path.isabs(path) else os.path.join(os.path.dirname(cfg.config_path()), path) if path else ""
+    return ""
+
+
+def pg_alphabet(charset="alnum"):
+    alphabet = PG_ALPHABET if charset == "alnum" else str(charset).upper()
+    if (len(set(alphabet)) < 2 or not alphabet.isascii() or not alphabet.isalnum()
+            or not any(c.isalpha() for c in alphabet) or not any(c.isdigit() for c in alphabet)):
+        raise ValueError("口令字符集必须包含 ASCII 字母和数字")
+    return "".join(dict.fromkeys(alphabet))
+
+
+def pg_valid(code, length=6, charset="alnum"):
+    alphabet = pg_alphabet(charset)
+    return (2 <= length <= 12 and len(code) == length and code.isascii()
+            and all(c in alphabet for c in code.upper())
+            and any(c.isalpha() for c in code) and any(c.isdigit() for c in code))
+
+
+def pg_generate(length=6, charset="alnum"):
+    if not 2 <= length <= 12:
+        raise ValueError("口令长度须在 2 到 12 位之间")
+    alphabet = pg_alphabet(charset)
+    while True:
+        code = "".join(secrets.choice(alphabet) for _ in range(length))
+        if pg_valid(code, length, charset):
+            return code
+
+
+def pg_current(text, now=None):
+    now = now or datetime.datetime.now(PG_ZONE)
+    for line in reversed(text.splitlines()):
+        match = PG_LINE.match(line)
+        if match:
+            expiry = datetime.datetime.strptime(match.group(2), "%Y-%m-%d %H:%M:%S").replace(tzinfo=PG_ZONE)
+            return (match.group(1), expiry) if now < expiry else ("", expiry)
+    return "", None
+
+
+def pg_rotate(text, now=None, length=6, charset="alnum", force=False):
+    now = now or datetime.datetime.now(PG_ZONE)
+    code, expiry = pg_current(text, now)
+    if (code and pg_valid(code, length, charset) and not force
+            and expiry.date() == (now + datetime.timedelta(days=1)).date()):
+        return text, False
+    code = pg_generate(length, charset)
+    expires = now + datetime.timedelta(hours=24)
+    line = ("- 口令：%s —— 24 小时内有效（至 %s）。开发者如果要翻我的记忆或印象，"
+            "会来问我要它（他可能说：密码 / 口令 / 密钥）。我可以给，也可以不给；"
+            "反复被问也可以一直拒绝。" % (code, expires.strftime("%Y-%m-%d %H:%M:%S")))
+    rows = [row for row in text.splitlines() if not row.startswith("- 口令：")]
+    return "\n".join(rows + [line]) + "\n", True
+
+
+def pg_matches(text, candidate, now=None, charset="alnum"):
+    code, expiry = pg_current(text, now)
+    return bool(code and pg_valid(candidate, len(code), charset)
+                and hmac.compare_digest(code, candidate.upper())), expiry
+
+
+def pg_secret_in(self_id, text):
+    path = pg_notes(self_id)
+    if not path or not os.path.isfile(path):
+        return False
+    with open(path, encoding="utf-8") as stream:
+        code, _ = pg_current(stream.read())
+    return bool(code and code.lower() in (text or "").lower())
+
+
+def pg_redact(text):
+    result = str(text)
+    for bot in cfg.bot_entries():
+        sid = bot.get("self_id")
+        path = pg_notes(sid)
+        if path and os.path.isfile(path):
+            with open(path, encoding="utf-8") as stream:
+                code, _ = pg_current(stream.read())
+            if code:
+                result = re.sub(re.escape(code), "[口令已隐去]", result, flags=re.IGNORECASE)
+    return result
+
+
+def pg_private(event):
+    allowed = [str(x) for x in pg_config().get("private_self_ids") or []]
+    return str(event.get_self_id()) in allowed and not event.get_group_id()
+
+
+def pg_audit(action, self_id, session="", detail=""):
+    path = pg_config().get("audit_file") or os.path.join(cfg.data_dir(), "privacy-gate.audit.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    row = {"at": datetime.datetime.now(PG_ZONE).isoformat(timespec="seconds"),
+           "action": action, "self_id": str(self_id), "session": str(session), "detail": detail}
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 DEFAULT_BUFFER = "/opt/astrbot/data/group_ctx_buffer.jsonl"
@@ -666,7 +794,17 @@ def redact(text, limit=100):
     t = (text or "").replace(chr(10), " ").replace(chr(13), " ")
     for rx, rep in _SECRET_PATTERNS:
         t = rx.sub(rep, t)
-    return t[:limit]
+    return pg_redact(t[:limit])
+
+
+def pg_install_log_filter():
+    loggers = [logging.getLogger(), *(
+        value for value in logging.Logger.manager.loggerDict.values()
+        if isinstance(value, logging.Logger))]
+    for current in loggers:
+        for handler in current.handlers:
+            if not any(isinstance(f, _PrivacyLogFilter) for f in handler.filters):
+                handler.addFilter(_PrivacyLogFilter())
 
 
 MS_SEND_WRAPPED = "_mindscape_send_guard"
@@ -674,6 +812,8 @@ MS_SEND_WRAPPED = "_mindscape_send_guard"
 
 def ms_chain_text(message):
     """从 MessageChain 里取纯文本（拿不到就返回空串，不抛）。"""
+    if isinstance(message, str):
+        return message
     try:
         got = message.get_plain_text()
         if isinstance(got, str):
@@ -718,6 +858,13 @@ def ms_install_send_guard(check):
             except Exception:
                 txt = ""
             if txt.strip():
+                if pg_config().get("enabled") and pg_secret_in(self.get_self_id(), txt):
+                    if not pg_private(self):
+                        pg_audit("blocked_group", self.get_self_id(), self.get_group_id() or "")
+                        return None
+                    private_code = True
+                else:
+                    private_code = False
                 try:
                     hit = check(txt)
                 except Exception:
@@ -727,7 +874,10 @@ def ms_install_send_guard(check):
                         "[mindscape_guard] 拦下直接发送的报错（这条不走结果管线）: %s",
                         redact(txt))
                     return None
-            return await _orig(self, message, **kw)
+            sent = await _orig(self, message, **kw)
+            if txt.strip() and private_code:
+                pg_audit("given", self.get_self_id(), self.get_sender_id() or "")
+            return sent
 
         _ms_send.__name__ = getattr(orig, "__name__", "send")
         setattr(cls, MS_SEND_WRAPPED, True)
@@ -781,6 +931,11 @@ def ms_patch_send_tool():
         msgs = kwargs.get("messages")
         if msgs is None and args:
             msgs = args[0]
+        if pg_config().get("enabled") and isinstance(msgs, (list, tuple)):
+            for part in msgs:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    if pg_redact(part["text"]) != part["text"]:
+                        return "口令只能在当前私聊里直接回复，不能用跨会话发送工具。"
         if isinstance(msgs, (list, tuple)) and len(msgs) > 1:
             plains = [m for m in msgs if isinstance(m, dict)
                       and str(m.get("type")) == "plain"
@@ -812,6 +967,18 @@ def ms_patch_send_tool():
     setattr(SendMessageToUserTool, MS_SENDTOOL_FLAG, True)
     logger.info("[mindscape_guard] 内置 send_message_to_user 已改成逐条发送")
     return 1
+
+
+@filter.on_decorating_result(priority=101)
+async def pg_block_group_result(*args, **kwargs):
+    event = next((a for a in args if hasattr(a, "get_self_id")), None)
+    if event is None or not pg_config().get("enabled"):
+        return
+    result = event.get_result()
+    text = result.get_plain_text() if result else ""
+    if text and pg_secret_in(event.get_self_id(), text) and not pg_private(event):
+        pg_audit("blocked_group", event.get_self_id(), event.get_group_id() or "")
+        event.clear_result()
 
 
 SI_DEFAULT_TOKEN = "[[silence]]"
@@ -991,7 +1158,7 @@ def _tail_lines(text, budget):
     return "\n".join(out)
 
 
-def read_recent(path, max_chars):
+def read_recent(path, max_chars, skip_prefix=""):
     """取最近的记忆，严格不超过 max_chars（从最新条目向前累计）。
 
     做法：从文件尾部往前扫，按「条目 / 标题」为单位累加，
@@ -1008,7 +1175,7 @@ def read_recent(path, max_chars):
             f.readline()                       # 丢掉被截断的半行
         tail = f.read()
 
-    lines = tail.splitlines()
+    lines = [line for line in tail.splitlines() if not skip_prefix or not line.startswith(skip_prefix)]
     # 从后往前，以「条目块」为单位累加（块 = 连续的非空行，遇到 ## 标题另起一块）
     blocks = []
     cur = []
@@ -1403,6 +1570,13 @@ async def recall_memory(*args, **kwargs):
     # 日记 + 发言档案（她自己以前说过的话）一起翻 ——
     # 会话里只留最近几条，所以「我上次说过什么」必须来档案里找 ✓。
     paths = ([path] if path else []) + rc_archives(sid)
+    for bot in _bot_entries():
+        if str(bot.get("self_id")) == sid and bot.get("notes"):
+            note = str(bot["notes"])
+            if not os.path.isabs(note):
+                note = os.path.join(os.path.dirname(cfg.config_path()), note)
+            paths.append(note)
+            break
     if not paths:
         return "我还没有长期记忆文件。"
     full = _as_bool(kwargs.get("full"))
@@ -1660,6 +1834,8 @@ async def save_note(*args, **kwargs):
         key = value[:12]
     if not key or len(key) > 40 or any(c in key for c in ":：\r\n"):
         return "名字请控制在 40 字以内，不要带冒号或换行。"
+    if key == "口令":
+        return "这条由框架维护，不用手动改。"
     sid = _find_self_id(args)
     path = notes_path(sid)
     if not path:
@@ -1677,7 +1853,7 @@ async def save_note(*args, **kwargs):
             logger.info("[mindscape_notes] %s 内容重复，跳过重复记账: %s", sid, key)
             return "这条你**刚刚记过**了，不用再记 —— 直接回答就行。"
         write_notes(path, new_text)
-        logger.info("[mindscape_notes] %s 记下 %s: %s", sid, key, value[:40])
+        logger.info("[mindscape_notes] %s 记下 %s", sid, key)
         return "记下了：%s —— %s（已入账，**不用再记一遍**）" % (key, value)
     except Exception as e:
         logger.warning("[mindscape_notes] 记账失败: %s", str(e)[:120])
@@ -2826,6 +3002,7 @@ class _MindscapeConfigNS:
     load = staticmethod(load)
     bot_entries = staticmethod(bot_entries)
     config_path = staticmethod(config_path)
+    data_dir = staticmethod(data_dir)
     abs_path = staticmethod(abs_path)
 
 
@@ -2862,6 +3039,7 @@ class GuardMixin:
     def setup(self, context):
 
         self.patterns, self.regex = _load_config()
+        pg_install_log_filter()
         self.blocked = 0
         g = cfg.section("guard")
         self.g_send = True if g.get("send_guard") is None else bool(g.get("send_guard"))
@@ -2968,7 +3146,8 @@ class MemoryMixin:
             if nt_path:
                 n_chars = int(bot.get("notes_chars")
                               or self.m_cfg.get("notes_chars") or DEFAULT_NOTES_CHARS)
-                notes = read_recent(nt_path, n_chars)
+                skip = "- 口令：" if cfg.section("privacy_gate").get("enabled") else ""
+                notes = read_recent(nt_path, n_chars, skip_prefix=skip)
 
             sty = ""
             st_path = _resolve(bot.get("style"))
@@ -3084,6 +3263,27 @@ class MemoryMixin:
                         label, len(mem), len(dig), len(notes), len(sty), len(people))
         except Exception as e:
             logger.warning("[mindscape_memory] 注入失败: %s", str(e)[:120])
+
+
+class PrivacyMixin:
+    def setup(self, context):
+        logger.info("[mindscape_privacy] loaded")
+
+    @filter.on_llm_request()
+    async def pg_ask_hint(self, event: AstrMessageEvent, request: ProviderRequest):
+        gate = cfg.section("privacy_gate")
+        if not gate.get("enabled"):
+            return
+        if str(event.get_sender_id()) not in [str(x) for x in gate.get("developer_ids") or []]:
+            return
+        if gate.get("ask_from", "private") == "private" and event.get_group_id():
+            return
+        message = str(getattr(event.message_obj, "message_str", "") or "")
+        if not any(str(word) in message for word in gate.get("ask_words") or []):
+            return
+        hint = str(gate.get("ask_hint") or "").strip()
+        if hint:
+            request.system_prompt = (request.system_prompt or "") + "\n\n" + hint
 
 
 class StickersMixin:
@@ -4418,7 +4618,7 @@ class ToolscopeMixin:
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
 # ==================================================================
-class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, SilenceMixin, VisionMixin, GroupctxMixin, TraceMixin, MentionMixin, ToolscopeMixin, star.Star):
+class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, PrivacyMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, SilenceMixin, VisionMixin, GroupctxMixin, TraceMixin, MentionMixin, ToolscopeMixin, star.Star):
     def __init__(self, context):
         self.context = context
         self.name = "mindscape"
@@ -4426,6 +4626,7 @@ class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, StickersMixin, Sticke
         BlockMixin.setup(self, context)
         GuardMixin.setup(self, context)
         MemoryMixin.setup(self, context)
+        PrivacyMixin.setup(self, context)
         StickersMixin.setup(self, context)
         StickerUseMixin.setup(self, context)
         FormatMixin.setup(self, context)
@@ -4436,4 +4637,4 @@ class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, StickersMixin, Sticke
         TraceMixin.setup(self, context)
         MentionMixin.setup(self, context)
         ToolscopeMixin.setup(self, context)
-        logger.info("[mindscape] 插件已加载（13 个模块）")
+        logger.info("[mindscape] 插件已加载（14 个模块）")

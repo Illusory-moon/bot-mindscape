@@ -1,0 +1,7 @@
+[Unit]
+Description=Rotate bot privacy gate codes
+
+[Service]
+Type=oneshot
+Environment=MINDSCAPE_CONFIG=/opt/astrbot/data/plugin_data/astrbot_plugin_mindscape/config.yaml
+ExecStart=/usr/bin/python3 /opt/mindscape/privacy_gate_rotate.py

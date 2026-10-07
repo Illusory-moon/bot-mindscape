@@ -95,10 +95,13 @@ flowchart TD
 | `mindscape_digest` | **每日摘要** —— 把「已过完的一天」压成一句话，为每个日期只调一次 LLM |
 | `mindscape_notes` | **可写的账本** —— 给 bot 一个 `save_note` 工具，它当场就能落笔 |
 | `mindscape_recall` | **混合检索 + 边界自知** —— 精确 + 模糊匹配，多词检索，且明说「这只是最近一部分」 |
+| `mindscape_gate` / `mindscape_privacy` | **可选的隐私闸门** —— 每个 bot 的随机口令只写进自己的账本，按关键词提示它自行决定是否私聊给出；群聊出站拦截口令 |
 | `mindscape_learn` | **风格学习（人格蒸馏）** —— 只读某个人真实发过的话，学他「怎么说」。**只学习、不回复**，默认关闭 |
 | `mindscape_style` | **风格分层** —— 把学出的追加式原文压成「稳定层 + 近期层」，稳定层每次覆盖写 |
 
 **设计要点**：记忆存在人类可读的 Markdown 里，不锁在数据库。
+
+隐私闸门开启后，管理台的记忆、账本、印象三视图必须经服务端口令核验；输错会限速并记审计。每天 04:00 的轮换由 `scripts/privacy_gate_rotate.py` 和 `scripts/systemd/mindscape-privacy-gate.*` 执行，需与插件使用同一份 `MINDSCAPE_CONFIG`。配置项见 `config/config.example.yaml`；未部署轮换任务前保持 `privacy_gate.enabled: false`。
 
 #### 风格学习：让 bot 学会「你的语气」
 
