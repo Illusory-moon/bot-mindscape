@@ -1320,6 +1320,30 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R47: 工具箱按 bot 隔离 —— 不属于这个 bot 的工具要摘掉 ✗（2026-10-07 加 ✓）
+    #      实测代价：火花看到一个**不属于她**的工具 → 调了 → 被拒 ✗ →
+    #      她把那条报错读成了「对方那句话不属于我」✗ → 群里冒出一句自言自语 ✗。
+    try:
+        import mindscape_toolscope as TS6
+        importlib.reload(TS6)
+        _allow6 = {"给甲的": ["100"], "给乙的": ["200"], "大家都能用": ["100", "200"]}
+        _a6 = TS6.ts_removed_for(_allow6, "100")
+        _b6 = TS6.ts_removed_for(_allow6, "200")
+        _c6 = TS6.ts_removed_for({"没写": []}, "100")
+        _d6 = sorted(TS6.ts_removed_for(_allow6, "999"))
+        # 陌生 self_id（例如以后新接的通道 ✓）对**所有**写了限制的工具都拿不到 ✓
+        _okk8 = (_a6 == ["给乙的"] and _b6 == ["给甲的"] and _c6 == []
+                 and _d6 == ["大家都能用", "给乙的", "给甲的"])
+        (ok if _okk8 else bad)(
+            "R47 工具箱按 bot 隔离",
+            "甲摘=%s 乙摘=%s 空表=%s 陌生=%s" % (_a6, _b6, _c6, _d6))
+        _src6 = open(os.path.join(HERE, "plugins", "mindscape_toolscope.py"), encoding="utf-8").read()
+        (ok if ("on_llm_request" in _src6 and "remove_tool" in _src6) else bad)(
+            "R47 工具箱按 bot 隔离·挂钩",
+            "挂钩=%s 会摘=%s" % ("on_llm_request" in _src6, "remove_tool" in _src6))
+    except Exception as e:
+        bad("R47 工具箱按 bot 隔离", str(e)[:140])
+
     # R46: say_lines 之后的**持续抑制** —— 抑制状态只能用 `get` ✗ 不能用 `pop` ✗
     #      （2026-10-07 实测：pop 取一次就没了 ✓ → 工具循环再生成的正文漏进群 ✗
     #       群里看到「嗯，那本不属于我~…」✗）；且要记「同一轮」免得误伤下一轮 ✓。

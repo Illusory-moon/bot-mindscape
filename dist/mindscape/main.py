@@ -22,6 +22,7 @@ from astrbot.api import llm_tool, logger, star
 from astrbot.api import logger
 from astrbot.api import logger, star
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import filter
 from astrbot.core.message.components import At
 from astrbot.core.message.components import Image
 from astrbot.core.message.message_event_result import MessageEventResult
@@ -2786,6 +2787,24 @@ async def mn_attach_hook(*args, **kwargs):
                         event.get_self_id(), qq)
     except Exception as exc:
         logger.warning("[mindscape_mention] 挂 @ 失败: %s", str(exc)[:100])
+
+
+def ts_ids(raw):
+    """把配置里的 self_id 列表/字符串归一成集合。"""
+    if isinstance(raw, (list, tuple)):
+        return {str(x).strip() for x in raw if str(x).strip()}
+    return {x for x in re.split(r"[\s,，;；]+", str(raw or "").strip()) if x}
+
+
+def ts_removed_for(allow, self_id):
+    """返回「这个 bot 不该看到的工具名」列表（纯函数 ✓ 好测 ✓）。"""
+    sid = str(self_id or "")
+    out = []
+    for name, allowed in (allow or {}).items():
+        ids = ts_ids(allowed)
+        if ids and sid not in ids:
+            out.append(str(name))
+    return out
 # ==================================================================
 # 命名空间：让 cfg.xxx() / core.xxx() 这类调用在合并后依然可用
 # ==================================================================
@@ -4341,10 +4360,53 @@ class MentionMixin:
             MN_SAID["%s|%s" % (ev.get_self_id(), gid)] = (sent, time.time(), id(ev))
         return ("发好了：%d 条（每条一个气泡）。这一轮要说的话就算说完了 —— "
                 "还想补就写进 lines 里，不用再另发正文。" % sent)
+
+
+class ToolscopeMixin:
+    def setup(self, context):
+        try:
+            conf = cfg.section("tool_scope")
+            logger.info("[mindscape_toolscope] loaded | %s | 隔离规则 %d 条",
+                        "启用" if conf.get("enabled", True) else "关闭",
+                        len(conf.get("allow") or {}))
+        except Exception:
+            pass
+
+    @filter.on_llm_request(priority=-30)
+    async def ts_scope_tools(self, event, request):
+        """摘掉不属于当前 bot 的工具（见模块 docstring）。"""
+        try:
+            conf = cfg.section("tool_scope")
+            if not conf.get("enabled", True):
+                return
+            allow = conf.get("allow") or {}
+            if not isinstance(allow, dict) or not allow:
+                return
+            ts = getattr(request, "func_tool", None)
+            if ts is None:
+                return
+            names = ts_removed_for(allow, event.get_self_id())
+            if not names:
+                return
+            have = {getattr(t, "name", "") for t in (getattr(ts, "tools", None) or [])}
+            gone = []
+            for n in names:
+                if n not in have:
+                    continue
+                try:
+                    ts.remove_tool(n)
+                    gone.append(n)
+                except Exception:
+                    pass
+            if gone:
+                logger.info("[mindscape_toolscope] self=%s 摘掉不属于它的工具: %s",
+                            event.get_self_id(), gone)
+        except Exception as e:
+            logger.warning("[mindscape_toolscope] 过滤失败: %s", str(e)[:120])
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
 # ==================================================================
-class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, SilenceMixin, VisionMixin, GroupctxMixin, TraceMixin, MentionMixin, star.Star):
+class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, SilenceMixin, VisionMixin, GroupctxMixin, TraceMixin, MentionMixin, ToolscopeMixin, star.Star):
     def __init__(self, context):
         self.context = context
         self.name = "mindscape"
@@ -4361,4 +4423,5 @@ class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, StickersMixin, Sticke
         GroupctxMixin.setup(self, context)
         TraceMixin.setup(self, context)
         MentionMixin.setup(self, context)
-        logger.info("[mindscape] 插件已加载（12 个模块）")
+        ToolscopeMixin.setup(self, context)
+        logger.info("[mindscape] 插件已加载（13 个模块）")
