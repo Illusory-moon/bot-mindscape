@@ -1320,6 +1320,20 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R46: say_lines 之后的**持续抑制** —— 抑制状态只能用 `get` ✗ 不能用 `pop` ✗
+    #      （2026-10-07 实测：pop 取一次就没了 ✓ → 工具循环再生成的正文漏进群 ✗
+    #       群里看到「嗯，那本不属于我~…」✗）；且要记「同一轮」免得误伤下一轮 ✓。
+    try:
+        _sm = open(os.path.join(HERE, "plugins", "mindscape_mention.py"), encoding="utf-8").read()
+        _a46 = "MN_SAID.get(key)" in _sm
+        _b46 = "MN_SAID.pop(key, None)" in _sm
+        _c46 = "MN_SAID_WINDOW" in _sm and "id(ev)" in _sm
+        (ok if (_a46 and _b46 and _c46) else bad)(
+            "R46 连发后的持续抑制",
+            "用 get=%s 有窗口常量=%s 记同轮=%s" % (_a46, "MN_SAID_WINDOW" in _sm, "id(ev)" in _sm))
+    except Exception as e:
+        bad("R46 连发后的持续抑制", str(e)[:140])
+
     # R44: 救援补话必须带**人格** —— 人格在 system_prompt **开头** ✗ 尾部是规矩/记忆 ✓
     #      （2026-10-07 实测：只取尾部 → 补出「这俩本来不就是一个人吗」✗ 毫无人格 ✓）；
     #      且补话彻底失败时要有**可配置**兜底句 ✓（代码里不留人格措辞 ✓）。

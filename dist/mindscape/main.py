@@ -2712,7 +2712,10 @@ MN_PENDING = {}
 MN_SAID = {}
 
 
-MN_SAID_TTL = 300
+MN_SAID_TTL = 300       # 状态在表里最多留多久（清理用 ✓）
+
+
+MN_SAID_WINDOW = 40     # 抑制窗口：超过这个秒数且不是同一轮，就不再抑制 ✓（见下方注释 ✓）
 
 
 MN_AT_LITERAL = re.compile(r"@[^\s@()（）]{1,24}[（(]\d{5,12}[)）]")
@@ -2736,9 +2739,18 @@ async def mn_attach_hook(*args, **kwargs):
             return
         key = "%s|%s" % (event.get_self_id(), event.get_group_id())
         item = mn_take_pending(MN_PENDING, key, time.time()) if MN_PENDING else None
-        said = MN_SAID.pop(key, None) if MN_SAID else None
-        if said and time.time() - float(said[1]) > MN_SAID_TTL:
-            said = None
+        # ⚠️ 2026-10-07 实测踩坑：原先这里用 `.pop()` ✗ —— **取一次就没了** ✓，
+        #    而她 say_lines 之后还会继续调工具 ✓，工具循环会**再生成一次正文** ✗ →
+        #    第二次发送时 MN_SAID 已空 ✗ → 那句正文就漏进群了 ✗（群里看到「嗯，那本不属于我~…」✗）。
+        #    改成 `.get()` ✓ 并把**同一轮的 event id** 也记下 ✓；
+        #    只对「同一轮 ✓」或「40 秒内 ✓」生效，免得误伤同一群里**下一轮**的正文 ✗。
+        #    已知上限：同一群 40 秒内开新轮，其正文可能被误抑制 ✓（升级路：换成真正的 turn id ✓）。
+        said = MN_SAID.get(key) if MN_SAID else None
+        if said:
+            _same_turn = (len(said) > 2 and said[2] == id(event))
+            if not _same_turn and (time.time() - float(said[1]) > MN_SAID_WINDOW):
+                said = None
+                MN_SAID.pop(key, None)
         enabled, targets = mn_load_config()
         if enabled and scope_hit(targets, event.get_self_id()):
             result = event.get_result()
@@ -4326,7 +4338,7 @@ class MentionMixin:
         except Exception:
             gid = None
         if gid is not None:
-            MN_SAID["%s|%s" % (ev.get_self_id(), gid)] = (sent, time.time())
+            MN_SAID["%s|%s" % (ev.get_self_id(), gid)] = (sent, time.time(), id(ev))
         return ("发好了：%d 条（每条一个气泡）。这一轮要说的话就算说完了 —— "
                 "还想补就写进 lines 里，不用再另发正文。" % sent)
 # ==================================================================
