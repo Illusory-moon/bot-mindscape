@@ -232,8 +232,12 @@ def session_idle_seconds(cur, table, rid, now=None):
         if not row or not row[0]:
             return None
         s = str(row[0]).strip()[:19]
-        dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
-        return (now or datetime.datetime.now()) - dt
+        # ⚠️ 2026-10-08 本鱼第一版踩的坑 ✗：**库里的时间戳是 UTC** ✓（实测 updated_at=14:37 vs 本地 22:37 ✓），
+        #    而本鱼拿**本地时间**去比 ✗ → 算出"静默了 8 小时" ✓ → **门槛形同虚设** ✗（22:34:51 搬完 51 秒又搬 ✗）。
+        #    → 两边都用 UTC ✓。
+        dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=datetime.timezone.utc)
+        return (now or datetime.datetime.now(datetime.timezone.utc)) - dt
     except Exception:
         return None
 

@@ -1345,14 +1345,21 @@ def check_regressions():
         import sqlite3 as _s51
         _con51 = _s51.connect(":memory:")
         _con51.execute("CREATE TABLE conversations (rowid INTEGER PRIMARY KEY, updated_at TEXT)")
+        # ⚠️ 时间戳必须按 **UTC** 造 ✓ —— 库里的就是 UTC ✓（本鱼第一版用本地时间 ✗ 于是门槛失效 ✗）
+        _u51 = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
         _con51.execute("INSERT INTO conversations (rowid, updated_at) VALUES (1, ?)",
-                       ((__import__("datetime").datetime.now() - __import__("datetime").timedelta(minutes=10))
-                        .strftime("%Y-%m-%d %H:%M:%S"),))
+                       ((_u51 - __import__("datetime").timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S"),))
+        _con51.execute("INSERT INTO conversations (rowid, updated_at) VALUES (2, ?)",
+                       (_u51.strftime("%Y-%m-%d %H:%M:%S"),))
         _d51 = JN51.session_idle_seconds(_con51.cursor(), "conversations", 1)
-        _c51 = _d51 is not None and _d51.total_seconds() >= 600
+        _e51 = JN51.session_idle_seconds(_con51.cursor(), "conversations", 2)   # 刚刚说过话的 ✓
+        _c51 = (_d51 is not None and _d51.total_seconds() >= 600
+                and _e51 is not None and _e51.total_seconds() < 60)   # ★ 这条才能抓住时区错 ✗
         (ok if (_a51 and _b51 and _c51) else bad)(
             "R51 janitor 静默门槛",
-            "函数/常量=%s 用了门槛=%s 静默 10 分钟测得 %s 秒" % (_a51, _b51, int(_d51.total_seconds()) if _d51 else None))
+            "函数/常量=%s 用了门槛=%s ｜ 静默 10 分钟测得 %s 秒 ✓ ｜ 刚刚说过话测得 %s 秒 ✓"
+            % (_a51, _b51, int(_d51.total_seconds()) if _d51 else None,
+               int(_e51.total_seconds()) if _e51 else None))
     except Exception as e:
         bad("R51 janitor 静默门槛", str(e)[:140])
 
