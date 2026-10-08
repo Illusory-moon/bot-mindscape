@@ -1332,6 +1332,24 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R51: **别人在叫别的 bot 时，她不该接话** ✗（2026-10-08 主人报：有人叫另一个 bot 的唤醒词，
+    #      而那句话里也带着她的名字 ✗ → 她照样被唤醒、照样插话 ✗）。
+    #      名字表进配置 ✓ 代码里不留名字 ✓；**没配置就永不触发** ✓（fail-open ✓ 不会误伤 ✓）。
+    try:
+        import mindscape_groupctx as GC51
+        importlib.reload(GC51)
+        _f51 = GC51.gc_other_bot
+        _a51 = _f51("没给甲设置小机的词条", ["小机"])
+        _b51 = _f51("甲在吗", ["小机"])
+        _c51 = _f51("随便聊聊", [])
+        _d51 = _f51("", ["小机"])
+        _ok51 = (_a51 is True) and (_b51 is False) and (_c51 is False) and (_d51 is False)
+        (ok if _ok51 else bad)(
+            "R51 别人叫别的 bot 时别接话",
+            "提到别的 bot=%s 只有她=%s 空表=%s 空文本=%s" % (_a51, _b51, _c51, _d51))
+    except Exception as e:
+        bad("R51 别人叫别的 bot 时别接话", str(e)[:140])
+
     # R50: **易变内容不许拼进 system_prompt** ✗ —— 那会把它**后面**的整段历史缓存全废掉 ✓
     #      （2026-10-08 实测：缓存命中率只有 34% ✗ 而未命中 ¥2/M vs 命中 ¥0.04/M = **50 倍** ✗✗；
     #       定向性 + 本群最近聊天 = 每轮都在变 ✗ → 必须走 `extra_user_content_parts` ✓（用户消息之后 ✓））
