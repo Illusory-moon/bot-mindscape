@@ -530,21 +530,6 @@ def gc_read_recent(path, platform, group, limit, window_sec, tail_bytes):
     return out[-limit:]
 
 
-def gc_other_bot(text, names):
-    """这条消息是不是在叫**别的 bot**（2026-10-08 加 ✓ 主人裁定：别人叫别的 bot 时别插话 ✗）。
-
-    实况：群里除了她还有别的 bot ✓ 各有唤醒词 ✓ —— 有人叫「鲸鲸」（另一个 bot 的名字）时，
-    那句话里也带着**她自己的名字** ✗ → 她照样被唤醒、照样插话 ✗。
-    名字表进配置 ✓（代码里不留名字 ✓）；**没有配置就永远不触发** ✓（fail-open ✓ 不会误伤 ✓）。
-    """
-    t = text or ""
-    for n in (names or []):
-        s = str(n).strip()
-        if s and s in t:
-            return True
-    return False
-
-
 def gc_head(event):
     """本条消息的定向性 —— 四种情形各自一句。"""
     msgs = event.get_messages() or []
@@ -558,17 +543,6 @@ def gc_head(event):
         return "本条消息【@ 了你本人】—— 它就是对你说的。"
     if reply_self:
         return "本条消息【引用了你说过的话】—— 它是接着你的话说的。"
-    # ⚠️ 2026-10-08 加：**别人在叫别的 bot** ✗ —— 主人报的实况：有人叫「鲸鲸」（另一个 bot 的名字 ✓），
-    #    那句话里也带着她的名字 ✗ → 她照样被唤醒、照样插话 ✗。群里不止一个 bot ✓ 各有各的唤醒词 ✓，
-    #    所以先按**别的 bot 的名字表**（配置 groupctx.other_bot_names ✓ 代码里不留名字 ✓）判一次 ✓。
-    try:
-        _others = cfg.section("groupctx").get("other_bot_names") or []
-    except Exception:
-        _others = []
-    if gc_other_bot(getattr(event, "message_str", ""), _others):
-        return ("本条消息【提到了群里**别的 bot** 的名字】✗ —— 群里除了你还有别的 bot ✓ 它们各有各的名字 ✓。"
-                "这句是在**叫它们** ✓ **不是在跟你说话** ✗。**别接话** ✓，"
-                "除非同一句里明确 @ 了你、或者直接问的是你 ✓。")
     if reason == "mention":
         # ⚠️ 2026-10-08 主人裁定：这一条**不是「可以应」**✗ —— 得让她分清两种情形 ✓。
         #    实测（10-07/10-08 共 73 组）：群友在聊**游戏机制 / 剧情**（词条 / 伤害占比 / 配队 /
