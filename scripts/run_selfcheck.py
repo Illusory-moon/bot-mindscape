@@ -1337,12 +1337,17 @@ def check_regressions():
     #       定向性 + 本群最近聊天 = 每轮都在变 ✗ → 必须走 `extra_user_content_parts` ✓（用户消息之后 ✓））
     try:
         _g50 = open(os.path.join(HERE, "plugins", "mindscape_groupctx.py"), encoding="utf-8").read()
+        _m50 = open(os.path.join(HERE, "plugins", "mindscape_memory.py"), encoding="utf-8").read()
         _a50 = "extra_user_content_parts" in _g50
         _b50 = "TextPart(text=chr(10).join(lines))" in _g50
         _c50 = "退回 system_prompt" in _g50      # 兜底分支必须留 ✓ 但必须带警告 ✓
-        (ok if (_a50 and _b50 and _c50) else bad)(
+        # 记忆块**每 10 分钟变一次** ✗ → 同样不许拼在最前面 ✓（2026-10-08 第二刀 ✓）
+        _d50 = ("extra_user_content_parts" in _m50) and ("TextPart(" in _m50
+                 and "退回 system_prompt" in _m50)
+        (ok if (_a50 and _b50 and _c50 and _d50) else bad)(
             "R50 易变块走 user 消息之后",
-            "挂 parts=%s 走 TextPart=%s 兜底带警告=%s" % (_a50, _b50, _c50))
+            "groupctx: parts=%s TextPart=%s 兜底=%s ｜ memory: %s"
+            % (_a50, _b50, _c50, _d50))
     except Exception as e:
         bad("R50 易变块走 user 消息之后", str(e)[:140])
 
