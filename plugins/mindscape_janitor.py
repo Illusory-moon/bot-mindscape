@@ -242,6 +242,61 @@ def session_idle_seconds(cur, table, rid, now=None):
         return None
 
 
+# ⚠️ 2026-10-08 主人裁定（选 1 ✓ 治本）：把**我们每轮注入的块**从**存下来的旧消息**里剥掉 ✓。
+#
+# 为什么必须剥 ✓：这些块**每轮都不一样** ✗（定向性 / 群缓冲 / 记忆块 ✓）→ 一旦被存进会话 ✓
+# 那个群的会话就堆到 **37 万字** ✗（10 条 user 平均 **7,079 字** ✓）→ **每轮都要重发一遍** ✗
+# （单轮 ≈ 40k token ✓ = 实测 1.5M/小时 ✓）；而且 janitor 一裁剪 ✓ 从中间抽消息 ✓
+# 后面所有缓存全废 ✗ → 命中率卡在 60% ✓。
+# 语义上也对 ✓：**那些块只对「当时那一轮」有意义** ✓ 事后就是死重 ✓（用户原话一个字不动 ✓）。
+INJECT_MARKERS = (
+    "【本条消息的定向性】",                    # mindscape_groupctx
+    "【本群最近的真实聊天记录",                # mindscape_groupctx（群聊缓冲）
+    "【上面历史里带的那几张图",                # mindscape_groupctx（图片附件说明）
+    "【下面是系统给你注入的长期记忆",          # mindscape_memory
+    "## 你的长期记忆",                        # mindscape_memory（SECTION_TITLE）
+    "**【这一轮是你自己想开口",                # mindscape_memory（cron 轮）
+)
+
+
+def strip_injections(msgs, keep_last=1):
+    """剥掉**旧消息**里的注入块 ✓，返回 (新消息列表, 剥掉的字数) ✓。
+
+    最后 keep_last 条 **user** 消息原样留着 ✓（那一轮可能还在上下文窗口里 ✓）。
+    注入块永远是**整段 / 整 part 贴在末尾** ✓ → 按记号**截断**就是安全的 ✓。
+    """
+    if not isinstance(msgs, list):
+        return msgs, 0
+    uidx = [i for i, m in enumerate(msgs) if isinstance(m, dict) and m.get("role") == "user"]
+    keep_from = uidx[-keep_last] if len(uidx) >= keep_last else -1
+    saved = 0
+    for i, m in enumerate(msgs):
+        if i >= keep_from or not isinstance(m, dict):
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            new = c
+            for k in INJECT_MARKERS:
+                j = new.find(k)
+                if j >= 0:
+                    new = new[:j].rstrip()
+            if len(new) < len(c):
+                saved += len(c) - len(new)
+                m["content"] = new
+        elif isinstance(c, list):
+            kept = []
+            for p in c:
+                if isinstance(p, dict) and p.get("type") == "text":
+                    t = str(p.get("text") or "")
+                    if any(t.lstrip().startswith(k) for k in INJECT_MARKERS):
+                        saved += len(t)
+                        continue
+                kept.append(p)
+            if len(kept) != len(c):
+                m["content"] = kept
+    return msgs, saved
+
+
 def archive_talk(db, table, column, id_column, targets, log_path=None):
     """把指定会话里「自己的纯回复」搬进档案文件，会话里只留最近 keep_last 条。
 
@@ -255,6 +310,7 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
     con.execute("PRAGMA busy_timeout = 30000")
     cur = con.cursor()
     n_sess = n_arch = 0
+    n_saved = 0          # 剥掉注入块的字数 ✓（2026-10-08 治本那一步 ✓）
     try:
         for t in targets:
             if not isinstance(t, dict):
@@ -277,6 +333,13 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
                     continue
                 if not isinstance(msgs, list):
                     continue
+                # ★ 治本那一步 ✓：先把每轮注入的块从旧消息里剥掉 ✓（**放在任何 continue 之前** ✓）
+                msgs, _saved = strip_injections(msgs)
+                if _saved:
+                    cur.execute("UPDATE %s SET %s=? WHERE rowid=?" % (table, column),
+                                (json.dumps(msgs, ensure_ascii=False), rid))
+                    con.commit()
+                    n_saved += _saved
                 plain = [i for i, m in enumerate(msgs)
                          if isinstance(m, dict) and m.get("role") == "assistant"
                          and not m.get("tool_calls") and _arch_text(m).strip()]
@@ -325,6 +388,9 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
         con.commit()
     finally:
         con.close()
+    if n_saved:
+        log("剥离每轮注入块: %d 字 ✓（定向性 / 群缓冲 / 记忆块只对当时那一轮有用 ✓ 存着只会让每轮重发 + 废缓存 ✗）"
+            % n_saved, log_path)
     return (n_sess, n_arch)
 
 

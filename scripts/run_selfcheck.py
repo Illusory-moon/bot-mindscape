@@ -1332,6 +1332,28 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R52: **每轮注入的块不许长期留在会话里** ✗（2026-10-08 主人选 1 ✓ 治本 ✓）——
+    #      实测：那个群的会话堆到 **37 万字** ✗（10 条 user 平均 7,079 字 ✓）→ 每轮重发 ≈ 40k token ✗
+    #      = 实测 1.5M/小时 ✓；而且中间一裁剪 ✓ 后面缓存全废 ✗。
+    try:
+        import mindscape_janitor as JN52
+        importlib.reload(JN52)
+        _m52 = [{"role": "user", "content": [{"type": "text", "text": "发个火花"},
+                                           {"type": "text", "text": "【本条消息的定向性】不是对你说的"},
+                                           {"type": "text", "text": "【本群最近的真实聊天记录】" + "x" * 500}]},
+                {"role": "assistant", "content": "哦"},
+                {"role": "user", "content": [{"type": "text", "text": "新的问题"},
+                                           {"type": "text", "text": "【本条消息的定向性】@了你"}]}]
+        _o52, _s52 = JN52.strip_injections(_m52)
+        _a52 = _o52[0]["content"] == [{"type": "text", "text": "发个火花"}]   # 旧消息剥干净 ✓
+        _b52 = len(_o52[2]["content"]) == 2                                  # 最后一条 user 原样留 ✓
+        _c52 = _s52 > 500                                                     # 确实剥掉了 ✓
+        (ok if (_a52 and _b52 and _c52) else bad)(
+            "R52 注入块不留在会话里",
+            "旧消息剥净=%s 最后一条保留=%s 剥掉 %d 字" % (_a52, _b52, _s52))
+    except Exception as e:
+        bad("R52 注入块不留在会话里", str(e)[:140])
+
     # R51: janitor 只在**会话静默**之后才搬 ✓ —— 搬一次会改写会话内容 ✗ → prompt 前缀全变 ✗
     #      → 下一轮**必然冷启动** ✗（2026-10-08 实测：冷轮次 21:14:28 ↔ 归档 21:14:30 ✓ 对到秒 ✓；
     #       一小时搬 8 次 ≈ 20~40 万未命中 token ✗ = 系统里最大的一处缓存泄漏 ✓）。
