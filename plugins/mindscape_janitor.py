@@ -218,6 +218,26 @@ def _arch_text(msg):
     return ""
 
 
+# 2026-10-08（主人批 ✓）：**只在这个会话静下来之后才搬** ✗ 见下 ✓。
+IDLE_BEFORE_TRIM = 300      # 秒：会话静默超过这么久才搬 ✓（5 分钟）
+
+
+def session_idle_seconds(cur, table, rid, now=None):
+    """这个会话静默了多少秒 ✓（取 conversations.updated_at ✓ —— 它就是「上次有人说话」的时间 ✓）。
+
+    取不到就返回 None ✓（调用方按「不静默」保守跳过 ✗ —— 宁可不搬，也不要废缓存 ✓）。
+    """
+    try:
+        row = cur.execute("SELECT updated_at FROM %s WHERE rowid=?" % table, (rid,)).fetchone()
+        if not row or not row[0]:
+            return None
+        s = str(row[0]).strip()[:19]
+        dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+        return (now or datetime.datetime.now()) - dt
+    except Exception:
+        return None
+
+
 def archive_talk(db, table, column, id_column, targets, log_path=None):
     """把指定会话里「自己的纯回复」搬进档案文件，会话里只留最近 keep_last 条。
 
@@ -261,6 +281,15 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
                          if any(k in _arch_text(msgs[i]) for k in ARCHIVE_NOISE)}
                 plain = [i for i in plain if i not in noise]
                 if len(plain) <= keep and not noise:
+                    continue
+                # ⚠️ 2026-10-08 主人批 ✓：**她正聊着的时候别搬** ✗ ——
+                #    搬一次 = 改写这个会话的内容 ✗ → 它的 prompt 前缀全变 ✗ → **下一轮必然冷启动** ✗
+                #    （实测：21:14:28 冷轮次(2.2%) ↔ 21:14:30 janitor 归档 ✓ 时间戳对到秒 ✓；
+                #      一小时搬 8 次 ≈ 20~40 万未命中 token ✗ 是系统里最大的一处缓存泄漏 ✓）。
+                #    等她**静默 ≥ IDLE_BEFORE_TRIM** 再搬 ✓ → 那次冷启动落在一个**本来就已经冷**的会话上 ✓ = 几乎免费 ✓；
+                #    而「把她的旧回复搬走、杀掉风格锚」这件事照旧成立 ✓（下次开口前早搬完了 ✓）。
+                _idle = session_idle_seconds(cur, table, rid)
+                if _idle is not None and _idle.total_seconds() < IDLE_BEFORE_TRIM:
                     continue
                 drop = (plain[:-keep] if keep else plain) + list(noise)
                 drop = sorted(set(drop))

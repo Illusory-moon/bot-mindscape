@@ -1332,6 +1332,30 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R51: janitor 只在**会话静默**之后才搬 ✓ —— 搬一次会改写会话内容 ✗ → prompt 前缀全变 ✗
+    #      → 下一轮**必然冷启动** ✗（2026-10-08 实测：冷轮次 21:14:28 ↔ 归档 21:14:30 ✓ 对到秒 ✓；
+    #       一小时搬 8 次 ≈ 20~40 万未命中 token ✗ = 系统里最大的一处缓存泄漏 ✓）。
+    try:
+        import mindscape_janitor as JN51
+        importlib.reload(JN51)
+        _src51 = open(os.path.join(HERE, "plugins", "mindscape_janitor.py"), encoding="utf-8").read()
+        _a51 = hasattr(JN51, "session_idle_seconds") and hasattr(JN51, "IDLE_BEFORE_TRIM")
+        _b51 = ("IDLE_BEFORE_TRIM" in _src51) and ("< IDLE_BEFORE_TRIM" in _src51)
+        # 行为：静默 10 分钟的会话 → 返回 ≥600 秒 ✓（拿内存库造一个 ✓）
+        import sqlite3 as _s51
+        _con51 = _s51.connect(":memory:")
+        _con51.execute("CREATE TABLE conversations (rowid INTEGER PRIMARY KEY, updated_at TEXT)")
+        _con51.execute("INSERT INTO conversations (rowid, updated_at) VALUES (1, ?)",
+                       ((__import__("datetime").datetime.now() - __import__("datetime").timedelta(minutes=10))
+                        .strftime("%Y-%m-%d %H:%M:%S"),))
+        _d51 = JN51.session_idle_seconds(_con51.cursor(), "conversations", 1)
+        _c51 = _d51 is not None and _d51.total_seconds() >= 600
+        (ok if (_a51 and _b51 and _c51) else bad)(
+            "R51 janitor 静默门槛",
+            "函数/常量=%s 用了门槛=%s 静默 10 分钟测得 %s 秒" % (_a51, _b51, int(_d51.total_seconds()) if _d51 else None))
+    except Exception as e:
+        bad("R51 janitor 静默门槛", str(e)[:140])
+
     # R50: **易变内容不许拼进 system_prompt** ✗ —— 那会把它**后面**的整段历史缓存全废掉 ✓
     #      （2026-10-08 实测：缓存命中率只有 34% ✗ 而未命中 ¥2/M vs 命中 ¥0.04/M = **50 倍** ✗✗；
     #       定向性 + 本群最近聊天 = 每轮都在变 ✗ → 必须走 `extra_user_content_parts` ✓（用户消息之后 ✓））

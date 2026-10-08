@@ -2119,6 +2119,18 @@ def call_llm(llm, persona, msgs, max_input_chars, max_tokens, relations=None,
     )
     with urllib.request.urlopen(req, timeout=90) as resp:
         out = json.loads(resp.read().decode("utf-8"))
+    # 2026-10-08 加：把**跑批的 token 也记上** ✓ —— 本鱼那个 trace 只看得到**容器内**的调用 ✗，
+    # 而宿主机这批（日记 / 摘要 / 风格）是用 /opt/mindscape/.api_key **直连**的 ✓ 一直不在账上 ✗
+    # （主人问「那一小时 75 万未命中从哪来」✓ 这里是最大的盲区 ✓）。
+    try:
+        _u = out.get("usage") or {}
+        print("[mindscape_diary] LLM 用量: 未命中 %s ｜ 命中缓存 %s ｜ 输出 %s | model=%s"
+              % (_u.get("prompt_cache_miss_tokens", _u.get("prompt_tokens", "?")),
+                 _u.get("prompt_cache_hit_tokens", "?"),
+                 _u.get("completion_tokens", "?"),
+                 out.get("model") or "?"))
+    except Exception:
+        pass
     try:
         parsed = json.loads(out["choices"][0]["message"]["content"])
     except Exception:
