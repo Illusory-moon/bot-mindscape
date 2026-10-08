@@ -2912,13 +2912,10 @@ def mn_take_pending(pending, key, now, ttl=MN_PENDING_TTL):
 MN_PENDING = {}
 
 
-MN_SAID = {}
+MN_SAID = {}            # key = "self_id|群" → (发了什么, 时间, event_id, message_id) ✓
 
 
 MN_SAID_TTL = 300       # 状态在表里最多留多久（清理用 ✓）
-
-
-MN_SAID_WINDOW = 40     # 抑制窗口：超过这个秒数且不是同一轮，就不再抑制 ✓（见下方注释 ✓）
 
 
 MN_AT_LITERAL = re.compile(r"@[^\s@()（）]{1,24}[（(]\d{5,12}[)）]")
@@ -2948,10 +2945,21 @@ async def mn_attach_hook(*args, **kwargs):
         #    改成 `.get()` ✓ 并把**同一轮的 event id** 也记下 ✓；
         #    只对「同一轮 ✓」或「40 秒内 ✓」生效，免得误伤同一群里**下一轮**的正文 ✗。
         #    已知上限：同一群 40 秒内开新轮，其正文可能被误抑制 ✓（升级路：换成真正的 turn id ✓）。
+        # ⚠️ 2026-10-08 **二次踩坑** ✗：**绝不能用时间窗口** ✗ ——
+        #    20:00:42 她刚用 say_lines 说完 ✓ 20:00:57 群里来了**新问题**（「朋克洛德是哪里」✓）
+        #    只隔 **15 秒** ✓ → 上一轮的残留状态把**新一轮的正文**当成"重复"抑制掉了 ✗✗
+        #    → 她那条回答**一个字都没发出去** ✗ 而会话历史里记着"已发出" ✗ → 她还以为讲过了 ✗
+        #    （主人 20:02 报的「她说解释完了但我没看到」就是这个 ✓）。
+        #    正确口径 ✓：**按这一轮的那条消息判** ✓ —— 同一个 event 或同一条 message_id 才算"同一轮" ✓；
+        #    **新消息进来 = 新一轮 → 绝不抑制** ✓。
         said = MN_SAID.get(key) if MN_SAID else None
         if said:
             _same_turn = (len(said) > 2 and said[2] == id(event))
-            if not _same_turn and (time.time() - float(said[1]) > MN_SAID_WINDOW):
+            _same_msg = (len(said) > 3 and said[3]
+                         and str(said[3]) == str(getattr(
+                             getattr(event, "message_obj", None), "message_id", "") or ""))
+            if not (_same_turn or _same_msg):
+                logger.info("[mindscape_mention] 上一条连发状态属于【别的消息】→ 不抑制正文 ✓")
                 said = None
                 MN_SAID.pop(key, None)
         enabled, targets = mn_load_config()
@@ -4618,7 +4626,9 @@ class MentionMixin:
         except Exception:
             gid = None
         if gid is not None:
-            MN_SAID["%s|%s" % (ev.get_self_id(), gid)] = (sent, time.time(), id(ev))
+            MN_SAID["%s|%s" % (ev.get_self_id(), gid)] = (
+        sent, time.time(), id(ev),
+        str(getattr(getattr(ev, "message_obj", None), "message_id", "") or ""))
         return ("发好了：%d 条（每条一个气泡）。这一轮要说的话就算说完了 —— "
                 "还想补就写进 lines 里，不用再另发正文。" % sent)
 

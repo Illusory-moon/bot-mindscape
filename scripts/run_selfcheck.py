@@ -1433,12 +1433,16 @@ def check_regressions():
     #       群里看到「嗯，那本不属于我~…」✗）；且要记「同一轮」免得误伤下一轮 ✓。
     try:
         _sm = open(os.path.join(HERE, "plugins", "mindscape_mention.py"), encoding="utf-8").read()
-        _a46 = "MN_SAID.get(key)" in _sm
-        _b46 = "MN_SAID.pop(key, None)" in _sm
-        _c46 = "MN_SAID_WINDOW" in _sm and "id(ev)" in _sm
-        (ok if (_a46 and _b46 and _c46) else bad)(
+        _a46 = "MN_SAID.get(key)" in _sm                 # 不能用 pop ✗ 取一次就没了 ✓
+        _b46 = "MN_SAID.pop(key, None)" in _sm           # 只用于「过期/换轮」时清 ✓
+        _c46 = "_same_msg" in _sm and "message_id" in _sm  # ★ 必须按**这一轮的消息**判 ✓
+        # ⚠️ 2026-10-08：**不许再有时间窗口** ✗ —— 它实测误伤过新一轮 ✓（20:00:42 说完 →
+        #    20:00:57 新问题被当重复抑制 ✗ 那条正文一个字没发出去 ✗）。查的是**赋值**形式 ✓，
+        #    注释里提到它的字面串不算 ✓（本鱼上一版就被注释骗过一次 ✓）。
+        _e46 = "MN_SAID_WINDOW = " not in _sm
+        (ok if (_a46 and _b46 and _c46 and _e46) else bad)(
             "R46 连发后的持续抑制",
-            "用 get=%s 有窗口常量=%s 记同轮=%s" % (_a46, "MN_SAID_WINDOW" in _sm, "id(ev)" in _sm))
+            "用 get=%s 按消息判=%s 无时间窗口=%s" % (_a46, _c46, _e46))
     except Exception as e:
         bad("R46 连发后的持续抑制", str(e)[:140])
 
