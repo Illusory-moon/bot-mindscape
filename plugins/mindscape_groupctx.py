@@ -7,7 +7,10 @@ B 说「带我去吃呗」（叫了 bot）时，bot 只看到后半句，回一�
 上下文不全，回复必然错位。
 
 分工：框架侧补丁（`patches/astrbot`）负责把【所有】群消息落一份到磁盘；
-本模块在这一轮真的调 LLM 之前，把该群最近的对话 + 本条消息的「定向性」注进 system_prompt。
+本模块在这一轮真的调 LLM 之前，把该群最近的对话 + 本条消息的「定向性」注入上下文。
+
+⚠️ 2026-10-08：这些内容**每轮都在变** ✗ —— 所以挂 `extra_user_content_parts` ✓（用户消息之后 ✓）
+而不是拼进 `system_prompt` ✗ —— 拼在前面会把**后面的整段历史**的缓存全废掉 ✗（命中价差 50 倍 ✓）。
 两半各管一段，是因为插件在唤醒阶段之后才拿得到消息。
 
 定向性：群里 bot 最常见的两种错 ——
@@ -361,8 +364,24 @@ class GroupctxMixin:
                              "时间间隔只作判断线索，不能单独决定是否谈图。")
             if not lines:
                 return
-            request.system_prompt = ((request.system_prompt or "") + chr(10)
-                                     + chr(10).join(lines))
+            # ⚠️ 2026-10-08（省钱要省在根上 ✓）：这一整段**每轮都在变**（定向性 + 本群最近聊天 ✗）——
+            # 以前拼进 system_prompt ✗ → 它一变，**后面的整段对话历史全部按全价重算** ✗
+            # （实测缓存命中率只有 34% ✓ 而未命中 ¥2/M vs 命中 ¥0.04/M = 差 **50 倍** ✗✗）。
+            # 改挂到 `extra_user_content_parts` ✓ —— 这是框架自带的「接在用户消息之后」的位置 ✓
+            # （框架自己的 astrbot/group_chat_context.py 就是这么用的 ✓）→ 稳定前缀不再被污染 ✓。
+            try:
+                # 用到处再导入 ✓（模块级导入在测试环境的假 astrbot 里会炸 ✗）
+                from astrbot.core.agent.message import TextPart
+                parts = getattr(request, "extra_user_content_parts", None)
+                if parts is None:
+                    parts = []
+                    request.extra_user_content_parts = parts
+                parts.append(TextPart(text=chr(10).join(lines)))
+            except Exception as e:
+                # 兜底：宁可费钱，不可丢上下文 ✓ —— 但要打警告 ✗（不然缓存没救回来都不知道 ✓）
+                logger.warning("[mindscape_groupctx] 挂 extra_user_content_parts 失败（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
+                request.system_prompt = ((request.system_prompt or "") + chr(10)
+                                         + chr(10).join(lines))
             if hist_imgs:
                 try:
                     urls = getattr(request, "image_urls", None)

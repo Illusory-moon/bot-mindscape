@@ -107,6 +107,14 @@ def stub():
     ev.filter = _AnyFilter()
     pe = types.ModuleType("astrbot.core.provider.entities")
     pe.ProviderRequest = object
+    acm = types.ModuleType("astrbot.core.agent.message")
+
+    class _TextPart:            # 框架真身是 pydantic 模型 ✓ 这里只要 text/type 两个字段 ✓
+        def __init__(self, text="", type="text"):
+            self.text = text
+            self.type = type
+
+    acm.TextPart = _TextPart
     mc = types.ModuleType("astrbot.core.message.components")
     mc.Image = type("Image", (), {})
     _comp_cache = {}
@@ -128,6 +136,8 @@ def stub():
                    ("astrbot.core", types.ModuleType("astrbot.core")),
                    ("astrbot.core.provider", types.ModuleType("astrbot.core.provider")),
                    ("astrbot.core.provider.entities", pe),
+                   ("astrbot.core.agent", types.ModuleType("astrbot.core.agent")),
+                   ("astrbot.core.agent.message", acm),
                    ("astrbot.core.message", types.ModuleType("astrbot.core.message")),
                    ("astrbot.core.message.components", mc),
                    ("astrbot.core.message.message_event_result", mer),
@@ -1322,6 +1332,20 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R50: **易变内容不许拼进 system_prompt** ✗ —— 那会把它**后面**的整段历史缓存全废掉 ✓
+    #      （2026-10-08 实测：缓存命中率只有 34% ✗ 而未命中 ¥2/M vs 命中 ¥0.04/M = **50 倍** ✗✗；
+    #       定向性 + 本群最近聊天 = 每轮都在变 ✗ → 必须走 `extra_user_content_parts` ✓（用户消息之后 ✓））
+    try:
+        _g50 = open(os.path.join(HERE, "plugins", "mindscape_groupctx.py"), encoding="utf-8").read()
+        _a50 = "extra_user_content_parts" in _g50
+        _b50 = "TextPart(text=chr(10).join(lines))" in _g50
+        _c50 = "退回 system_prompt" in _g50      # 兜底分支必须留 ✓ 但必须带警告 ✓
+        (ok if (_a50 and _b50 and _c50) else bad)(
+            "R50 易变块走 user 消息之后",
+            "挂 parts=%s 走 TextPart=%s 兜底带警告=%s" % (_a50, _b50, _c50))
+    except Exception as e:
+        bad("R50 易变块走 user 消息之后", str(e)[:140])
+
     # R49: janitor 必须**单实例** —— 两个同时跑会各自「先写档案」✗ → 档案成块重复 ✗
     #      （2026-10-08 实测：线上 bundle 误用完整构建带上 janitor ✗ 而宿主 timer 也在跑 ✓
     #        → 水梦梦 4 条 / 火花 12 条重复 ✗ 已清 ✓；**不按文本去重** ✗ —— archive_talk 的
@@ -2141,15 +2165,21 @@ def check_regressions():
             _inst8.gc_mark = False
             _inst8.gc_img_on, _inst8.gc_img_max = True, 1
             _inst8.gc_img_window, _inst8.gc_img_same = 120, True
-            _req8 = types.SimpleNamespace(system_prompt="", image_urls=[])
+            # 2026-10-08 起：这一整段挂 `extra_user_content_parts` ✓（用户消息之后 ✓），
+            # **不许**再拼进 system_prompt ✗ —— 那会把它后面的整段历史缓存废掉 ✓（见 R50 ✓）。
+            _req8 = types.SimpleNamespace(system_prompt="", image_urls=[],
+                                          extra_user_content_parts=[])
             _run8(_inst8.gc_inject(_Event8(), _req8))
+            _inj8 = chr(10).join(str(getattr(p, "text", ""))
+                                 for p in _req8.extra_user_content_parts)
+            _stamp8 = "[%s] A: [图片]" % _tm8.strftime("%H:%M:%S", _tm8.localtime(_now8 - 25))
             prompt_ok = (_req8.image_urls == [_live]
-                         and "[%s] A: [图片]" % _tm8.strftime("%H:%M:%S", _tm8.localtime(_now8 - 25))
-                         in _req8.system_prompt
-                         and "本条消息时间：" in _req8.system_prompt
-                         and "距本条约" in _req8.system_prompt
-                         and "没有明确指向" in _req8.system_prompt
-                         and "与本条话题无关" in _req8.system_prompt)
+                         and _stamp8 in _inj8
+                         and "本条消息时间：" in _inj8
+                         and "距本条约" in _inj8
+                         and "没有明确指向" in _inj8
+                         and "与本条话题无关" in _inj8
+                         and "本条消息时间：" not in (_req8.system_prompt or ""))
         os.remove(_live)
         os.remove(_old)
         (ok if img_ok and prompt_ok else bad)(
