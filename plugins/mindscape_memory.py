@@ -46,6 +46,17 @@ STYLE_GUARD = (
 )
 SECTION_RULES = "**你自己的规矩**"
 HEADER_MARK = "## "
+# ⚠️ 注入顺序 = **变化频率**（稳的在前、易变的在后）—— 这是**缓存契约**，不是排版偏好 ✓。
+#    所有 part 都挂在**最后一条 user 消息之后**：同一轮里谁变了，**它后面**的全部按全价重算 ✗
+#    （2026-10-09 主人实测：同一轮第 2/3 次请求载荷只长 118/134 token ✓ 而未命中 5,743/5,749 ✗
+#     —— 差的就是「群缓冲一变 → 排在它后面的记忆块整块作废」✗）。
+#    优先级从高到低：记忆块(10) → 群缓冲(-3) → 人物(-6) → 工具过滤(-30) → trace(-100)。
+MEM_PRIORITY = 10           # 记忆块：风格(每天) → 摘要(每天) → 账本(偶发) → 记忆(约 10 分钟)
+PEOPLE_PRIORITY = -6        # 人物画像：按说话者挑 → **每换一个人就变** → 排在最后一个 part ✓
+PEOPLE_TITLE = "## 你认识的人"
+# 尺寸靠模块级字典在两个 handler 之间传（日志仍是同一行同一格式 ✓）。
+# 不用 event.set_extra：自检的桩 event 没有那个 API ✓（会被 try 吞掉、静默不注入 ✗）。
+MEM_SIZES = {}
 
 
 def _tail_lines(text, budget):
@@ -160,26 +171,95 @@ def _resolve(path):
     return os.path.join(os.path.dirname(cfg.config_path()), path)
 
 
-def read_people(path, max_chars):
-    """读人物画像文件，只保留条目行（跳过标题和更新时间）。"""
+def _entry_name(line):
+    """条目行开头的称呼（"- 昵称（备注）→ …" -> "昵称"）。
+
+    不用 re：只切几个分隔符，纯字符串就够 ✓（自检的桩里少一层依赖 ✓）。
+    """
+    text = line[2:] if line.startswith("- ") else line
+    for sep in ("（", "(", "：", ":", "→", "，", ",", " "):
+        pos = text.find(sep)
+        if pos > 0:
+            text = text[:pos]
+    name = text.strip()
+    return name if len(name) >= 2 else ""
+
+
+def _digits(line):
+    """行里出现的**整段**数字串（用来认 QQ 号）。
+
+    必须整段比对：直接 who_id in line 会让短号（"1"）命中任何含它的数字 ✗
+    （AGENTS §4 记过同类：纯数字词只认精确命中 ✓）。
+    """
+    out, cur = [], []
+    for ch in line:
+        if ch.isdigit():
+            cur.append(ch)
+        elif cur:
+            out.append("".join(cur))
+            cur = []
+    if cur:
+        out.append("".join(cur))
+    return out
+
+
+def read_people(path):
+    """读画像文件 -> [(是否「重要的人」那一节, 条目行)]，保持文件里的先后顺序。
+
+    只收 "- " 开头的条目行 —— 标题与「最后更新」是给人看的 ✓ 不进 prompt ✓。
+    """
     if not path or not os.path.exists(path):
-        return ""
-    lines = []
+        return []
+    out = []
+    important = False
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
-                line = line.rstrip()
-                if line.startswith("- "):
-                    lines.append(line)
+                s = line.rstrip()
+                if s.startswith("## "):
+                    important = "重要" in s
+                    continue
+                if s.startswith("- "):
+                    out.append((important, s))
     except Exception:
+        return []
+    return out
+
+
+def pick_people(entries, max_chars, who_id="", who_name="", said=""):
+    """按说话者挑画像：当前说话者 → 重要的人 → 本条消息里提到的人；其余不注入 ✓。
+
+    2026-10-09 主人批 ✓：画像文件已长到 17 KB / 240 行，旧做法（从头截断 people_chars 字）
+    会让排序靠后的人**整批看不见** ✗（那段 ponytail 注释预言的正是这个 ✗），而每轮真正
+    用得上的只有「现在跟我说话的是谁」✓（印象插件就是按当前说话者注入的 ✓）。
+    长尾改成按需查（recall_memory）✓ —— 体积 2400 字 → 几百字 ✓。
+    """
+    if max_chars <= 0:
         return ""
-    out = "\n".join(lines)
-    # ponytail: 这里按从头截断，而画像文件是按昵称排序的 —— 一旦文件超过
-    # max_chars，排序靠后的群友会整批消失（实测：2175 字的画像配 800 字预算，
-    # 正好把某位重要的人切掉，bot 于是完全不认得这个人）。当前对策是把
-    # people_chars 配足装下整份文件；画像再长大时应改为按「最近出现」挑选条目，
-    # 而不是按字母序切。
-    return out[:max_chars]
+    who_id = str(who_id or "").strip()
+    who_name = str(who_name or "").strip()
+    said = said or ""
+    mine, key, talked = [], [], []
+    for important, line in entries:
+        if (who_id and who_id in _digits(line)) or (who_name and who_name in line):
+            mine.append(line)
+            continue
+        name = _entry_name(line)
+        if name and name in said:
+            talked.append(line)
+            continue
+        if important:
+            key.append(line)
+    picked, used = [], 0
+    for line in mine + key + talked:
+        if line in picked:
+            continue
+        add = len(line) + (1 if picked else 0)
+        if used + add > max_chars:
+            break
+        picked.append(line)
+        used += add
+    return "\n".join(picked)
 
 
 def read_many(paths, max_chars):
@@ -221,7 +301,7 @@ class MemoryMixin:
                 return b
         return None
 
-    @filter.on_llm_request()
+    @filter.on_llm_request(priority=MEM_PRIORITY)
     async def inject_memory(self, event: AstrMessageEvent, request: ProviderRequest):
         try:
             bot = self._find_bot(event.get_self_id())
@@ -283,6 +363,10 @@ class MemoryMixin:
             # 只看那几样就会**连规矩一起被跳过**，于是它永远不知道该记账，
             # 账本也就永远是空的（鸡生蛋）。
             rules = [str(x).strip() for x in (bot.get("rules") or []) if str(x).strip()]
+            # 尺寸交给 inject_people 记（它在最后一个 part ✓ 日志仍是一行同一格式 ✓）
+            if len(MEM_SIZES) > 64:          # 兜底：正常每轮都被 pop 掉 ✓
+                MEM_SIZES.clear()
+            MEM_SIZES[id(request)] = [len(mem), len(dig), len(notes), len(sty)]
             if (
                 len(mem) < min_chars
                 and not dig
@@ -303,7 +387,6 @@ class MemoryMixin:
                     SECTION_TITLE in str(getattr(p, "text", "")) for p in _parts):
                 return
 
-            label = bot.get("name") or "你"
             # 光给记忆不够 —— 实测：它只在窗口里翻到一个就下了结论，而同一件事
             # 在日记里记着好几回。它把「我上下文里只有这些」当成了「总共就这些」。
             # 所以这里必须做两件事：
@@ -335,8 +418,8 @@ class MemoryMixin:
                 stable += SECTION_RULES + "\n" + "\n".join("- " + r for r in rules) + "\n\n"
             request.system_prompt = old + "\n\n" + stable
             block = "\n\n" + SECTION_TITLE + "\n"
-            if notes:
-                block += SECTION_NOTES + "\n" + notes + "\n\n"
+            # ⚠️ 块内顺序 = **变化频率**（稳的在前 ✓）：风格(每天) → 摘要(每天) →
+            #    账本(偶发) → 记忆(约 10 分钟)。越靠后，变了只废自己 ✓（见文件头契约 ✓）。
             if sty or sty2:
                 block += SECTION_STYLE + "\n"
                 if sty:
@@ -346,22 +429,9 @@ class MemoryMixin:
                 block += STYLE_GUARD
             if dig:
                 block += SECTION_DIGEST + "\n" + dig + "\n\n"
+            if notes:
+                block += SECTION_NOTES + "\n" + notes + "\n\n"
             block += mem
-
-            # 人物画像（可选）：让 bot 认得群里的人
-            people_path = bot.get("people")
-            if not people_path and path:
-                people_path = path.rsplit(".", 1)[0] + ".people.md"
-            people_path = _resolve(people_path)
-            p_chars = int(bot.get("people_chars") or self.m_cfg.get("people_chars") or DEFAULT_PEOPLE_CHARS)
-            people = read_people(people_path, p_chars)
-            if people:
-                block += (
-                    "\n\n## 你认识的人\n"
-                    "这些是你记住的群友，聊天时可以自然地认得他们；"
-                    "没在名单里的人，就当第一次见。\n\n"
-                    + people
-                )
 
             # 自主冒泡轮（cron 触发）。这一轮是「它自己想开口」，不是回应谁 ——
             # 记忆和风格照常给（人的联想本来就靠记忆的连续性），
@@ -387,8 +457,56 @@ class MemoryMixin:
                 logger.warning("[mindscape_memory] 挂 extra_user_content_parts 失败"
                                "（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
                 request.system_prompt = (request.system_prompt or old) + block
-            logger.info("[mindscape_memory] %s 注入 %d 字记忆 / %d 字摘要 / %d 字账本"
-                        " / %d 字风格 / %d 字人物",
-                        label, len(mem), len(dig), len(notes), len(sty), len(people))
         except Exception as e:
             logger.warning("[mindscape_memory] 注入失败: %s", str(e)[:120])
+
+    @filter.on_llm_request(priority=PEOPLE_PRIORITY)
+    async def inject_people(self, event: AstrMessageEvent, request: ProviderRequest):
+        """人物画像：只给「正在说话的人」+「重要的人」+「本条消息提到的人」✓。
+
+        它**每换一个人就变** ✗ → 必须排在**最后一个 part**（见文件头的缓存契约 ✓）；
+        体积从 2400 字降到几百字（2026-10-09 主人批 ✓）。
+        """
+        try:
+            sizes = MEM_SIZES.pop(id(request), [0, 0, 0, 0])
+            bot = self._find_bot(event.get_self_id())
+            if not bot:
+                return
+            path = _resolve(bot.get("diary"))
+            people_path = bot.get("people")
+            if not people_path and path:
+                people_path = path.rsplit(".", 1)[0] + ".people.md"
+            people_path = _resolve(people_path)
+            p_chars = int(bot.get("people_chars")
+                          or self.m_cfg.get("people_chars") or DEFAULT_PEOPLE_CHARS)
+            try:
+                said = str(event.message_str or "")
+            except Exception:
+                said = ""
+            people = pick_people(read_people(people_path), p_chars,
+                                 event.get_sender_id(), event.get_sender_name(), said)
+            if people:
+                block = ("\n\n" + PEOPLE_TITLE + "（只列了跟这一轮有关的几条）\n"
+                         "这些是你记住的群友，聊天时可以自然地认得他们；"
+                         "没列出来的人**不等于**不认识 —— 要确认某个人是谁，"
+                         "先用 recall_memory 翻自己的记忆。\n\n" + people)
+                old = getattr(request, "system_prompt", "") or ""
+                _parts = getattr(request, "extra_user_content_parts", None)
+                if _parts is None:
+                    _parts = []
+                    request.extra_user_content_parts = _parts
+                if not (PEOPLE_TITLE in old or any(
+                        PEOPLE_TITLE in str(getattr(p, "text", "")) for p in _parts)):
+                    try:
+                        from astrbot.core.agent.message import TextPart
+                        _parts.append(TextPart(text=block))
+                    except Exception as e:
+                        logger.warning("[mindscape_memory] 挂 extra_user_content_parts 失败"
+                                       "（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
+                        request.system_prompt = (request.system_prompt or old) + block
+            logger.info("[mindscape_memory] %s 注入 %d 字记忆 / %d 字摘要 / %d 字账本"
+                        " / %d 字风格 / %d 字人物",
+                        bot.get("name") or "你", sizes[0], sizes[1], sizes[2], sizes[3],
+                        len(people))
+        except Exception as e:
+            logger.warning("[mindscape_memory] 人物注入失败: %s", str(e)[:120])

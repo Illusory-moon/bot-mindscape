@@ -7,7 +7,8 @@
 memory:
   max_chars: 2500          # 每轮请求注入的记忆字数上限（越小越省 token）
   min_chars: 50            # 少于此长度就不注入
-  digest_chars: 1200       # 「每日摘要」注入上限（分层记忆的骨架层）
+  digest_chars: 400        # 「每日摘要」注入上限（分层记忆的骨架层）；一天一句，
+                         # 400 字约覆盖最近 2~3 天，更早的交给 recall_memory 翻
   notes_chars: 800         # 「账本」注入上限（bot 自己写的，细节问题看它）
   bots:
     - self_id: "20000000"                      # 你的 bot 账号
@@ -15,7 +16,8 @@ memory:
       diary: "./data/bot-name.md"              # 长期记忆文件（diary 模块写入）
       memory_chars: 2500                       # 可覆盖全局值
       people: "./data/bot-name.people.md"      # 人物画像（由 diary 自动生成，可留空）
-      people_chars: 800                        # 人物画像注入上限
+      people_chars: 800                        # 人物画像上限；实际只注入
+                                         # 「当前说话者 + 重要的人 + 本条提到的人」
       digest: "./data/bot-name.digest.md"      # 每日摘要（由下面的 digest 段生成，留空则不注入）
       # notes: bot **自己能写**的账本（工具 save_note 维护）。日记与摘要都是后台
       #        生成的、检索只读 —— bot 能承诺却没地方落笔，于是同一件细节问几次

@@ -186,9 +186,14 @@ def check_functions():
         r = m.read_recent(tmp, 2000)
         (ok if "B事件" in r else bad)("memory.read_recent")
         pt = os.path.join(HERE, "_selfcheck_people.md")
-        open(pt, "w", encoding="utf-8").write("# t\n\n最后更新：x\n\n- 甲：描述\n")
-        pr = m.read_people(pt, 500)
-        (ok if ("- 甲" in pr and "最后更新" not in pr) else bad)("memory.read_people")
+        open(pt, "w", encoding="utf-8").write(
+            "# t\n\n最后更新：x\n\n## 对我来说重要的人\n- 妈妈（222）→ 永远叫妈妈\n\n"
+            "## 群里遇到的人\n- 甲（111）：描述\n")
+        _pe = m.read_people(pt)
+        pr = m.pick_people(_pe, 500, "111", "甲", "")
+        pr2 = m.pick_people(_pe, 500, "999", "路人", "")
+        (ok if ("甲" in pr and "妈妈" in pr and "最后更新" not in pr
+                and "甲" not in pr2 and "妈妈" in pr2) else bad)("memory.read_people")
         os.remove(tmp); os.remove(pt)
     except Exception as e:
         bad("memory 加载", str(e)[:100])
@@ -1135,14 +1140,15 @@ def check_regressions():
         import inspect as _insp
         key_ok = "expect_key" in _insp.signature(MD.call_llm).parameters
 
-        # (4) 风格层必须存在、按「账本之后、摘要之前」注入，且没配就完全不进 block
+        # (4) 风格层必须存在、两层与护栏顺序正确，且没配就完全不进 block
         mem_src = open(os.path.join(PLUGINS, "mindscape_memory.py"),
                        encoding="utf-8").read()
         has_layer = ("SECTION_STYLE" in mem_src and 'bot.get("style")' in mem_src
                      and "DEFAULT_STYLE_CHARS" in mem_src)
-        seg = mem_src[mem_src.find("SECTION_NOTES + "):]
-        order_ok = (seg.find("SECTION_STYLE + ") > 0
-                    and 0 < seg.find("SECTION_STYLE + ") < seg.find("SECTION_DIGEST + "))
+        # 整块顺序（风格→摘要→账本→记忆）由 R59 守 ✓；这里守风格层自身两层 + 护栏 ✓
+        order_ok = (0 < mem_src.find("SECTION_STYLE_STABLE + ")
+                    < mem_src.find("SECTION_STYLE_RECENT + ")
+                    < mem_src.find("block += STYLE_GUARD"))
         guard_ok = "if sty:" in mem_src and "not sty" in mem_src
 
         (ok if (off_ok and on_ok and only_ok and default_ok and key_ok
@@ -1599,7 +1605,58 @@ def check_regressions():
     except Exception as e:
         bad("R50 易变块走 user 消息之后", str(e)[:140])
 
-    # R49: janitor 必须**单实例** —— 两个同时跑会各自「先写档案」✗ → 档案成块重复 ✗
+    # R58: 人物画像按「说话者 + 重要的人 + 本条提到的人」挑 ✓（2026-10-09 主人批 ✓）。
+    #      旧做法是从头截断 people_chars 字 ✗：画像长到 17 KB / 240 行后，
+    #      排序靠后的人**整批看不见** ✗ —— 既费 token 又漏人 ✓。
+    try:
+        import mindscape_memory as MP
+        importlib.reload(MP)
+        ents = [(False, "- 小甲（111）：喜欢猫"), (True, "- 妈妈（222）→ 永远叫妈妈"),
+                (False, "- 小乙（333）：程序员")]
+        mine = MP.pick_people(ents, 500, "333", "小乙", "")
+        said = MP.pick_people(ents, 500, "999", "路人", "今天小甲没来")
+        short = MP.pick_people(ents, 500, "11", "", "")
+        cap = MP.pick_people(ents, 20, "333", "小乙", "")
+        r58 = ("小乙" in mine and "妈妈" in mine and "小甲" not in mine
+               and "小甲" in said and "小乙" not in said
+               and "小甲" not in short              # 短号不许误命中 ✓
+               and len(cap) <= 20)
+        (ok if r58 else bad)(
+            "R58 画像按说话者挑",
+            "本人=%s 重要=%s 提到=%s 短号误命中=%s 预算=%d"
+            % ("小乙" in mine, "妈妈" in mine, "小甲" in said,
+               "小甲" in short, len(cap)))
+    except Exception as e:
+        bad("R58 画像按说话者挑", str(e)[:140])
+
+    # R59: **注入顺序 = 变化频率**（缓存契约 ✓ 2026-10-09 主人批 ✓）——
+    #      所有 part 都挂在最后一条 user 消息之后：同一轮里谁变了，**它后面**的全部全价重算 ✗
+    #      （实测：同一轮第 2/3 次请求载荷只长 118/134 token，未命中却 5,743/5,749 ✓）。
+    #      契约：记忆块(10) → 群缓冲(-3) → 人物(-6) → 工具过滤(-30) → trace(-100) ✓
+    try:
+        _g59 = open(os.path.join(PLUGINS, "mindscape_groupctx.py"), encoding="utf-8").read()
+        _m59 = open(os.path.join(PLUGINS, "mindscape_memory.py"), encoding="utf-8").read()
+
+        def _prio(src, key):
+            for _ln in src.splitlines():
+                if _ln.strip().startswith(key):
+                    return int(_ln.split("=", 1)[1].split("#")[0].strip())
+            return None
+
+        _mem = _prio(_m59, "MEM_PRIORITY")
+        _ppl = _prio(_m59, "PEOPLE_PRIORITY")
+        _gc = _prio(_g59, "GC_PRIORITY")
+        prio_ok = (None not in (_mem, _ppl, _gc) and _mem > _gc > _ppl > -100)
+        seg = _m59[_m59.find("SECTION_TITLE + "):]
+        blk_ok = (0 < seg.find("SECTION_STYLE + ") < seg.find("SECTION_DIGEST + ")
+                  < seg.find("SECTION_NOTES + ") < seg.find("block += mem"))
+        (ok if (prio_ok and blk_ok) else bad)(
+            "R59 注入顺序=变化频率",
+            "记忆=%s 群缓冲=%s 人物=%s 块内顺序=%s" % (_mem, _gc, _ppl, blk_ok))
+    except Exception as e:
+        bad("R59 注入顺序=变化频率", str(e)[:140])
+
+    # R49: janitor 必须**单实例**
     #      （2026-10-08 实测：线上 bundle 误用完整构建带上 janitor ✗ 而宿主 timer 也在跑 ✓
     #        → 水梦梦 4 条 / 火花 12 条重复 ✗ 已清 ✓；**不按文本去重** ✗ —— archive_talk 的
     #        「先写档案、后改库 · 宁可重复不可丢失」是**故意**的 ✓ 别改 ✗）

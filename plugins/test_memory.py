@@ -40,11 +40,18 @@ open(tmp, 'w', encoding='utf-8').write(
     '# 你认识的人（自动维护）\n\n最后更新：2026-01-01 00:00\n\n'
     '- 小甲：喜欢猫，经常熬夜\n'
     '- 小乙：程序员，话少\n')
-r = mod.read_people(tmp, 500)
-print('read_people 结果:'); print(r)
-assert '- 小甲' in r and '- 小乙' in r and '最后更新' not in r
-print()
-print('read_people 只保留条目行: OK')
+r = mod.read_people(tmp)
+print('read_people 条目数:', len(r))
+assert len(r) == 2 and all(line.startswith('- ') for _imp, line in r)
+print('read_people 只收条目行: OK')
+p_mine = mod.pick_people(r, 500, '999', '小乙', '')
+print('pick_people 按说话者:', p_mine)
+assert '小乙' in p_mine and '小甲' not in p_mine
+p_said = mod.pick_people(r, 500, '999', '路人', '今天小甲怎么没来')
+assert '小甲' in p_said and '小乙' not in p_said
+assert mod.pick_people(r, 500, '999', '路人', '') == ''
+assert mod.pick_people(r, 12, '', '', '') == ''
+print('pick_people 说话者 / 提到的人 / 预算: OK')
 os.remove(tmp)
 
 # read_recent 仍工作
