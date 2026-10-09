@@ -1959,9 +1959,54 @@ def check_regressions():
         _st = type("S", (), {"si_on": True, "si_targets": only_a})()
         hk_say = (not _SL.SilenceMixin._si_hit(_st, _Ev(B))
                   and _SL.SilenceMixin._si_hit(_st, _Ev(A)))
-        _vt = type("S", (), {"vs_on": True, "vs_targets": only_a})()
+        _vt = _VS.VisionMixin()
+        _vt.vs_on, _vt.vs_targets = True, only_a
         hk_see = (not _VS.VisionMixin._vs_hit(_vt, _Ev(B))
                   and _VS.VisionMixin._vs_hit(_vt, _Ev(A)))
+
+        import asyncio
+        _plain = _Ev(A)
+        _plain.message_obj = types.SimpleNamespace(message=[])
+        _pictured = _Ev(A)
+        _pictured.message_obj = types.SimpleNamespace(message=[_VS.Image()])
+        _vr = types.SimpleNamespace(system_prompt="stable", extra_user_content_parts=[])
+        asyncio.run(_VS.VisionMixin.vs_hint(_vt, _plain, _vr))
+        plain_ok = (_vr.system_prompt == "stable" and not _vr.extra_user_content_parts)
+        asyncio.run(_VS.VisionMixin.vs_hint(_vt, _pictured, _vr))
+        asyncio.run(_VS.VisionMixin.vs_hint(_vt, _pictured, _vr))
+        vision_cache = (plain_ok and _vr.system_prompt == "stable"
+                        and len(_vr.extra_user_content_parts) == 1
+                        and _VS.VS_MARK in _vr.extra_user_content_parts[0].text)
+        (ok if vision_cache else bad)("R32a 图文切换保持 system 前缀", str(vision_cache))
+
+        import base64
+        import io
+        import tempfile
+        from PIL import Image as _PilImage
+        _gif = tempfile.NamedTemporaryFile(suffix=".gif", delete=False)
+        try:
+            colors = ("red", "green", "blue")
+            _PilImage.new("RGB", (16, 16), colors[0]).save(
+                _gif, format="GIF", save_all=True,
+                append_images=[_PilImage.new("RGB", (16, 16), c) for c in colors[1:]],
+                duration=100, loop=0)
+            _gif.close()
+            _old_limit = _VS.VS_LARGE_IMAGE_BYTES
+            _VS.VS_LARGE_IMAGE_BYTES = 1
+            _big_req = types.SimpleNamespace(system_prompt="stable", image_urls=[_gif.name],
+                                             extra_user_content_parts=[])
+            asyncio.run(_VS.VisionMixin.vs_hint(_vt, _pictured, _big_req))
+            _data = _big_req.image_urls[0]
+            _preview = _PilImage.open(io.BytesIO(base64.b64decode(_data.split(",", 1)[1])))
+            compact_ok = (_data.startswith("data:image/jpeg;base64,")
+                          and _preview.size == (16, 48)
+                          and _big_req.system_prompt == "stable"
+                          and len(_big_req.extra_user_content_parts) == 1)
+            (ok if compact_ok else bad)("R32b 大 GIF 压成三帧预览", str(compact_ok))
+        finally:
+            _VS.VS_LARGE_IMAGE_BYTES = _old_limit
+            _gif.close()
+            os.unlink(_gif.name)
 
         # 图片侧：图库分类按 self_id 精确匹配，没配就是「不采」
         import mindscape_stickers as _SK

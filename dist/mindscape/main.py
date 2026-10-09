@@ -9,6 +9,7 @@ import base64
 import datetime
 import hashlib
 import hmac
+import io
 import json
 import logging
 import os
@@ -1091,6 +1092,9 @@ def si_load_config():
 VS_MARK = "这一轮的消息里带了图"
 
 
+VS_LARGE_IMAGE_BYTES = 2_000_000
+
+
 VS_HINT = """## 这一轮的消息里带了图 —— 认人之前先查
 
 - 图里的人物 / 作品，**先用 lookup_knowledge 查，查完还不确定就联网搜**；
@@ -1116,6 +1120,51 @@ def vs_has_image(event):
         if isinstance(c, Image):
             return True
     return False
+
+
+def vs_compact_image(ref):
+    """大图只给模型传静态预览；原始消息和图片不改。"""
+    try:
+        if ref.startswith(("http://", "https://")):
+            with urllib.request.urlopen(urllib.request.Request(
+                    ref, headers={"User-Agent": "Mozilla/5.0"}), timeout=10) as response:
+                size = int(response.headers.get("Content-Length") or 0)
+                if size and size <= VS_LARGE_IMAGE_BYTES:
+                    return None
+                raw = response.read(24_000_001)
+        elif os.path.isfile(ref):
+            if os.path.getsize(ref) <= VS_LARGE_IMAGE_BYTES:
+                return None
+            with open(ref, "rb") as f:
+                raw = f.read(24_000_001)
+        else:
+            return None
+        if not VS_LARGE_IMAGE_BYTES < len(raw) <= 24_000_000:
+            return None
+
+        from PIL import Image as PilImage
+        image = PilImage.open(io.BytesIO(raw))
+        count = getattr(image, "n_frames", 1)
+        frames = []
+        for index in dict.fromkeys((0, count // 2, count - 1)):
+            image.seek(index)
+            frame = image.convert("RGB")
+            frame.thumbnail((768, 768), PilImage.LANCZOS)
+            frames.append(frame)
+        preview = PilImage.new("RGB", (max(f.width for f in frames),
+                                        sum(f.height for f in frames)), "white")
+        top = 0
+        for frame in frames:
+            preview.paste(frame, (0, top))
+            top += frame.height
+        out = io.BytesIO()
+        preview.save(out, "JPEG", quality=80)
+        logger.info("[mindscape_vision] 大图预览 %d -> %d 字节 | 帧=%d",
+                    len(raw), out.tell(), len(frames))
+        return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode("ascii")
+    except Exception as e:
+        logger.warning("[mindscape_vision] 大图预览失败，保留原图: %s", str(e)[:120])
+        return None
 
 
 DEFAULT_MAX_CHARS = 2500
@@ -4401,16 +4450,31 @@ class VisionMixin:
 
     @filter.on_llm_request()
     async def vs_hint(self, event: AstrMessageEvent, request):
-        """只在「这一轮真的带了图」时，往系统提示里塞一次提醒。"""
+        """只在「这一轮真的带了图」时，往当前消息里塞一次提醒。"""
         try:
             if not self._vs_hit(event):
                 return
             if not vs_has_image(event):
                 return
             old = getattr(request, "system_prompt", "") or ""
-            if VS_MARK in old:
+            parts = getattr(request, "extra_user_content_parts", None)
+            if VS_MARK in old or any(VS_MARK in str(getattr(p, "text", "")) for p in (parts or [])):
                 return
-            request.system_prompt = old + "\n\n" + VS_HINT
+            urls = getattr(request, "image_urls", None)
+            if urls:
+                for index, ref in enumerate(urls):
+                    preview = await asyncio.to_thread(vs_compact_image, str(ref))
+                    if preview:
+                        urls[index] = preview
+            try:
+                from astrbot.core.agent.message import TextPart
+                if parts is None:
+                    parts = []
+                    request.extra_user_content_parts = parts
+                parts.append(TextPart(text=VS_HINT))
+            except Exception as e:
+                logger.warning("[mindscape_vision] 挂当前消息失败（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
+                request.system_prompt = old + "\n\n" + VS_HINT
             logger.info("[mindscape_vision] 有图：已提醒先查再认 | bot=%s",
                         event.get_self_id())
         except Exception as e:
