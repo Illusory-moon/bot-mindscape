@@ -1016,6 +1016,9 @@ async def pg_block_group_result(*args, **kwargs):
 SI_DEFAULT_TOKEN = "[[silence]]"
 
 
+SI_PRIORITY = -8           # 排在 人物(-6) 之后 = 最后一个 part
+
+
 SI_PROMPT = """# 沉默的权利
 你**真的可以不说话**。这一轮如果你没有任何想说的 —— 不想接、跟你无关、或者就是懒得开口 ——
 就**只输出这一行**：
@@ -1089,6 +1092,31 @@ def si_load_config():
     targets = [str(x) for x in (c.get("targets") or [])]
     prompt = str(c.get("prompt") or "").strip() or (SI_PROMPT % {"token": token})
     return bool(c.get("enabled", False)), token, targets, prompt
+
+
+def si_attach(request, text, mark):
+    """把这一轮的沉默说明挂到**最后一条 user 消息之后** ✓（不再污染 system 前缀 ✗）。
+
+    mark = 幂等标记（回复轮用沉默令牌，冒泡轮用那段文案的首行）—— 同一轮里重复调用不会挂两遍 ✓。
+    自检 R50 守着「动态块不许拼进 system_prompt」✓；顺序由 R59 的契约守 ✓。
+    """
+    if not mark:
+        return False
+    old = getattr(request, "system_prompt", "") or ""
+    parts = getattr(request, "extra_user_content_parts", None)
+    if parts is None:
+        parts = []
+        request.extra_user_content_parts = parts
+    if mark in old or any(mark in str(getattr(p, "text", "")) for p in parts):
+        return False
+    try:
+        from astrbot.core.agent.message import TextPart
+        parts.append(TextPart(text=text))
+    except Exception as e:
+        logger.warning("[mindscape_silence] 挂 extra_user_content_parts 失败"
+                       "（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
+        request.system_prompt = old + "\n\n" + text
+    return True
 
 
 VS_MARK = "这一轮的消息里带了图"
@@ -2934,6 +2962,24 @@ def tr_hist(request):
     return ((len(items) if isinstance(items, list) else 0), len(raw))
 
 
+def tr_fp(text):
+    """system 前缀的指纹（头 120 字 / 尾 120 字 / 全文）—— 只记哈希、不记正文 ✓。
+
+    为什么要有它：2026-10-09 见过「前缀首变=0(system)、sys 字数却一样」的断点 ✗ ——
+    等长不同内容时，只比字数看不出来；头/尾各一个哈希就能一眼分清「是人格段变了」
+    还是「尾部的注入块变了」✓（动态块都拼在 system 末尾）。
+    """
+    try:
+        import hashlib
+
+        def _h(s):
+            return hashlib.blake2s(s.encode("utf-8"), digest_size=4).hexdigest()
+
+        return "%s/%s/%s" % (_h(text[:120]), _h(text[-120:]), _h(text))
+    except Exception:
+        return "-"
+
+
 def tr_usage(resp):
     """token 用量；框架没给就留空。"""
     u = getattr(resp, "usage", None)
@@ -4500,24 +4546,20 @@ class SilenceMixin:
             return False
         return scope_hit(self.si_targets, event.get_self_id())
 
-    @filter.on_llm_request()
+    @filter.on_llm_request(priority=SI_PRIORITY)
     async def si_grant(self, event: AstrMessageEvent, request):
         """把「可以真的不说话」的出口告诉模型。"""
         try:
             if not self._si_hit(event):
                 return
-            old = getattr(request, "system_prompt", "") or ""
             if event.get_extra("cron_job"):
-                if SI_CRON_NOTE.splitlines()[0] not in old:
-                    request.system_prompt = old + "\n\n" + SI_CRON_NOTE
-                logger.info("[mindscape_silence] 冒泡轮：不给令牌（不调工具即沉默）| bot=%s",
+                if si_attach(request, SI_CRON_NOTE, SI_CRON_NOTE.splitlines()[0]):
+                    logger.info("[mindscape_silence] 冒泡轮：不给令牌（不调工具即沉默）| bot=%s",
+                                event.get_self_id())
+                return
+            if si_attach(request, self.si_prompt, self.si_token):
+                logger.info("[mindscape_silence] 回复轮：已授予沉默权 | bot=%s",
                             event.get_self_id())
-                return
-            if self.si_token in old:
-                return
-            request.system_prompt = old + "\n\n" + self.si_prompt
-            logger.info("[mindscape_silence] 回复轮：已授予沉默权 | bot=%s",
-                        event.get_self_id())
         except Exception as e:
             logger.warning("[mindscape_silence] 注入失败: %s", str(e)[:120])
 
@@ -4774,9 +4816,11 @@ class TraceMixin:
             self.tr_remember(tr_key(event), info)
             event.set_extra(TRACE_KEY, info)
             logger.info(
-                "[mindscape_trace] 出站 %s sys=%d字 会话=%d条/%d字 上下文=%d条 工具=%d 输入=%d字",
+                "[mindscape_trace] 出站 %s sys=%d字 会话=%d条/%d字 上下文=%d条 工具=%d 输入=%d字"
+                " sys指纹=%s",
                 self.tr_label(event), info["sys"], info["hist_n"],
-                info["hist_c"], info["ctx"], info["tools"], info["user"])
+                info["hist_c"], info["ctx"], info["tools"], info["user"],
+                tr_fp(request.system_prompt or ""))
         except Exception as e:
             logger.warning("[mindscape_trace] 记录请求失败: %s", str(e)[:120])
 

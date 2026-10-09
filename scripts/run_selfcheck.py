@@ -1306,10 +1306,15 @@ def check_regressions():
 
         rq1 = _SiReq()
         asyncio.run(sm.si_grant(_SiEv(False), rq1))
-        grant_ok = (tok in rq1.system_prompt and "安静飘过" in rq1.system_prompt)
+        _p1 = "".join(str(getattr(p, "text", "")) for p in rq1.extra_user_content_parts)
+        grant_ok = (tok in _p1 and "安静飘过" in _p1 and not rq1.system_prompt)
         rq2 = _SiReq()
         asyncio.run(sm.si_grant(_SiEv(True), rq2))
-        cron_ok = (tok not in rq2.system_prompt and "别发" in rq2.system_prompt)
+        _p2 = "".join(str(getattr(p, "text", "")) for p in rq2.extra_user_content_parts)
+        cron_ok = (tok not in _p2 and "别发" in _p2 and not rq2.system_prompt)
+        # 同一轮内重复调用不许挂两遍（幂等 ✓ 靠 mark 认领）
+        asyncio.run(sm.si_grant(_SiEv(False), rq1))
+        idem_ok = len(rq1.extra_user_content_parts) == 1
 
         class _SiComp:
             def __init__(self, t):
@@ -1362,11 +1367,12 @@ def check_regressions():
                    and 'event.get_extra("cron_job")' in s_src)
 
         (ok if (norm_ok and strip_ok and off_ok and on_ok and grant_ok
-                and cron_ok and block_ok and leak_ok and pass_ok and prio_ok) else bad)(
+                and cron_ok and idem_ok and block_ok and leak_ok and pass_ok
+                and prio_ok) else bad)(
             "R27 沉默权真的不说话",
-            "归一=%s 剃令牌=%s 默认关=%s 开了=%s 回复轮给=%s 冒泡轮不给=%s "
-            "整条清空=%s 不漏令牌=%s 正常放行=%s 优先级=%s"
-            % (norm_ok, strip_ok, off_ok, on_ok, grant_ok, cron_ok,
+            "归一=%s 剃令牌=%s 默认关=%s 开了=%s 回复轮给(parts)=%s 冒泡轮不给(parts)=%s "
+            "幂等=%s 整条清空=%s 不漏令牌=%s 正常放行=%s 优先级=%s"
+            % (norm_ok, strip_ok, off_ok, on_ok, grant_ok, cron_ok, idem_ok,
                block_ok, leak_ok, pass_ok, prio_ok))
     except Exception as e:
         bad("R27 沉默权", str(e)[:140])
@@ -1592,16 +1598,21 @@ def check_regressions():
     try:
         _g50 = open(os.path.join(HERE, "plugins", "mindscape_groupctx.py"), encoding="utf-8").read()
         _m50 = open(os.path.join(HERE, "plugins", "mindscape_memory.py"), encoding="utf-8").read()
+        _s50 = open(os.path.join(HERE, "plugins", "mindscape_silence.py"), encoding="utf-8").read()
         _a50 = "extra_user_content_parts" in _g50
         _b50 = "TextPart(text=chr(10).join(lines))" in _g50
         _c50 = "退回 system_prompt" in _g50      # 兜底分支必须留 ✓ 但必须带警告 ✓
         # 记忆块**每 10 分钟变一次** ✗ → 同样不许拼在最前面 ✓（2026-10-08 第二刀 ✓）
         _d50 = ("extra_user_content_parts" in _m50) and ("TextPart(" in _m50
                  and "退回 system_prompt" in _m50)
-        (ok if (_a50 and _b50 and _c50 and _d50) else bad)(
+        # 沉默说明也是**动态**的（冒泡轮 / 回复轮两种文案来回切）✗
+        # → 2026-10-09 主人裁定：挪到**最后一个 part**（SI_PRIORITY）✓
+        _e50 = ("extra_user_content_parts" in _s50) and ("TextPart(" in _s50
+                 and "退回 system_prompt" in _s50)
+        (ok if (_a50 and _b50 and _c50 and _d50 and _e50) else bad)(
             "R50 易变块走 user 消息之后",
-            "groupctx: parts=%s TextPart=%s 兜底=%s ｜ memory: %s"
-            % (_a50, _b50, _c50, _d50))
+            "groupctx: parts=%s TextPart=%s 兜底=%s ｜ memory: %s ｜ silence: %s"
+            % (_a50, _b50, _c50, _d50, _e50))
     except Exception as e:
         bad("R50 易变块走 user 消息之后", str(e)[:140])
 
@@ -1636,6 +1647,7 @@ def check_regressions():
     try:
         _g59 = open(os.path.join(PLUGINS, "mindscape_groupctx.py"), encoding="utf-8").read()
         _m59 = open(os.path.join(PLUGINS, "mindscape_memory.py"), encoding="utf-8").read()
+        _s59 = open(os.path.join(PLUGINS, "mindscape_silence.py"), encoding="utf-8").read()
 
         def _prio(src, key):
             for _ln in src.splitlines():
@@ -1646,13 +1658,16 @@ def check_regressions():
         _mem = _prio(_m59, "MEM_PRIORITY")
         _ppl = _prio(_m59, "PEOPLE_PRIORITY")
         _gc = _prio(_g59, "GC_PRIORITY")
-        prio_ok = (None not in (_mem, _ppl, _gc) and _mem > _gc > _ppl > -100)
+        _si = _prio(_s59, "SI_PRIORITY")       # 沉默说明：放在最后（贴近生成点 + 同一轮不变 ✓）
+        prio_ok = (None not in (_mem, _ppl, _gc, _si)
+                   and _mem > _gc > _ppl > _si > -100)
         seg = _m59[_m59.find("SECTION_TITLE + "):]
         blk_ok = (0 < seg.find("SECTION_STYLE + ") < seg.find("SECTION_DIGEST + ")
                   < seg.find("SECTION_NOTES + ") < seg.find("block += mem"))
         (ok if (prio_ok and blk_ok) else bad)(
             "R59 注入顺序=变化频率",
-            "记忆=%s 群缓冲=%s 人物=%s 块内顺序=%s" % (_mem, _gc, _ppl, blk_ok))
+            "记忆=%s 群缓冲=%s 人物=%s 沉默=%s 块内顺序=%s"
+            % (_mem, _gc, _ppl, _si, blk_ok))
     except Exception as e:
         bad("R59 注入顺序=变化频率", str(e)[:140])
 

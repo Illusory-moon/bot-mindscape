@@ -85,6 +85,24 @@ def tr_hist(request):
     return ((len(items) if isinstance(items, list) else 0), len(raw))
 
 
+def tr_fp(text):
+    """system 前缀的指纹（头 120 字 / 尾 120 字 / 全文）—— 只记哈希、不记正文 ✓。
+
+    为什么要有它：2026-10-09 见过「前缀首变=0(system)、sys 字数却一样」的断点 ✗ ——
+    等长不同内容时，只比字数看不出来；头/尾各一个哈希就能一眼分清「是人格段变了」
+    还是「尾部的注入块变了」✓（动态块都拼在 system 末尾）。
+    """
+    try:
+        import hashlib
+
+        def _h(s):
+            return hashlib.blake2s(s.encode("utf-8"), digest_size=4).hexdigest()
+
+        return "%s/%s/%s" % (_h(text[:120]), _h(text[-120:]), _h(text))
+    except Exception:
+        return "-"
+
+
 def tr_usage(resp):
     """token 用量；框架没给就留空。"""
     u = getattr(resp, "usage", None)
@@ -140,9 +158,11 @@ class TraceMixin:
             self.tr_remember(tr_key(event), info)
             event.set_extra(TRACE_KEY, info)
             logger.info(
-                "[mindscape_trace] 出站 %s sys=%d字 会话=%d条/%d字 上下文=%d条 工具=%d 输入=%d字",
+                "[mindscape_trace] 出站 %s sys=%d字 会话=%d条/%d字 上下文=%d条 工具=%d 输入=%d字"
+                " sys指纹=%s",
                 self.tr_label(event), info["sys"], info["hist_n"],
-                info["hist_c"], info["ctx"], info["tools"], info["user"])
+                info["hist_c"], info["ctx"], info["tools"], info["user"],
+                tr_fp(request.system_prompt or ""))
         except Exception as e:
             logger.warning("[mindscape_trace] 记录请求失败: %s", str(e)[:120])
 

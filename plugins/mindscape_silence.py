@@ -23,6 +23,13 @@ from mindscape_core import scope_hit, scope_warn
 
 SI_DEFAULT_TOKEN = "[[silence]]"
 
+# ⚠️ 2026-10-09 主人裁定 ✓：这一层是**动态**的（冒泡轮 / 回复轮两种文案来回切）——
+#    拼进 system_prompt 会让**排在它后面的整段历史**缓存作废 ✗（命中 ¥0.02/M vs 未命中 ¥1/M）。
+#    现在挂在**最后一个 part**：①它是「这一轮」的即时授权 → 贴近生成点更有效
+#    （印象插件的 TAIL 把标签合规率从 0 拉到 3/3 ✓ 同一招）；②同一轮内它**不变** → 缓存零代价，
+#    真要变了也只废自己（它后面什么都没有）✓。顺序契约见 mindscape_memory 文件头（R59 守）。
+SI_PRIORITY = -8           # 排在 人物(-6) 之后 = 最后一个 part
+
 SI_PROMPT = """# 沉默的权利
 你**真的可以不说话**。这一轮如果你没有任何想说的 —— 不想接、跟你无关、或者就是懒得开口 ——
 就**只输出这一行**：
@@ -97,6 +104,31 @@ def si_load_config():
     return bool(c.get("enabled", False)), token, targets, prompt
 
 
+def si_attach(request, text, mark):
+    """把这一轮的沉默说明挂到**最后一条 user 消息之后** ✓（不再污染 system 前缀 ✗）。
+
+    mark = 幂等标记（回复轮用沉默令牌，冒泡轮用那段文案的首行）—— 同一轮里重复调用不会挂两遍 ✓。
+    自检 R50 守着「动态块不许拼进 system_prompt」✓；顺序由 R59 的契约守 ✓。
+    """
+    if not mark:
+        return False
+    old = getattr(request, "system_prompt", "") or ""
+    parts = getattr(request, "extra_user_content_parts", None)
+    if parts is None:
+        parts = []
+        request.extra_user_content_parts = parts
+    if mark in old or any(mark in str(getattr(p, "text", "")) for p in parts):
+        return False
+    try:
+        from astrbot.core.agent.message import TextPart
+        parts.append(TextPart(text=text))
+    except Exception as e:
+        logger.warning("[mindscape_silence] 挂 extra_user_content_parts 失败"
+                       "（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
+        request.system_prompt = old + "\n\n" + text
+    return True
+
+
 class SilenceMixin:
     def setup(self, context):
 
@@ -111,24 +143,20 @@ class SilenceMixin:
             return False
         return scope_hit(self.si_targets, event.get_self_id())
 
-    @filter.on_llm_request()
+    @filter.on_llm_request(priority=SI_PRIORITY)
     async def si_grant(self, event: AstrMessageEvent, request):
         """把「可以真的不说话」的出口告诉模型。"""
         try:
             if not self._si_hit(event):
                 return
-            old = getattr(request, "system_prompt", "") or ""
             if event.get_extra("cron_job"):
-                if SI_CRON_NOTE.splitlines()[0] not in old:
-                    request.system_prompt = old + "\n\n" + SI_CRON_NOTE
-                logger.info("[mindscape_silence] 冒泡轮：不给令牌（不调工具即沉默）| bot=%s",
+                if si_attach(request, SI_CRON_NOTE, SI_CRON_NOTE.splitlines()[0]):
+                    logger.info("[mindscape_silence] 冒泡轮：不给令牌（不调工具即沉默）| bot=%s",
+                                event.get_self_id())
+                return
+            if si_attach(request, self.si_prompt, self.si_token):
+                logger.info("[mindscape_silence] 回复轮：已授予沉默权 | bot=%s",
                             event.get_self_id())
-                return
-            if self.si_token in old:
-                return
-            request.system_prompt = old + "\n\n" + self.si_prompt
-            logger.info("[mindscape_silence] 回复轮：已授予沉默权 | bot=%s",
-                        event.get_self_id())
         except Exception as e:
             logger.warning("[mindscape_silence] 注入失败: %s", str(e)[:120])
 
