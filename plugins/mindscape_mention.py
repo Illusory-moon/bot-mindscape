@@ -148,7 +148,10 @@ async def mn_remember_response(self, event, response):
         if not str(txt).strip():
             return
         key = "%s|%s" % (event.get_self_id(), event.get_group_id())
-        MN_LAST_TEXT[key] = (str(txt), time.time())
+        # ★ 必须连**这一轮的消息 id**一起记 ✗ —— 只按时间窗口会在下一轮误用上一轮的正文 ✓
+        #   （2026-10-09 13:00 真事故：新一轮 chain 还是空 ✓ 回退到 6 秒前那份 ✗ → 同一段话发了两遍 ✗）
+        _mid = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
+        MN_LAST_TEXT[key] = (str(txt), time.time(), _mid)
     except Exception:
         pass
 
@@ -287,8 +290,13 @@ async def mn_attach_hook(*args, **kwargs):
             _src = "chain" if LINE_SEP in _txt else "llm"
             if LINE_SEP not in _txt:
                 _t = MN_LAST_TEXT.get(key)
-                if _t and (time.time() - _t[1]) < MN_LAST_TEXT_TTL:
+                _mid_now = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
+                # ★ 只认**这一轮**那份 ✗ —— 没有 id 或不匹配就绝不用 ✓（宁可不拆，也不能重发上一轮 ✓）
+                if (_t and _mid_now and len(_t) > 2 and _t[2] == _mid_now
+                        and (time.time() - _t[1]) < MN_LAST_TEXT_TTL):
                     _txt = _t[0]
+                else:
+                    _src = "none"
             logger.info("[mindscape_mention] D 检查: 文本=%d字 含分隔=%s（chain=%s ｜ llm 缓存=%s）",
                         len(_txt), LINE_SEP in _txt, bool(_chain), _src == "llm")
             _parts = mn_split_lines(_txt)

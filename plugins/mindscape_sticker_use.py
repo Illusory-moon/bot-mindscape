@@ -321,16 +321,39 @@ class StickerUseMixin:
             return None
 
         low = txt.lower()
+        # ★ ②（2026-10-09 主人报 ✓）：模型说「没有合适的」→ 就**不发** ✗
+        #   以前没有这两句 ✓ 于是模型判「不合适」之后，下面的标签兜底**照样硬塞一张** ✗✗
+        #   （实测：要「跳舞」发了「猪猪 / 陪睡券」两张 ✗ —— 它们的描述里根本没有跳舞 ✓）
+        if any(k in low for k in ("没有合适", "不合适", "都不合适", "没合适的",
+                                  "none", "no suitable", "not suitable")):
+            logger.info("[mindscape_sticker_use] 选图模型判没有合适的 → 不发 ✓")
+            return None
         for it in cands:
             fn = str(it.get("file"))
             if fn and fn.lower() in low:
                 return fn
+        # ★ ①③ 兜底（主人 2026-10-09 报 ✓）：原来**只看标签** ✗ 且**永远塞一张** ✗。现在：
+        #   ① 把**使用描述**也算进分数 ✓（描述写着「适合什么场景」✓ 是最值钱的线索 ✓）
+        #   ③ 同分时**优先**带偏好标签的 ✓（偏好标签写在配置 prefer_tags 里 ✗ 代码里不留名字 ✓）
+        #   ② 分数太低就**不发** ✗（宁可说没有，也不乱给 ✓ AGENTS 那条铁律 ✓）
         best, bs = None, -1.0
         for it in cands:
             sc = match_score(it, reply)
+            sc += 0.6 * match_score({"tags": [str(it.get("desc") or "")]}, reply)
+            _tgs = " ".join(str(x) for x in (it.get("tags") or []))
+            # 偏好标签**按配置里的顺序递减加分** ✓ —— 排在前面的（主人最想要的）得分更高 ✓
+            # （2026-10-09 主人定的优先级：本 bot 自己的 > 旧型号那类 ✓）
+            for _i, _p in enumerate(self.send_cfg.get("prefer_tags") or []):
+                _p = str(_p).strip()
+                if _p and _p in _tgs:
+                    sc += max(0.10, 0.35 - 0.08 * _i)
+                    break
             if sc > bs:
                 bs, best = sc, it
-        return str(best.get("file")) if best else None
+        if best is None or bs < 0.55:
+            logger.info("[mindscape_sticker_use] 兜底分太低(%.2f) → 不发 ✓", bs)
+            return None
+        return str(best.get("file"))
 
 
 @llm_tool(name="save_sticker")
