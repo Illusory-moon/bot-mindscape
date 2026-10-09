@@ -430,6 +430,33 @@ def check_regressions():
     except Exception as e:
         bad("R03 记忆链路", str(e)[:140])
 
+    # R52: 固定规矩进入可缓存的 system，近期记忆仍在当前轮末尾。
+    try:
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp:
+            diary = os.path.join(temp, "diary.md")
+            with open(diary, "w", encoding="utf-8") as f:
+                f.write("## 今天\n- 刚刚约好明天开播，别忘了把直播流程和时间再确认一遍。\n")
+            inst = MM.MemoryMixin()
+            inst.m_cfg = {}
+            inst._find_bot = lambda self_id: {
+                "name": "bot", "diary": diary, "rules": ["保持自己的语气"]}
+            event = types.SimpleNamespace(get_self_id=lambda: "bot",
+                                          get_extra=lambda key: None)
+            req = types.SimpleNamespace(system_prompt="基础人格",
+                                        extra_user_content_parts=[])
+            asyncio.run(inst.inject_memory(event, req))
+            once = req.system_prompt
+            asyncio.run(inst.inject_memory(event, req))
+            dynamic = "".join(p.text for p in req.extra_user_content_parts)
+            good = ("保持自己的语气" in once and "刚刚约好明天开播" not in once
+                    and "刚刚约好明天开播" in dynamic
+                    and "保持自己的语气" not in dynamic
+                    and req.system_prompt == once and len(req.extra_user_content_parts) == 1)
+            (ok if good else bad)("R52 固定规矩缓存与动态记忆隔离")
+    except Exception as e:
+        bad("R52 固定规矩缓存与动态记忆隔离", str(e)[:140])
+
     # R10: 分类隔离用的属性名必须各自独立（Mixin 合并后不能互相覆盖）
     try:
         src = open(os.path.join(PLUGINS, "mindscape_stickers.py"), encoding="utf-8").read()
@@ -1331,6 +1358,49 @@ def check_regressions():
             % (at_ok, qq_ok, plain_ok, nick_ok, quiet_ok))
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
+
+    # R57: 活跃会话不能被 janitor 改写，否则下一次请求的缓存前缀失效。
+    try:
+        import datetime as _dt57
+        import json as _json57
+        import sqlite3 as _sql57
+        import tempfile as _tmp57
+        import mindscape_janitor as JN57
+        importlib.reload(JN57)
+        with _tmp57.TemporaryDirectory() as _dir57:
+            _db57 = os.path.join(_dir57, "history.db")
+            _archive57 = os.path.join(_dir57, "said.md")
+            _messages57 = [
+                {"role": "user", "content": "旧话\n【本条消息的定向性】旧注入"},
+                {"role": "assistant", "content": "旧回复"},
+                {"role": "user", "content": "新话"},
+                {"role": "assistant", "content": "新回复"},
+            ]
+            _original57 = _json57.dumps(_messages57, ensure_ascii=False)
+            _dbconn57 = _sql57.connect(_db57)
+            _dbconn57.execute("CREATE TABLE conversations (user_id TEXT, content TEXT, updated_at TEXT)")
+            _now57 = _dt57.datetime.now(_dt57.timezone.utc)
+            _dbconn57.execute("INSERT INTO conversations VALUES (?, ?, ?)",
+                              ("test:GroupMessage:1", _original57,
+                               _now57.strftime("%Y-%m-%d %H:%M:%S")))
+            _dbconn57.commit()
+            _target57 = [{"prefix": "test:GroupMessage:", "file": _archive57,
+                          "keep_last": 1, "keep_user_last": 1}]
+            JN57.archive_talk(_db57, "conversations", "content", "user_id", _target57)
+            _active57 = _dbconn57.execute("SELECT content FROM conversations").fetchone()[0]
+            _dbconn57.execute("UPDATE conversations SET updated_at=?",
+                              ((_now57 - _dt57.timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S"),))
+            _dbconn57.commit()
+            JN57.archive_talk(_db57, "conversations", "content", "user_id", _target57)
+            _idle57 = _dbconn57.execute("SELECT content FROM conversations").fetchone()[0]
+            _dbconn57.close()
+            _archived57 = os.path.exists(_archive57)
+            _ok57 = (_active57 == _original57 and len(_idle57) < len(_original57)
+                     and _archived57)
+        (ok if _ok57 else bad)("R57 janitor 活跃期不改历史", "活跃原样=%s 静默归档=%s" %
+                               (_active57 == _original57, _archived57))
+    except Exception as e:
+        bad("R57 janitor 活跃期不改历史", str(e)[:140])
 
     # R56: **say_lines 成功之后必须返回 None** ✓（2026-10-09 主人批 C ✓）——
     #      框架对此有专门分支（tool_loop_agent_runner:1268 `elif resp is None:` → AgentState.DONE ✓）

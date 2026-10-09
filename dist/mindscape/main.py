@@ -3386,8 +3386,7 @@ class MemoryMixin:
             # 光靠工具描述不够：它压根没意识到自己需要查。
             # 触发条件刻意只写**抽象类别**（数量/名单/最值/时间指向），不写具体
             # 例子：具体例子永远列不全，而且会把没枚举到的场景整片漏掉。
-            block = (
-                "\n\n" + SECTION_TITLE + "\n"
+            stable = (
                 "以下是你自己记下来的往事，是你亲身经历的，可以自然地提起，"
                 "但不要照本宣科地念，也不要说「根据我的记忆」这种话。\n\n"
                 "**注意：下面只是你最近记下的一部分，不是你的全部记忆。**"
@@ -3407,7 +3406,9 @@ class MemoryMixin:
             # 规矩：每个 bot 自己的行为约束，写在配置里（不进代码，避免把
             # 某个人设特有的规矩硬编码进通用框架）。
             if rules:
-                block += SECTION_RULES + "\n" + "\n".join("- " + r for r in rules) + "\n\n"
+                stable += SECTION_RULES + "\n" + "\n".join("- " + r for r in rules) + "\n\n"
+            request.system_prompt = old + "\n\n" + stable
+            block = "\n\n" + SECTION_TITLE + "\n"
             if notes:
                 block += SECTION_NOTES + "\n" + notes + "\n\n"
             if sty or sty2:
@@ -3447,12 +3448,11 @@ class MemoryMixin:
                     "想到什么就说什么。\n"
                 )
 
-            # ⚠️ 2026-10-08（省钱第二刀 ✓ 主人同意 ✓）：这一整块会**每 10 分钟变一次**（日记/账本更新 ✗）——
+            # ⚠️ 2026-10-08（省钱第二刀 ✓ 主人同意 ✓）：记忆内容每 10 分钟可能变化（日记/账本更新）——
             # 以前它拼在 system_prompt ✗（最前面 ✓）→ 它一变，**后面的整段对话历史全部按全价重算** ✗
             # （实测：热的时候命中 94~99% ✓ 冷的时候掉到 19~57% ✗ 就是这个原因 ✓）。
             # 改挂 `extra_user_content_parts` ✓（框架自带的「接在用户消息之后」✓ 与 groupctx 同一招 ✓）
-            # → system_prompt 从此只剩人格与规矩 ✓ = **一整天稳定** ✓ 缓存能吃满 ✓。
-            # **内容一字未改** ✓ 只换位置 ✓（前缀加一句「这是系统注入，不是对方说的」✓ 防她误解 ✓）。
+            # → system_prompt 只放稳定的人格、说明与规矩；易变记忆留在当前用户消息末尾。
             try:
                 from astrbot.core.agent.message import TextPart
                 _parts.append(TextPart(
@@ -3460,7 +3460,7 @@ class MemoryMixin:
             except Exception as e:
                 logger.warning("[mindscape_memory] 挂 extra_user_content_parts 失败"
                                "（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
-                request.system_prompt = old + block
+                request.system_prompt = (request.system_prompt or old) + block
             logger.info("[mindscape_memory] %s 注入 %d 字记忆 / %d 字摘要 / %d 字账本"
                         " / %d 字风格 / %d 字人物",
                         label, len(mem), len(dig), len(notes), len(sty), len(people))
