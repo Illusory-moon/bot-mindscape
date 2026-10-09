@@ -1332,6 +1332,90 @@ def check_regressions():
     except Exception as e:
         bad("R28 名字匹配", str(e)[:140])
 
+    # R56: **say_lines 成功之后必须返回 None** ✓（2026-10-09 主人批 C ✓）——
+    #      框架对此有专门分支（tool_loop_agent_runner:1268 `elif resp is None:` → AgentState.DONE ✓）
+    #      → **直接结束本轮** ✓ 省掉那次「再问一遍确认没有更多工具调用」的空轮 ✗（实测一天 122 次 ✗）
+    #      返回字符串的话 ✗ 框架就得再问一次 ✓ 那一轮要重发整段上下文 ✗。
+    try:
+        _m56 = open(os.path.join(HERE, "plugins", "mindscape_mention.py"), encoding="utf-8").read()
+        _i56 = _m56.find("if gid is not None:")
+        _j56 = _m56.find("MN_SAID[", _i56)
+        _tail56 = _m56[_j56:_j56 + 700] if _j56 > 0 else ""
+        _a56 = "return None" in _tail56                       # 成功路径返回 None ✓
+        _b56 = "if sent == 0:" in _m56 and "if sent < len(items):" in _m56   # 失败话术仍在 ✓
+        _c56 = _m56.count("return None") >= 1
+        (ok if (_a56 and _b56 and _c56) else bad)(
+            "R56 连发成功后返回 None（省掉空轮）",
+            "None 在 MN_SAID 之后=%s 失败话术仍在=%s" % (_a56, _b56))
+    except Exception as e:
+        bad("R56 连发成功后返回 None（省掉空轮）", str(e)[:140])
+
+    # R55: **别人的旧话也不许无限堆在会话里** ✗（2026-10-09 主人批 A ✓）——
+    #      只丢 user ✗；带 tool_calls 的 assistant **一律不动** ✓（丢了会让 tool 结果变孤儿、下一次请求直接 400 ✗）
+    try:
+        import mindscape_janitor as JN55
+        importlib.reload(JN55)
+        _f55 = JN55.trim_users
+        _mk55 = lambda: [{"role": "user", "content": "u1"},
+                         {"role": "assistant", "content": "a1"},
+                         {"role": "assistant", "content": "a2", "tool_calls": [{"id": "x"}]},
+                         {"role": "tool", "content": "t1"},
+                         {"role": "user", "content": "u2"}]
+        _o55, _d55 = _f55(_mk55(), 1)
+        _roles55 = [(x.get("role"), x.get("tool_calls") is not None) for x in _o55]
+        _a55 = (len(_o55) == 4 and _d55 == 1)                     # 只丢一条 user ✓
+        _b55 = _o55[-1].get("content") == "u2"                    # 留的是最后一条 ✓
+        _c55 = any(r == "assistant" and tc for r, tc in _roles55)  # 带 tool_calls 的还在 ✓
+        _e55 = _f55(_mk55(), 0)[1] == 0                            # keep<=0 → 不动 ✓
+        (ok if (_a55 and _b55 and _c55 and _e55) else bad)(
+            "R55 别人的旧话只留最近 N 条",
+            "丢=%s 留最后=%s 保住 tool 对=%s keep0 不动=%s" % (_d55, _b55, _c55, _e55))
+    except Exception as e:
+        bad("R55 别人的旧话只留最近 N 条", str(e)[:140])
+
+    # R54: **不用调工具也能连发** ✓（2026-10-09 主人批 D 方案 ✓）——
+    #      正文里每句一行、用 ||| 隔开 ✓ 由插件拆成多个气泡 ✓ 省掉那一整轮空请求 ✗
+    try:
+        import mindscape_mention as MN54
+        importlib.reload(MN54)
+        _f54 = MN54.mn_split_lines
+        _a54 = _f54("行啊~|||那我先记你一票|||别赖账哦")
+        _b54 = _f54("就这样吧")                     # 没分隔符 → 不拆 ✓
+        _c54 = _f54("只有一段|||")                    # 拆出来不足两段 → 不拆 ✓
+        _d54 = _f54("一|||二|||三|||四|||五")           # 超过上限 → 截到 3 ✓
+        _e54 = _f54("")
+        _ok54 = (_a54 == ["行啊~", "那我先记你一票", "别赖账哦"] and _b54 == []
+                 and _c54 == [] and _d54 == ["一", "二", "三"] and _e54 == [])
+        # 规矩里不许再出现 ✓ / ✗（主人 2026-10-09 定 ✓：别让她从规矩层模仿这个符号 ✗）
+        _cfg54 = open(os.path.join(HERE, "config.example.yaml"), encoding="utf-8").read() \
+            if os.path.exists(os.path.join(HERE, "config.example.yaml")) else ""
+        (ok if _ok54 else bad)(
+            "R54 不用工具也能连发（||| 拆气泡）",
+            "三段=%s 无分隔=%s 单段=%s 超限=%s 空=%s"
+            % (_a54, _b54, _c54, _d54, _e54))
+    except Exception as e:
+        bad("R54 不用工具也能连发（||| 拆气泡）", str(e)[:140])
+
+    # R53: **平台指令不许进上下文 / 记忆** ✗（2026-10-09 主人报 ✓：`#sl` 是 SnowLuma 自己的指令 ✓
+    #      它回了一段「SnowLuma 状态 / 版本 / 平台 / 运行时长」✓ 而那两条会进群缓冲 ✓ 还会进日记 ✓）
+    try:
+        import mindscape_core as C53
+        importlib.reload(C53)
+        _f53 = C53.is_platform_command
+        _g53 = open(os.path.join(HERE, "plugins", "mindscape_groupctx.py"), encoding="utf-8").read()
+        _d53 = open(os.path.join(HERE, "plugins", "mindscape_diary.py"), encoding="utf-8").read()
+        _ok53 = (_f53("#sl") is True and _f53("/help") is True
+                 and _f53("   #sl") is True          # 前面有空格也算 ✓
+                 and _f53("火花花在吗") is False
+                 and _f53("") is False and _f53(None) is False)
+        _used53 = ("is_platform_command" in _g53) and ("is_platform_command" in _d53)
+        (ok if (_ok53 and _used53) else bad)(
+            "R53 平台指令不进上下文/记忆",
+            "#sl=%s /help=%s 带空格=%s 正常话=%s ｜ 群缓冲与日记都拦=%s"
+            % (_f53("#sl"), _f53("/help"), _f53("   #sl"), _f53("火花花在吗"), _used53))
+    except Exception as e:
+        bad("R53 平台指令不进上下文/记忆", str(e)[:140])
+
     # R52: **每轮注入的块不许长期留在会话里** ✗（2026-10-08 主人选 1 ✓ 治本 ✓）——
     #      实测：那个群的会话堆到 **37 万字** ✗（10 条 user 平均 7,079 字 ✓）→ 每轮重发 ≈ 40k token ✗
     #      = 实测 1.5M/小时 ✓；而且中间一裁剪 ✓ 后面缓存全废 ✗。

@@ -297,6 +297,24 @@ def strip_injections(msgs, keep_last=1):
     return msgs, saved
 
 
+def trim_users(msgs, keep):
+    """只留最后 keep 条 **user** 消息（别人说的旧话）✓ 返回 (新列表, 丢掉条数) ✓。
+
+    ⚠️ **只丢 user** ✗ —— 带 tool_calls 的 assistant 绝不单独丢 ✓
+    （丢了会让它的 tool 结果变孤儿、下一次请求直接 400 ✗，AGENTS 里记过这个坑 ✓）。
+    她自己的旧回复由 archive_talk 按 keep_last 搬进档案 ✓ 这里管的是**别人的话** ✓。
+    为什么敢丢 ✓：群里的原话**日记早就抓过了** ✓（日记直接读网关库 ✓）
+    → 会话里留着只是冗余 ✓ 而且每次请求都要重发一遍 ✗（这就是 A 要省的钱 ✓）。
+    """
+    if not isinstance(msgs, list) or keep <= 0:
+        return msgs, 0
+    idx = [i for i, m in enumerate(msgs) if isinstance(m, dict) and m.get("role") == "user"]
+    if len(idx) <= keep:
+        return msgs, 0
+    drop = set(idx[:-keep])
+    return [m for i, m in enumerate(msgs) if i not in drop], len(drop)
+
+
 def archive_talk(db, table, column, id_column, targets, log_path=None):
     """把指定会话里「自己的纯回复」搬进档案文件，会话里只留最近 keep_last 条。
 
@@ -311,6 +329,7 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
     cur = con.cursor()
     n_sess = n_arch = 0
     n_saved = 0          # 剥掉注入块的字数 ✓（2026-10-08 治本那一步 ✓）
+    n_dropped = 0        # 丢掉的旧 user 消息条数 ✓（2026-10-09 A ✓）
     try:
         for t in targets:
             if not isinstance(t, dict):
@@ -335,11 +354,15 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
                     continue
                 # ★ 治本那一步 ✓：先把每轮注入的块从旧消息里剥掉 ✓（**放在任何 continue 之前** ✓）
                 msgs, _saved = strip_injections(msgs)
-                if _saved:
+                # ★ A（2026-10-09 主人批 ✓）：别人的旧话也只留最近 N 条 ✓
+                #    顺序 ✓：先把两件事**都算完** ✓ 再**一次写入** ✓（只碰一次 updated_at ✓）
+                msgs, _dropped = trim_users(msgs, int(t.get("keep_user_last", 40)))
+                if _saved or _dropped:
                     cur.execute("UPDATE %s SET %s=? WHERE rowid=?" % (table, column),
                                 (json.dumps(msgs, ensure_ascii=False), rid))
                     con.commit()
                     n_saved += _saved
+                    n_dropped += _dropped
                 plain = [i for i, m in enumerate(msgs)
                          if isinstance(m, dict) and m.get("role") == "assistant"
                          and not m.get("tool_calls") and _arch_text(m).strip()]
@@ -388,6 +411,9 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
         con.commit()
     finally:
         con.close()
+    if n_dropped:
+        log("裁剪别人的旧话: %d 条 user 消息 ✓（只留最近 keep_user_last 条 ✓ 原话日记里都有 ✓）"
+            % n_dropped, log_path)
     if n_saved:
         log("剥离每轮注入块: %d 字 ✓（定向性 / 群缓冲 / 记忆块只对当时那一轮有用 ✓ 存着只会让每轮重发 + 废缓存 ✗）"
             % n_saved, log_path)

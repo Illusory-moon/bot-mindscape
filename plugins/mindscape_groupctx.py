@@ -31,7 +31,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.core.provider.entities import ProviderRequest
 
 import mindscape_config as cfg
-from mindscape_core import scope_hit, scope_warn
+from mindscape_core import scope_hit, scope_warn, is_platform_command
 
 # 与 patches/astrbot 里补丁的落盘路径一致（补丁硬编码了这个绝对路径）
 DEFAULT_BUFFER = "/opt/astrbot/data/group_ctx_buffer.jsonl"
@@ -96,6 +96,10 @@ def gc_read_recent(path, platform, group, limit, window_sec, tail_bytes):
         if str(rec.get("group")) != str(group):
             continue
         if now - float(rec.get("ts") or 0) > window_sec:
+            continue
+        # ★ 2026-10-09（主人报 ✓）：平台指令（「#sl」之类 ✗）不进群上下文 ✓ ——
+        #   否则她会把它当成「群友刚说的话」✓ 甚至去回一句 ✗（判据见 core.is_platform_command ✓）。
+        if is_platform_command(rec.get("text")):
             continue
         out.append(rec)
     return out[-limit:]

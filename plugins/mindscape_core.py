@@ -52,6 +52,21 @@ def scope_list(raw):
     return out
 
 
+# ⚠️ 2026-10-09（主人报 ✓）：「#sl」这类是**平台 / 网关自己的指令** ✗ —— SnowLuma 会回一段
+# 「SnowLuma 状态 / 版本 / 平台 / 运行时长」✓。它既不该进她的上下文 ✓ 也不该被她当群友聊天
+# 学进记忆 / 日记 / 风格 ✓。判据用**前缀**一条通吃 ✓（平台指令永远是这两个前缀 ✓ 将来新增也管得住 ✓
+# —— 代码里**不列具体指令名** ✗ 免得那边加一条就漏一条 ✓）。
+PLATFORM_CMD_PREFIXES = ("#", "/")
+
+
+def is_platform_command(text):
+    """这条文本是不是**平台 / 网关指令**（「#sl」之类 ✓）—— 是就别让它进任何上下文或记忆 ✓。"""
+    t = (text or "").lstrip()
+    if not t:
+        return False
+    return t[0] in PLATFORM_CMD_PREFIXES
+
+
 def scope_hit(targets, self_id):
     """这个 bot 是否在 targets 的作用域内。
 

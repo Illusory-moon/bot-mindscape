@@ -122,6 +122,17 @@ def scope_list(raw):
     return out
 
 
+PLATFORM_CMD_PREFIXES = ("#", "/")
+
+
+def is_platform_command(text):
+    """这条文本是不是**平台 / 网关指令**（「#sl」之类 ✓）—— 是就别让它进任何上下文或记忆 ✓。"""
+    t = (text or "").lstrip()
+    if not t:
+        return False
+    return t[0] in PLATFORM_CMD_PREFIXES
+
+
 def scope_hit(targets, self_id):
     """这个 bot 是否在 targets 的作用域内。
 
@@ -525,6 +536,10 @@ def gc_read_recent(path, platform, group, limit, window_sec, tail_bytes):
         if str(rec.get("group")) != str(group):
             continue
         if now - float(rec.get("ts") or 0) > window_sec:
+            continue
+        # ★ 2026-10-09（主人报 ✓）：平台指令（「#sl」之类 ✗）不进群上下文 ✓ ——
+        #   否则她会把它当成「群友刚说的话」✓ 甚至去回一句 ✗（判据见 core.is_platform_command ✓）。
+        if is_platform_command(rec.get("text")):
             continue
         out.append(rec)
     return out[-limit:]
@@ -2016,6 +2031,10 @@ def fetch(src, target, since_ts, since_seq, only_user=None):
             txt = seg_to_text(d.get("message"), src.get("symbols"))
             if not txt.strip():
                 continue
+            # ★ 2026-10-09（主人报 ✓）：平台指令（「#sl」之类 ✗）不进记忆 / 日记 ✓ ——
+            #   它不是「群友说的话」✓ 记进去只会污染她的记忆与风格学习 ✓。
+            if is_platform_command(txt):
+                continue
             sender = (d.get("sender") or {}).get("card") or (d.get("sender") or {}).get("nickname") or uid
             rows.append({
                 "ts": ts, "seq": seq,
@@ -2868,6 +2887,88 @@ def mn_match_member(who, members):
     return "", ""
 
 
+def mn_split_lines(text, limit=None):
+    """把「几句 + |||」拆成气泡列表 ✓（纯函数 ✓ 便于自检 ✓）。
+
+    返回**空列表**表示「不拆」✓ —— 只有真的出现分隔符、且拆出来 ≥2 段才拆 ✓。
+    """
+    if not text or LINE_SEP not in str(text):
+        return []
+    parts = [x.strip() for x in str(text).split(LINE_SEP)]
+    parts = [x for x in parts if x]
+    if len(parts) < 2:
+        return []
+    return parts[:limit or LINE_SEP_MAX]
+
+
+def mn_plain_text(chain):
+    """把 MessageChain 里的**纯文本**拼出来（只看 Plain / 有 text 的组件）✓。
+
+    用途：正文里可能被她写成「几句 + |||」✓ 我们要先**看到那段文本**才能拆 ✓。
+    """
+    try:
+        comps = getattr(chain, "chain", None) or []
+    except Exception:
+        comps = []
+    out = []
+    for c in comps:
+        t = getattr(c, "text", None)
+        if t is None:
+            continue
+        name = type(c).__name__
+        if name in ("Plain", "Text") or hasattr(c, "text"):
+            out.append(str(t))
+    return "".join(out)
+
+
+def mn_sep_fallback(chain):
+    """兜底 ✓：万一拆分那条路没走成 ✗，也不能让群里看到明文分隔符 ✗。
+
+    把每个 Plain 里的 LINE_SEP 换成换行 ✓（读起来正常 ✓ 只是没能拆成多个气泡 ✓）。
+    返回替换处数 ✓。这个函数挂在**已经验证过能跑**的 mn_clean_chain 那条路上 ✓ ——
+    所以它是**最后一道保险** ✓（2026-10-09 真出过一次漏网 ✓）。
+    """
+    n = 0
+    try:
+        comps = getattr(chain, "chain", None) or []
+    except Exception:
+        comps = []
+    for c in comps:
+        t = getattr(c, "text", None)
+        if isinstance(t, str) and LINE_SEP in t:
+            n += t.count(LINE_SEP)
+            try:
+                c.text = t.replace(LINE_SEP, chr(10)).strip()
+            except Exception:
+                pass
+    return n
+
+
+LINE_SEP = "|||"
+
+
+LINE_SEP_MAX = 3          # 最多三条（跟规矩里写的一致 ✓）
+
+
+MN_LAST_TEXT = {}         # key → (正文, 时间戳) ✓
+
+
+MN_LAST_TEXT_TTL = 30     # 秒：超过就别用了 ✓（防止串到下一轮 ✓）
+
+
+@filter.on_llm_response()
+async def mn_remember_response(self, event, response):
+    """记下这一轮 LLM 生成的正文 ✓（给 decorating 钩子里的 D 拆分用 ✓）。"""
+    try:
+        txt = getattr(response, "completion_text", None) or ""
+        if not str(txt).strip():
+            return
+        key = "%s|%s" % (event.get_self_id(), event.get_group_id())
+        MN_LAST_TEXT[key] = (str(txt), time.time())
+    except Exception:
+        pass
+
+
 def mn_line_chain(text):
     """把一段纯文本包成 MessageChain。
 
@@ -2983,6 +3084,43 @@ async def mn_attach_hook(*args, **kwargs):
                                          (item or (None, None))[1])
                 if removed:
                     logger.info("[mindscape_mention] 清掉正文里手打的 @ %d 处", removed)
+                _fb = mn_sep_fallback(chain)      # ★ 兜底：漏网的分隔符一律换成换行 ✓
+                if _fb:
+                    logger.warning("[mindscape_mention] 兜底：正文里漏网的分隔符 %d 处 → 换成换行 ✓", _fb)
+        # ★ D 方案（2026-10-09 主人批 ✓）：正文里带 ||| → 拆成多个气泡发 ✓
+        #   只在**没有排队 @** 时走这条路 ✗ —— 有 @ 的话下面那套会把 @ 挂在正文前 ✓
+        #   两件事混在一起容易把 @ 弄丢 ✓ 所以宁可让那种少数情况走老路 ✓。
+        if item is None:
+            _res = event.get_result()
+            _chain = getattr(_res, "chain", None) if _res is not None else None
+            _txt = mn_plain_text(_chain) if _chain else ""
+            # ★ chain 里通常是 0 字（钩子太早 ✗）→ 回退到 on_llm_response 记下的正文 ✓
+            _src = "chain" if LINE_SEP in _txt else "llm"
+            if LINE_SEP not in _txt:
+                _t = MN_LAST_TEXT.get(key)
+                if _t and (time.time() - _t[1]) < MN_LAST_TEXT_TTL:
+                    _txt = _t[0]
+            logger.info("[mindscape_mention] D 检查: 文本=%d字 含分隔=%s（chain=%s ｜ llm 缓存=%s）",
+                        len(_txt), LINE_SEP in _txt, bool(_chain), _src == "llm")
+            _parts = mn_split_lines(_txt)
+            if _parts:
+                # ⚠️ 顺序很关键：**第一条真的发出去之后**才抑制正文 ✓
+                #   否则一旦发送失败，她就一个字都发不出去（本鱼第一版就是这个顺序，已改）。
+                _sent = 0
+                for _i, _p in enumerate(_parts):
+                    _c2 = mn_line_chain(_p)
+                    if _c2 is None:
+                        logger.warning("[mindscape_mention] 拆气泡失败: 拿不到 MessageChain")
+                        break
+                    await event.send(_c2)
+                    if _sent == 0:
+                        event.clear_result()   # 别让框架把整段（带 ||| 的）原样再发一遍
+                    _sent += 1
+                    if _i < len(_parts) - 1:
+                        await asyncio.sleep(MN_LINE_GAP)
+                logger.info("[mindscape_mention] 按 %s 拆成 %d 条发出 self=%s",
+                            LINE_SEP, _sent, event.get_self_id())
+                return
         if item is None and said is None:
             return
         # ① 她这一轮用 say_lines 说过了 → 不再另发正文（要补就该写进 lines 里 ✓）。
@@ -4641,6 +4779,13 @@ class MentionMixin:
             MN_SAID["%s|%s" % (ev.get_self_id(), gid)] = (
         sent, time.time(), id(ev),
         str(getattr(getattr(ev, "message_obj", None), "message_id", "") or ""))
+        # ★ C（2026-10-09 主人批 ✓）：**全部发成功 → 返回 None** ✓
+        #   框架对此有**专门分支**（tool_loop_agent_runner:1268）：
+        #     `elif resp is None:` → 「Tool 直接请求发送消息给用户」→ `AgentState.DONE` → **直接结束本轮** ✓
+        #   以前返回字符串 ✗ → 框架还要**再问一次模型**才知道「还想不想调工具」✗
+        #   → 而那一轮要重发整段上下文、模型却只回空字（实测一天 122 次 ✗ ≈ 账单一半 ✓）。
+        #   ⚠️ 必须放在**全部成功之后** ✓：失败时仍返回上面那两句话术 ✓（她才知道要补在正文里 ✓）。
+        return None
         return ("发好了：%d 条（每条一个气泡）。这一轮要说的话就算说完了 —— "
                 "还想补就写进 lines 里，不用再另发正文。" % sent)
 

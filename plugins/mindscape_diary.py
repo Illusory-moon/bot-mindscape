@@ -23,6 +23,9 @@ import re
 _GFX_JUNK = re.compile(r"<[^<>]{0,24}>")
 
 
+from mindscape_core import is_platform_command
+
+
 def dy_gname(raw, gid=""):
     """把**群名**洗成可安全进 prompt 的短标签（详见上面注释）。
 
@@ -161,6 +164,10 @@ def fetch(src, target, since_ts, since_seq, only_user=None):
                 continue
             txt = seg_to_text(d.get("message"), src.get("symbols"))
             if not txt.strip():
+                continue
+            # ★ 2026-10-09（主人报 ✓）：平台指令（「#sl」之类 ✗）不进记忆 / 日记 ✓ ——
+            #   它不是「群友说的话」✓ 记进去只会污染她的记忆与风格学习 ✓。
+            if is_platform_command(txt):
                 continue
             sender = (d.get("sender") or {}).get("card") or (d.get("sender") or {}).get("nickname") or uid
             rows.append({
