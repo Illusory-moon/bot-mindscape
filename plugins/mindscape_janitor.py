@@ -352,6 +352,11 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
                     continue
                 if not isinstance(msgs, list):
                     continue
+                # ★★ 静默快照**必须先取** ✗（2026-10-09 真事故 ✓ 主人发现 ✓）——
+                #    下面的 strip / trim 会**写库** ✓ 一写就把 updated_at 刷成「现在」✗
+                #    于是稍后的静默判定永远看到「刚刚说过话」✗ → **归档被永久跳过** ✗
+                #    （实测：私聊会话堆到 **287,925 字** ✗ 一次都没归档过 ✓）
+                _idle = session_idle_seconds(cur, table, rid)
                 # ★ 治本那一步 ✓：先把每轮注入的块从旧消息里剥掉 ✓（**放在任何 continue 之前** ✓）
                 msgs, _saved = strip_injections(msgs)
                 # ★ A（2026-10-09 主人批 ✓）：别人的旧话也只留最近 N 条 ✓
@@ -378,7 +383,7 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
                 #      一小时搬 8 次 ≈ 20~40 万未命中 token ✗ 是系统里最大的一处缓存泄漏 ✓）。
                 #    等她**静默 ≥ IDLE_BEFORE_TRIM** 再搬 ✓ → 那次冷启动落在一个**本来就已经冷**的会话上 ✓ = 几乎免费 ✓；
                 #    而「把她的旧回复搬走、杀掉风格锚」这件事照旧成立 ✓（下次开口前早搬完了 ✓）。
-                _idle = session_idle_seconds(cur, table, rid)
+                # 用**循环开头取的那份快照** ✓ —— 这里再取就晚了 ✗（strip/trim 刚写过库 ✓）
                 if _idle is not None and _idle.total_seconds() < IDLE_BEFORE_TRIM:
                     continue
                 drop = (plain[:-keep] if keep else plain) + list(noise)
