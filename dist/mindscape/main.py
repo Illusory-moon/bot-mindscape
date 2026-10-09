@@ -1883,7 +1883,11 @@ async def save_note(*args, **kwargs):
             return "这条你**刚刚记过**了，不用再记 —— 直接回答就行。"
         write_notes(path, new_text)
         logger.info("[mindscape_notes] %s 记下 %s", sid, key)
-        return "记下了：%s —— %s（已入账，**不用再记一遍**）" % (key, value)
+        # ★ ①（2026-10-09 主人批 ✓）：**成功就返回 None** ✗ —— 账已经记进去了 ✓
+        #   没必要再让模型看一句「记下了」✓ 那会白花一整轮完整上下文的请求 ✗
+        #   （框架对 None 直接 DONE ✓ 见 tool_loop_agent_runner 的 elif resp is None 分支 ✓）
+        #   失败/提示类**照旧返回** ✓ —— 与 say_lines 同一套顺序纪律 ✓
+        return None
     except Exception as e:
         logger.warning("[mindscape_notes] 记账失败: %s", str(e)[:120])
         return "这本账我一时写不进去，先记在心里。"
@@ -3842,7 +3846,10 @@ class StickerUseMixin:
                 save_index(self.index_path, idx)
         except Exception as e:
             return "存图失败：" + str(e)[:60]
-        return "收好啦：%s（%s）" % (name, "/".join(tags))
+        # ★ ①（2026-10-09 主人批 ✓）：**成功就返回 None** ✗ —— 图已经存进库了 ✓
+        #   （实测这个工具一小时被调 5 次 ✓ 每次返回字符串就多花一整轮请求 ✗）
+        #   失败类（没看到图 / 下载失败 / 找不到文件）**照旧返回** ✓
+        return None
 
     @llm_tool(name="send_sticker")
     async def send_sticker(self, *args, **kwargs):

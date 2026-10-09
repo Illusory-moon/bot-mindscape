@@ -141,7 +141,11 @@ async def save_note(*args, **kwargs):
             return "这条你**刚刚记过**了，不用再记 —— 直接回答就行。"
         write_notes(path, new_text)
         logger.info("[mindscape_notes] %s 记下 %s", sid, key)
-        return "记下了：%s —— %s（已入账，**不用再记一遍**）" % (key, value)
+        # ★ ①（2026-10-09 主人批 ✓）：**成功就返回 None** ✗ —— 账已经记进去了 ✓
+        #   没必要再让模型看一句「记下了」✓ 那会白花一整轮完整上下文的请求 ✗
+        #   （框架对 None 直接 DONE ✓ 见 tool_loop_agent_runner 的 elif resp is None 分支 ✓）
+        #   失败/提示类**照旧返回** ✓ —— 与 say_lines 同一套顺序纪律 ✓
+        return None
     except Exception as e:
         logger.warning("[mindscape_notes] 记账失败: %s", str(e)[:120])
         return "这本账我一时写不进去，先记在心里。"

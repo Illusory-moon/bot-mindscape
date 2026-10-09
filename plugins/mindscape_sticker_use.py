@@ -170,7 +170,10 @@ class StickerUseMixin:
                 save_index(self.index_path, idx)
         except Exception as e:
             return "存图失败：" + str(e)[:60]
-        return "收好啦：%s（%s）" % (name, "/".join(tags))
+        # ★ ①（2026-10-09 主人批 ✓）：**成功就返回 None** ✗ —— 图已经存进库了 ✓
+        #   （实测这个工具一小时被调 5 次 ✓ 每次返回字符串就多花一整轮请求 ✗）
+        #   失败类（没看到图 / 下载失败 / 找不到文件）**照旧返回** ✓
+        return None
 
     @llm_tool(name="send_sticker")
     async def send_sticker(self, *args, **kwargs):
