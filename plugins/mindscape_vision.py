@@ -131,18 +131,18 @@ class VisionMixin:
         try:
             if not self._vs_hit(event):
                 return
-            if not vs_has_image(event):
-                return
-            old = getattr(request, "system_prompt", "") or ""
-            parts = getattr(request, "extra_user_content_parts", None)
-            if VS_MARK in old or any(VS_MARK in str(getattr(p, "text", "")) for p in (parts or [])):
-                return
             urls = getattr(request, "image_urls", None)
             if urls:
                 for index, ref in enumerate(urls):
                     preview = await asyncio.to_thread(vs_compact_image, str(ref))
                     if preview:
                         urls[index] = preview
+            if not vs_has_image(event):
+                return
+            old = getattr(request, "system_prompt", "") or ""
+            parts = getattr(request, "extra_user_content_parts", None)
+            if VS_MARK in old or any(VS_MARK in str(getattr(p, "text", "")) for p in (parts or [])):
+                return
             try:
                 from astrbot.core.agent.message import TextPart
                 if parts is None:

@@ -117,6 +117,7 @@ def stub():
     acm.TextPart = _TextPart
     mc = types.ModuleType("astrbot.core.message.components")
     mc.Image = type("Image", (), {})
+    mc.Plain = type("Plain", (), {"__init__": lambda s, text: setattr(s, "text", text)})
     _comp_cache = {}
 
     def _mc_getattr(name):        # 要什么组件给什么组件（At / Plain / …），同类只造一次
@@ -129,6 +130,7 @@ def stub():
     mc.__getattr__ = _mc_getattr
     mer = types.ModuleType("astrbot.core.message.message_event_result")
     mer.MessageEventResult = type("M", (), {"__init__": lambda s: None})
+    mer.MessageChain = type("MessageChain", (list,), {})
     emt = types.ModuleType("astrbot.core.star.filter.event_message_type")
     emt.EventMessageType = types.SimpleNamespace(
         ALL=1, GROUP_MESSAGE=2, PRIVATE_MESSAGE=4)
@@ -931,6 +933,45 @@ def check_regressions():
             % (top_ok, quote_ok, none_ok, loop_ok, wired))
     except Exception as e:
         bad("R23 引用图片", str(e)[:140])
+
+    # R23b: 保存成功要有可见确认，同时仍以 None 结束工具轮次。
+    try:
+        import asyncio as _aio
+        import tempfile as _tempfile
+        import mindscape_sticker_use as _su
+
+        with _tempfile.TemporaryDirectory() as work:
+            path = os.path.join(work, "input.gif")
+            with open(path, "wb") as f:
+                f.write(b"GIF89a-test")
+            img = sys.modules["astrbot.core.message.components"].Image()
+
+            async def _path():
+                return path
+
+            img.convert_to_file_path = _path
+            sent = []
+
+            class _Event:
+                message_obj = types.SimpleNamespace(message=[img])
+
+                def get_self_id(self):
+                    return "test"
+
+                async def send(self, chain):
+                    sent.append(chain)
+
+            inst = _su.StickerUseMixin()
+            inst.dir = work
+            inst.index_path = os.path.join(work, "index.json")
+            inst._category_of = lambda self_id: "test"
+            result = _aio.run(inst.save_sticker_impl(_Event(), {"name": "测试图"}))
+            saved = _su.load_index(inst.index_path) or []
+            ack_ok = (result is None and len(sent) == 1
+                      and sent[0][0].text == "这张收好啦~" and len(saved) == 1)
+            (ok if ack_ok else bad)("R23b 保存表情直接确认", str(ack_ok))
+    except Exception as e:
+        bad("R23b 保存表情直接确认", str(e)[:140])
 
     # R24: 去重表（seen.json）的三种状态必须分得清。
     #      accepted = 真正入库过的图；rejected = **明确拒绝**（超尺寸 / 判定不相关）。
@@ -2003,6 +2044,13 @@ def check_regressions():
                           and _big_req.system_prompt == "stable"
                           and len(_big_req.extra_user_content_parts) == 1)
             (ok if compact_ok else bad)("R32b 大 GIF 压成三帧预览", str(compact_ok))
+            _quoted_req = types.SimpleNamespace(system_prompt="stable", image_urls=[_gif.name],
+                                                extra_user_content_parts=[])
+            asyncio.run(_VS.VisionMixin.vs_hint(_vt, _plain, _quoted_req))
+            quoted_ok = (_quoted_req.image_urls[0].startswith("data:image/jpeg;base64,")
+                         and _quoted_req.system_prompt == "stable"
+                         and not _quoted_req.extra_user_content_parts)
+            (ok if quoted_ok else bad)("R32c 引用或历史大图也压预览", str(quoted_ok))
         finally:
             _VS.VS_LARGE_IMAGE_BYTES = _old_limit
             _gif.close()

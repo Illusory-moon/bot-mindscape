@@ -29,6 +29,8 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.event import filter
 from astrbot.core.message.components import At
 from astrbot.core.message.components import Image
+from astrbot.core.message.components import Image, Plain
+from astrbot.core.message.message_event_result import MessageChain, MessageEventResult
 from astrbot.core.message.message_event_result import MessageEventResult
 from astrbot.core.provider.entities import ProviderRequest
 from astrbot.core.star.filter.event_message_type import EventMessageType
@@ -3895,9 +3897,12 @@ class StickerUseMixin:
                 save_index(self.index_path, idx)
         except Exception as e:
             return "存图失败：" + str(e)[:60]
-        # ★ ①（2026-10-09 主人批 ✓）：**成功就返回 None** ✗ —— 图已经存进库了 ✓
-        #   （实测这个工具一小时被调 5 次 ✓ 每次返回字符串就多花一整轮请求 ✗）
-        #   失败类（没看到图 / 下载失败 / 找不到文件）**照旧返回** ✓
+        # 成功直接确认，再结束工具轮次；返回字符串会多发一次完整上下文请求。
+        try:
+            await event.send(MessageChain([Plain("这张收好啦~")]))
+        except Exception as e:
+            logger.warning("[mindscape_stickers] 已入库，但确认发送失败: %s", str(e)[:120])
+            return "图已保存，但确认消息没发出去。"
         return None
 
     @llm_tool(name="send_sticker")
@@ -4454,18 +4459,18 @@ class VisionMixin:
         try:
             if not self._vs_hit(event):
                 return
-            if not vs_has_image(event):
-                return
-            old = getattr(request, "system_prompt", "") or ""
-            parts = getattr(request, "extra_user_content_parts", None)
-            if VS_MARK in old or any(VS_MARK in str(getattr(p, "text", "")) for p in (parts or [])):
-                return
             urls = getattr(request, "image_urls", None)
             if urls:
                 for index, ref in enumerate(urls):
                     preview = await asyncio.to_thread(vs_compact_image, str(ref))
                     if preview:
                         urls[index] = preview
+            if not vs_has_image(event):
+                return
+            old = getattr(request, "system_prompt", "") or ""
+            parts = getattr(request, "extra_user_content_parts", None)
+            if VS_MARK in old or any(VS_MARK in str(getattr(p, "text", "")) for p in (parts or [])):
+                return
             try:
                 from astrbot.core.agent.message import TextPart
                 if parts is None:
