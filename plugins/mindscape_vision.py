@@ -30,6 +30,7 @@ import asyncio
 import base64
 import io
 import os
+import re
 import urllib.request
 
 from astrbot.api import logger
@@ -51,6 +52,24 @@ VS_HINT = """## 这一轮的消息里带了图 —— 认人之前先查
 - 没有依据之前，**绝不说**「这就是 XX」。认错一个人，比说不认识难看得多。
 """
 
+# ⚠️ 2026-10-10 主人报 ✓（原判 wontfix，当天改主意要修 ✓）：有人发**纯文本**
+#   `![这是一个带着小礼帽…的少女图片](img.png)`，她会**真以为自己看到了图** ✗。
+#   查过日志：那一轮管线里**没有任何图**（vs_has_image=False、image_urls 为空 ✓），
+#   是模型把「长得像附件标记的正文」当成了附件 ✗。
+#   修法（代码判定 + 一句明确标注 ✓）：本轮没图、但正文里出现像媒体/附件的字样时，
+#   由**代码**认出来并告诉她「那只是对方打的文字」—— 不改渲染、不改用户那条消息 ✗。
+#   位置：VS_PRIORITY=-4（群缓冲之后、人物之前）✓ 见 mindscape_memory 文件头的缓存契约。
+VS_PRIORITY = -4
+VS_TEXT_MARK = "（系统提示：正文里出现了像图片/附件的字样"
+# 覆盖面 = 各种「看起来是媒体」的写法（网关渲染 / 引用渲染 / 原始 CQ 码 / markdown / HTML / data URI）
+VS_FAKE_RE = re.compile(
+    r"!\[[^\]]*\]\([^)]*\)|\[\s*(?:图片|视频|文件|语音|表情|动画|image|img|video|file|audio|sticker)\s*\]|image attachment|\[CQ:(?:image|video|record|file|face)|data:(?:image|video|audio)/|<img\b",
+    re.I)
+VS_TEXT_HINT = (
+    "（系统提示：正文里出现了像图片/附件的字样（`%s`）—— 但**这一轮没有任何图片附件**，"
+    "你手上没有图，那只是**对方打的文字**。不要描述图里有什么、也不要当成自己看见了；"
+    "真要看图，让对方直接把图发过来。）")
+
 
 def vs_load_config():
     c = cfg.section("vision") or {}
@@ -66,6 +85,27 @@ def vs_has_image(event):
         if isinstance(c, Image):
             return True
     return False
+
+
+def vs_attach(request, text, mark):
+    """把「这一轮」的识图提醒挂到当前消息之后 ✓（幂等靠 mark 认领 ✓）。
+
+    挂载失败时退回 system_prompt（带警告 ✓）—— 宁可费钱，不可丢提醒。
+    """
+    old = getattr(request, "system_prompt", "") or ""
+    parts = getattr(request, "extra_user_content_parts", None)
+    if parts is None:
+        parts = []
+        request.extra_user_content_parts = parts
+    if mark in old or any(mark in str(getattr(p, "text", "")) for p in parts):
+        return False
+    try:
+        from astrbot.core.agent.message import TextPart
+        parts.append(TextPart(text=text))
+    except Exception as e:
+        logger.warning("[mindscape_vision] 挂当前消息失败（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
+        request.system_prompt = old + "\n\n" + text
+    return True
 
 
 def vs_compact_image(ref):
@@ -125,9 +165,9 @@ class VisionMixin:
             return False
         return scope_hit(self.vs_targets, event.get_self_id())
 
-    @filter.on_llm_request()
+    @filter.on_llm_request(priority=VS_PRIORITY)
     async def vs_hint(self, event: AstrMessageEvent, request):
-        """只在「这一轮真的带了图」时，往当前消息里塞一次提醒。"""
+        """有图 → 提醒「先查再认」；**没图但正文长得像有图** → 明确标注「那只是文字」✓。"""
         try:
             if not self._vs_hit(event):
                 return
@@ -137,22 +177,17 @@ class VisionMixin:
                     preview = await asyncio.to_thread(vs_compact_image, str(ref))
                     if preview:
                         urls[index] = preview
-            if not vs_has_image(event):
+            if vs_has_image(event):
+                if vs_attach(request, VS_HINT, VS_MARK):
+                    logger.info("[mindscape_vision] 有图：已提醒先查再认 | bot=%s",
+                                event.get_self_id())
                 return
-            old = getattr(request, "system_prompt", "") or ""
-            parts = getattr(request, "extra_user_content_parts", None)
-            if VS_MARK in old or any(VS_MARK in str(getattr(p, "text", "")) for p in (parts or [])):
+            # 本轮**没有图**：正文里若出现像图片/附件的字样，由代码认出来并标注「那只是文字」✓
+            fake = VS_FAKE_RE.search(str(getattr(event, "message_str", "") or ""))
+            if not fake:
                 return
-            try:
-                from astrbot.core.agent.message import TextPart
-                if parts is None:
-                    parts = []
-                    request.extra_user_content_parts = parts
-                parts.append(TextPart(text=VS_HINT))
-            except Exception as e:
-                logger.warning("[mindscape_vision] 挂当前消息失败（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
-                request.system_prompt = old + "\n\n" + VS_HINT
-            logger.info("[mindscape_vision] 有图：已提醒先查再认 | bot=%s",
-                        event.get_self_id())
+            if vs_attach(request, VS_TEXT_HINT % fake.group(0)[:40], VS_TEXT_MARK):
+                logger.info("[mindscape_vision] 正文像附件、本轮无图 → 已标注为文字 | bot=%s | 命中=%s",
+                            event.get_self_id(), fake.group(0)[:40])
         except Exception as e:
             logger.warning("[mindscape_vision] 注入失败: %s", str(e)[:120])

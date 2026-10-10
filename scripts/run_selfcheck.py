@@ -1658,16 +1658,18 @@ def check_regressions():
         _mem = _prio(_m59, "MEM_PRIORITY")
         _ppl = _prio(_m59, "PEOPLE_PRIORITY")
         _gc = _prio(_g59, "GC_PRIORITY")
+        _v59 = open(os.path.join(PLUGINS, "mindscape_vision.py"), encoding="utf-8").read()
         _si = _prio(_s59, "SI_PRIORITY")       # 沉默说明：放在最后（贴近生成点 + 同一轮不变 ✓）
-        prio_ok = (None not in (_mem, _ppl, _gc, _si)
-                   and _mem > _gc > _ppl > _si > -100)
+        _vs = _prio(_v59, "VS_PRIORITY")       # 识图/假图提醒：每轮一条 → 排在群缓冲之后 ✓
+        prio_ok = (None not in (_mem, _ppl, _gc, _si, _vs)
+                   and _mem > _gc > _vs > _ppl > _si > -100)
         seg = _m59[_m59.find("SECTION_TITLE + "):]
         blk_ok = (0 < seg.find("SECTION_STYLE + ") < seg.find("SECTION_DIGEST + ")
                   < seg.find("SECTION_NOTES + ") < seg.find("block += mem"))
         (ok if (prio_ok and blk_ok) else bad)(
             "R59 注入顺序=变化频率",
-            "记忆=%s 群缓冲=%s 人物=%s 沉默=%s 块内顺序=%s"
-            % (_mem, _gc, _ppl, _si, blk_ok))
+            "记忆=%s 群缓冲=%s 识图=%s 人物=%s 沉默=%s 块内顺序=%s"
+            % (_mem, _gc, _vs, _ppl, _si, blk_ok))
     except Exception as e:
         bad("R59 注入顺序=变化频率", str(e)[:140])
 
@@ -2127,6 +2129,30 @@ def check_regressions():
             _VS.VS_LARGE_IMAGE_BYTES = _old_limit
             _gif.close()
             os.unlink(_gif.name)
+
+        # R60: 「正文长得像图、其实本轮没有图」→ 代码认出来并标注「那只是文字」✓
+        #      （2026-10-10 主人报 ✓；原判 wontfix，当天改主意要修 ✓）
+        try:
+            _fake = _Ev(A)
+            _fake.message_obj = types.SimpleNamespace(message=[])
+            _fake.message_str = "![这是一个带着小礼帽的少女图片](img.png)"
+            _rq60 = types.SimpleNamespace(system_prompt="stable", extra_user_content_parts=[])
+            asyncio.run(_VS.VisionMixin.vs_hint(_vt, _fake, _rq60))
+            _t60 = "".join(str(getattr(p, "text", "")) for p in _rq60.extra_user_content_parts)
+            asyncio.run(_VS.VisionMixin.vs_hint(_vt, _fake, _rq60))          # 幂等 ✓
+            fake_ok = (_VS.VS_TEXT_MARK in _t60 and "没有任何图片附件" in _t60
+                       and _rq60.system_prompt == "stable"
+                       and len(_rq60.extra_user_content_parts) == 1)
+            _pos = ["![a](b.png)", "[图片]", "[Image Attachment in quoted message: x]",
+                    "[CQ:image,file=a.jpg]", "data:image/png;base64,AA", "<img src='a.png'>"]
+            _neg = ["这张图真好看", "我给你画个示意图", "图图图"]
+            re_ok = (all(_VS.VS_FAKE_RE.search(t) for t in _pos)
+                     and not any(_VS.VS_FAKE_RE.search(t) for t in _neg))
+            (ok if (fake_ok and re_ok) else bad)(
+                "R60 假的图片字样要标注成文字",
+                "标注=%s（%d 段）样式识别=%s" % (fake_ok, len(_rq60.extra_user_content_parts), re_ok))
+        except Exception as e:
+            bad("R60 假的图片字样要标注成文字", str(e)[:140])
 
         # 图片侧：图库分类按 self_id 精确匹配，没配就是「不采」
         import mindscape_stickers as _SK
