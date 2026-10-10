@@ -1985,7 +1985,7 @@ async def lookup_knowledge(*args, **kwargs):
         keyword(string): 查询关键词，可以给一组（空格或逗号分开）。
             例：配队 银狼 / 光锥 遗器 主词条 / 星魂 / 机制 笑点 / 开拓者 关系 / 旧型号 /
                 某个版本 剧情 / 新登场的人 / 新地区 / 保底 体力 / 深渊 / 差分宇宙 / 异相仲裁
-        which(string): 指定查哪一份资料的名字（「战斗数据」「人物关系」「版本时事」「战斗常识」），不填就全查
+        which(string): 指定查哪一份资料的名字（「战斗数据」「人物关系」「版本时事」「战斗常识」「当期」），不填就全查
     """
     kw = str(kwargs.get("keyword") or _first_str(args)).strip()
     if not kw:

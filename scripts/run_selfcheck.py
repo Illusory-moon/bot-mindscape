@@ -1579,6 +1579,15 @@ def check_regressions():
     except Exception as e:
         bad("R65 @ 与 ||| 同轮也要拆", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
+    # R68: 资料库的工具说明必须提到**当期**这一层（2026-10-11 主人批的 L3）——
+    try:
+        _r68 = open(os.path.join(PLUGINS, "mindscape_recall.py"), encoding="utf-8").read()
+        _tail68 = _r68.split("which(string)")[-1][:200] if "which(string)" in _r68 else ""
+        _ok68 = "当期" in _tail68
+        (ok if _ok68 else bad)("R68 资料库说明含当期", "which 里写了当期=%s" % _ok68)
+    except Exception as e:
+        bad("R68 资料库说明含当期", str(e)[:140])
+
     # R67: 资料库的工具说明必须提到**战斗常识**这一层（2026-10-11 主人批的块 4）——
     #      同 R66 的道理：**不写进说明书，她就想不到来查** ✓。
     try:
