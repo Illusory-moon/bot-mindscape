@@ -1579,6 +1579,19 @@ def check_regressions():
     except Exception as e:
         bad("R65 @ 与 ||| 同轮也要拆", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
+    # R67: 资料库的工具说明必须提到**战斗常识**这一层（2026-10-11 主人批的块 4）——
+    #      同 R66 的道理：**不写进说明书，她就想不到来查** ✓。
+    try:
+        _r67 = open(os.path.join(PLUGINS, "mindscape_recall.py"), encoding="utf-8").read()
+        _a67 = "【战斗即时类】" in _r67
+        _b67 = "战斗常识" in _r67
+        _c67 = "战斗常识" in _r67.split("which(string)")[-1][:160] if "which(string)" in _r67 else False
+        (ok if (_a67 and _b67 and _c67) else bad)(
+            "R67 资料库说明含战斗常识",
+            "单列一节=%s 提到战斗常识=%s which 里也写了=%s" % (_a67, _b67, _c67))
+    except Exception as e:
+        bad("R67 资料库说明含战斗常识", str(e)[:140])
+
     # R66: 资料库的工具说明必须提到**版本时事**（2026-10-11 主人批的上线第 3 步）——
     #      知识库挂上去还不够：`lookup_knowledge` 的说明里不提这一层，她**根本想不到来查**
     #      （同 canon 那句老话：能用代码保证的，别指望提示词；**工具的说明书就是她的入口**）。
