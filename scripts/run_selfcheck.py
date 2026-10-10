@@ -1579,6 +1579,20 @@ def check_regressions():
     except Exception as e:
         bad("R65 @ 与 ||| 同轮也要拆", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
+    # R66: 资料库的工具说明必须提到**版本时事**（2026-10-11 主人批的上线第 3 步）——
+    #      知识库挂上去还不够：`lookup_knowledge` 的说明里不提这一层，她**根本想不到来查**
+    #      （同 canon 那句老话：能用代码保证的，别指望提示词；**工具的说明书就是她的入口**）。
+    try:
+        _r66 = open(os.path.join(PLUGINS, "mindscape_recall.py"), encoding="utf-8").read()
+        _a66 = "版本时事" in _r66
+        _b66 = "【时事类】" in _r66
+        _c66 = "版本时事" in _r66.split("which(string)")[-1][:120] if "which(string)" in _r66 else False
+        (ok if (_a66 and _b66 and _c66) else bad)(
+            "R66 资料库说明含版本时事",
+            "提到=%s 单列一节=%s which 里也写了=%s" % (_a66, _b66, _c66))
+    except Exception as e:
+        bad("R66 资料库说明含版本时事", str(e)[:140])
+
     # R54: **不用调工具也能连发** ✓（2026-10-09 主人批 D 方案 ✓）——
     #      正文里每句一行、用 ||| 隔开 ✓ 由插件拆成多个气泡 ✓ 省掉那一整轮空请求 ✗
     try:
