@@ -1496,6 +1496,89 @@ def check_regressions():
     except Exception as e:
         bad("R55 别人的旧话只留最近 N 条", str(e)[:140])
 
+    # R65: 「@ 排队 + |||」同轮**也必须拆** ✓（2026-10-10 主人报 ✗ 真事故 22:44:56）——
+    #      她 @ 了新群友、又写了两句带 ||| 的话 → **分隔符原样发进群** ✗。
+    #      真凶：分割块原先被 `if item is None:` 包着 ✗（注释写着「有 @ 怕把它弄丢」✗）→
+    #      有 @ 排队时整段走老路 ✓。判据（日志签名）：`[空消息] @某人` + 一条带 `|||` 的正文 ✓，
+    #      且那一轮**没有 D 检查行** ✗。
+    #      这里**真跑一次钩子**（假 event ✓ 同 R41）：2 条发出 ✓ 首条带真 At ✓ 都不含分隔符 ✓ 正文被抑制 ✓。
+    try:
+        import asyncio as _aio65
+        import time as _t65
+        import mindscape_mention as MN65
+        importlib.reload(MN65)
+
+        class _Res65:
+            def __init__(self):
+                self.chain = []          # 钩子跑得早：这一刻链里还没有正文 ✓（正是线上那种情形 ✓）
+
+        class _Ev65:
+            def __init__(self):
+                self.result = _Res65()
+                self.sent = []
+                self.cleared = 0
+                self.message_obj = types.SimpleNamespace(message_id="mid-65")
+
+            def get_self_id(self):
+                return "bot-65"
+
+            def get_group_id(self):
+                return "grp-65"
+
+            def get_result(self):
+                return self.result
+
+            def set_result(self, r):
+                self.result = r
+
+            def clear_result(self):
+                self.cleared += 1
+                self.result = None
+
+            async def send(self, chain):
+                self.sent.append(chain)
+
+        # ⚠️ 自检的 astrbot 桩里 components 是「要什么给什么」的动态类 ✗ → MessageChain/Plain
+        #    造不出真链（mn_line_chain 必返 None ✗）→ 这里把**适配层**换成记录器 ✓：
+        #    被测的是**钩子的分支判断与 @ 归属** ✓（适配层本身线上每轮都在跑 ✓）。
+        _calls65 = []
+
+        def _fake_chain65(text, at=None):
+            _calls65.append((text, at))
+            return ("chain", text)
+
+        _key65 = "bot-65|grp-65"
+        _ol65 = MN65.mn_load_config
+        _oc65 = MN65.mn_line_chain
+        _op65 = dict(MN65.MN_PENDING)
+        _ot65 = dict(MN65.MN_LAST_TEXT)
+        MN65.mn_load_config = lambda: (True, ["bot-65"])
+        MN65.mn_line_chain = _fake_chain65
+        try:
+            MN65.MN_LAST_TEXT[_key65] = ("第一句~|||第二句~", _t65.time(), "mid-65")
+            MN65.MN_PENDING[_key65] = ("614399551", "banana", _t65.time())
+            _ev65 = _Ev65()
+            _aio65.run(MN65.mn_attach_hook(_ev65))
+        finally:
+            MN65.mn_load_config = _ol65
+            MN65.mn_line_chain = _oc65
+            MN65.MN_PENDING.clear(); MN65.MN_PENDING.update(_op65)
+            MN65.MN_LAST_TEXT.clear(); MN65.MN_LAST_TEXT.update(_ot65)
+
+        _texts65 = [t for t, _a in _calls65]
+        _at65 = (bool(_calls65) and _calls65[0][1] is not None
+                 and str(getattr(_calls65[0][1], "qq", "")) == "614399551")
+        _no_at2 = len(_calls65) > 1 and _calls65[1][1] is None
+        _ok65 = (len(_calls65) == 2 and "|||" not in " ".join(_texts65) and _at65 and _no_at2
+                 and _ev65.cleared >= 1 and len(_ev65.sent) == 2
+                 and _texts65[0] == "第一句~" and _texts65[1] == "第二句~")
+        (ok if _ok65 else bad)(
+            "R65 @ 与 ||| 同轮也要拆",
+            "拆=%d 条 首条带@=%s 次条无@=%s 抑制=%d 发出=%d ｜ %s"
+            % (len(_calls65), _at65, _no_at2, _ev65.cleared, len(_ev65.sent), _texts65))
+    except Exception as e:
+        bad("R65 @ 与 ||| 同轮也要拆", "%s: %s" % (type(e).__name__, str(e)[:140]))
+
     # R54: **不用调工具也能连发** ✓（2026-10-09 主人批 D 方案 ✓）——
     #      正文里每句一行、用 ||| 隔开 ✓ 由插件拆成多个气泡 ✓ 省掉那一整轮空请求 ✗
     try:

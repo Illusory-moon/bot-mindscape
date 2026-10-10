@@ -156,12 +156,15 @@ async def mn_remember_response(self, event, response):
         pass
 
 
-def mn_line_chain(text):
-    """把一段纯文本包成 MessageChain。
+def mn_line_chain(text, at=None):
+    """把一段纯文本包成 MessageChain（可选：在最前面塞一个**真 At** ✓）。
 
     `event.send()` 的签名是 `send(message: MessageChain)` —— 传字符串会炸
     （实测 2026-10-06：她调 say_lines 三次，全都是 `'str' object has no attribute 'chain'`）。
-    路径随版本变，兜两层。"""
+    路径随版本变，兜两层。
+    ⚠️ 2026-10-10：加 `at` 参数 —— 「@ 排队 + |||」同轮时，At 要挂**第一条气泡**上 ✓
+    （以前那条路不拆，分隔符就原样发进群了 ✗，见 mn_attach_hook 里的注释 ✓）。
+    """
     for mod_path in ('astrbot.api.message_components', 'astrbot.core.message.components'):
         try:
             mod = __import__(mod_path, fromlist=['Plain', 'MessageChain'])
@@ -169,7 +172,7 @@ def mn_line_chain(text):
             chain = getattr(mod, 'MessageChain', None)
             if chain is None:
                 from astrbot.core.message.message_event_result import MessageChain as chain
-            return chain([plain(text)])
+            return chain(([at] if at is not None else []) + [plain(text)])
         except Exception:
             continue
     return None
@@ -279,10 +282,24 @@ async def mn_attach_hook(*args, **kwargs):
                 _fb = mn_sep_fallback(chain)      # ★ 兜底：漏网的分隔符一律换成换行 ✓
                 if _fb:
                     logger.warning("[mindscape_mention] 兜底：正文里漏网的分隔符 %d 处 → 换成换行 ✓", _fb)
-        # ★ D 方案（2026-10-09 主人批 ✓）：正文里带 ||| → 拆成多个气泡发 ✓
-        #   只在**没有排队 @** 时走这条路 ✗ —— 有 @ 的话下面那套会把 @ 挂在正文前 ✓
-        #   两件事混在一起容易把 @ 弄丢 ✓ 所以宁可让那种少数情况走老路 ✓。
-        if item is None:
+        # ★ D 方案（2026-10-09 主人批 ✓；2026-10-10 扩到「有 @ 排队」这条路 ✓）：
+        #   正文里带 ||| → 拆成多个气泡发 ✓；**第一条挂上排队的真 @** ✓。
+        #   ⚠️ 原先这里是 `if item is None:` ✗（注释写着「有 @ 怕把它弄丢，宁可走老路」✗）——
+        #   结果「@ + |||」同轮时整段走老路 → **分隔符原样发进群** ✗。
+        #   真事故（2026-10-10 22:44:56 ✓）：日志签名 = `[空消息] @某人` + 一条带 `|||` 的正文 ✓，
+        #   而且那一轮**没有 D 检查行** ✗（因为整块被跳过了 ✓）。
+        #   挂 @ 并不难：把 At 塞进第一条的 chain（mn_line_chain 的 at 参数 ✓）就行 —— 别再用
+        #   「少数情况」当借口 ✗。
+        _res0 = event.get_result()
+        _chain0 = getattr(_res0, "chain", None) if _res0 is not None else None
+        _txt0 = mn_plain_text(_chain0) if _chain0 else ""
+        if LINE_SEP not in _txt0:                      # 链里没有正文（钩子跑得早 ✗）→ 看缓存 ✓
+            _t0 = MN_LAST_TEXT.get(key)
+            _mid0 = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
+            if (_t0 and _mid0 and len(_t0) > 2 and _t0[2] == _mid0
+                    and (time.time() - _t0[1]) < MN_LAST_TEXT_TTL):
+                _txt0 = _t0[0]
+        if item is None or LINE_SEP in _txt0:
             _res = event.get_result()
             _chain = getattr(_res, "chain", None) if _res is not None else None
             _txt = mn_plain_text(_chain) if _chain else ""
@@ -304,8 +321,15 @@ async def mn_attach_hook(*args, **kwargs):
                 # ⚠️ 顺序很关键：**第一条真的发出去之后**才抑制正文 ✓
                 #   否则一旦发送失败，她就一个字都发不出去（本鱼第一版就是这个顺序，已改）。
                 _sent = 0
+                _at0 = At(qq=item[0], name=item[1]) if item else None
+                if item:
+                    # 有 @ 排队：真 At 由上面的 _at0 负责 ✓ —— 正文里手打的一律清掉 ✓
+                    _clean0 = MN_AT_LITERAL.sub("", _txt)
+                    if item[1]:
+                        _clean0 = re.sub(r"^\s*@" + re.escape(str(item[1])) + r"\s*", "", _clean0)
+                    _parts = mn_split_lines(_clean0) or _parts
                 for _i, _p in enumerate(_parts):
-                    _c2 = mn_line_chain(_p)
+                    _c2 = mn_line_chain(_p, _at0 if _i == 0 else None)
                     if _c2 is None:
                         logger.warning("[mindscape_mention] 拆气泡失败: 拿不到 MessageChain")
                         break
@@ -315,8 +339,8 @@ async def mn_attach_hook(*args, **kwargs):
                     _sent += 1
                     if _i < len(_parts) - 1:
                         await asyncio.sleep(MN_LINE_GAP)
-                logger.info("[mindscape_mention] 按 %s 拆成 %d 条发出 self=%s",
-                            LINE_SEP, _sent, event.get_self_id())
+                logger.info("[mindscape_mention] 按 %s 拆成 %d 条发出 self=%s（首条带@=%s）",
+                            LINE_SEP, _sent, event.get_self_id(), bool(item))
                 return
         if item is None and said is None:
             return
