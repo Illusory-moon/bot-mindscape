@@ -38,7 +38,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.core.message.components import Image
 
 import mindscape_config as cfg
-from mindscape_core import scope_hit, scope_warn
+from mindscape_core import scope_hit, scope_warn, sys_tag
 
 VS_MARK = "这一轮的消息里带了图"
 VS_LARGE_IMAGE_BYTES = 2_000_000
@@ -99,6 +99,7 @@ def vs_attach(request, text, mark):
         request.extra_user_content_parts = parts
     if mark in old or any(mark in str(getattr(p, "text", "")) for p in parts):
         return False
+    text = sys_tag(text)          # 来源标记贴末尾 ✓（不碰开头的记号 ✓）
     try:
         from astrbot.core.agent.message import TextPart
         parts.append(TextPart(text=text))

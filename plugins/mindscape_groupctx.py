@@ -31,7 +31,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.core.provider.entities import ProviderRequest
 
 import mindscape_config as cfg
-from mindscape_core import scope_hit, scope_warn, is_platform_command
+from mindscape_core import (is_platform_command, scope_hit, scope_warn, strip_invisible, sys_tag)
 
 # 与 patches/astrbot 里补丁的落盘路径一致（补丁硬编码了这个绝对路径）
 DEFAULT_BUFFER = "/opt/astrbot/data/group_ctx_buffer.jsonl"
@@ -369,8 +369,8 @@ class GroupctxMixin:
                     tag = " ".join("［附件%d］" % img_no[ref2path[str(x)]]
                                    for x in (r.get("imgs") or []) if str(x) in ref2path)
                     lines.append("[" + time.strftime("%H:%M:%S", time.localtime(float(r.get("ts") or now)))
-                                 + "] " + str(r.get("who", "?"))[:16] + ": "
-                                 + str(r.get("text", ""))[:200]
+                                 + "] " + strip_invisible(str(r.get("who", "?")))[:16] + ": "
+                                 + strip_invisible(str(r.get("text", "")))[:200]
                                  + (("  " + tag) if tag else ""))
             if hist_imgs:
                 lines.append("")
@@ -399,12 +399,12 @@ class GroupctxMixin:
                 if parts is None:
                     parts = []
                     request.extra_user_content_parts = parts
-                parts.append(TextPart(text=chr(10).join(lines)))
+                parts.append(TextPart(text=sys_tag(chr(10).join(lines))))
             except Exception as e:
                 # 兜底：宁可费钱，不可丢上下文 ✓ —— 但要打警告 ✗（不然缓存没救回来都不知道 ✓）
                 logger.warning("[mindscape_groupctx] 挂 extra_user_content_parts 失败（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
                 request.system_prompt = ((request.system_prompt or "") + chr(10)
-                                         + chr(10).join(lines))
+                                         + sys_tag(chr(10).join(lines)))
             if hist_imgs:
                 try:
                     urls = getattr(request, "image_urls", None)

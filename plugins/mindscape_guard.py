@@ -17,6 +17,7 @@ from astrbot.api import logger, star
 from astrbot.api.event import AstrMessageEvent, filter
 
 import mindscape_config as cfg
+from mindscape_core import strip_invisible
 from mindscape_gate import pg_audit, pg_config, pg_private, pg_redact, pg_secret_in
 
 # 默认拦截特征（可在配置里覆盖）
@@ -319,6 +320,24 @@ class GuardMixin:
         n = self._ms_arm_send_guard()
         if n:
             logger.info("[mindscape_guard] send 级兜底补装 %d 个类", n)
+
+    @filter.on_llm_request(priority=20)
+    async def ms_scrub_invisible(self, event: AstrMessageEvent, request):
+        """把**本轮正文**里的零宽 / 双向控制符剥掉 ✓（能让显示的样子与实际内容不一致、藏指令 ✗）。
+
+        ⚠️ 只碰「本轮」（`request.prompt` = 当前这条消息）✗ —— **历史一个字都不动** ✓：
+        那是缓存的地基，改了它整段前缀就变、命中全废 ✗（主人 2026-10-10 特别叮嘱 ✓）。
+        """
+        try:
+            raw = getattr(request, "prompt", None)
+            if isinstance(raw, str) and raw:
+                clean = strip_invisible(raw)
+                if clean != raw:
+                    request.prompt = clean
+                    logger.info("[mindscape_guard] 本轮正文剥掉不可见字符: %d -> %d 字 | bot=%s",
+                                len(raw), len(clean), event.get_self_id())
+        except Exception as e:
+            logger.warning("[mindscape_guard] 清洗不可见字符失败: %s", str(e)[:120])
 
     @filter.on_decorating_result(priority=999)
     async def block_error(self, event: AstrMessageEvent):

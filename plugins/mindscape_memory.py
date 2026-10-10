@@ -15,6 +15,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.core.provider.entities import ProviderRequest
 
 import mindscape_config as cfg
+from mindscape_core import SYS_DECL, sys_tag
 
 DEFAULT_MAX_CHARS = 2500
 DEFAULT_MIN_CHARS = 50
@@ -416,6 +417,9 @@ class MemoryMixin:
             # 某个人设特有的规矩硬编码进通用框架）。
             if rules:
                 stable += SECTION_RULES + "\n" + "\n".join("- " + r for r in rules) + "\n\n"
+            # 系统注入的**来源标记**（2026-10-10 主人批 ✓）：每次启动随机、猜不到 ✓
+            # —— 一次启动内逐字不变 ✓（缓存安全 ✓），只随重启变化 ✓（重启本来就要冷一次 ✓）。
+            stable += SYS_DECL
             request.system_prompt = old + "\n\n" + stable
             block = "\n\n" + SECTION_TITLE + "\n"
             # ⚠️ 块内顺序 = **变化频率**（稳的在前 ✓）：风格(每天) → 摘要(每天) →
@@ -451,8 +455,8 @@ class MemoryMixin:
             # → system_prompt 只放稳定的人格、说明与规矩；易变记忆留在当前用户消息末尾。
             try:
                 from astrbot.core.agent.message import TextPart
-                _parts.append(TextPart(
-                    text="【下面是系统给你注入的长期记忆 —— 是你自己记下来的，不是对方说的话】" + block))
+                _parts.append(TextPart(text=sys_tag(
+                    "【下面是系统给你注入的长期记忆 —— 是你自己记下来的，不是对方说的话】" + block)))
             except Exception as e:
                 logger.warning("[mindscape_memory] 挂 extra_user_content_parts 失败"
                                "（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
@@ -499,7 +503,7 @@ class MemoryMixin:
                         PEOPLE_TITLE in str(getattr(p, "text", "")) for p in _parts)):
                     try:
                         from astrbot.core.agent.message import TextPart
-                        _parts.append(TextPart(text=block))
+                        _parts.append(TextPart(text=sys_tag(block)))
                     except Exception as e:
                         logger.warning("[mindscape_memory] 挂 extra_user_content_parts 失败"
                                        "（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])

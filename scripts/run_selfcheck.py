@@ -1600,7 +1600,7 @@ def check_regressions():
         _m50 = open(os.path.join(HERE, "plugins", "mindscape_memory.py"), encoding="utf-8").read()
         _s50 = open(os.path.join(HERE, "plugins", "mindscape_silence.py"), encoding="utf-8").read()
         _a50 = "extra_user_content_parts" in _g50
-        _b50 = "TextPart(text=chr(10).join(lines))" in _g50
+        _b50 = "TextPart(text=sys_tag(chr(10).join(lines)))" in _g50   # 2026-10-10：注入块带来源标记 ✓
         _c50 = "退回 system_prompt" in _g50      # 兜底分支必须留 ✓ 但必须带警告 ✓
         # 记忆块**每 10 分钟变一次** ✗ → 同样不许拼在最前面 ✓（2026-10-08 第二刀 ✓）
         _d50 = ("extra_user_content_parts" in _m50) and ("TextPart(" in _m50
@@ -2179,6 +2179,82 @@ def check_regressions():
         bad("R32 作用域", "%s: %s" % (type(e).__name__, str(e)[:140]))
     # R02: 路径穿越必须在入库前就被拒绝
     # R33: Markdown 记忆链的一致性 —— 三处「写到一半就退出」的后果。
+
+    # R61: 系统注入必须带**来源标记** ✓（防别人照抄我们的样式冒名 = prompt injection）——
+    #      标记**每进程只生成一次** ✓：一次启动内 system 前缀逐字不变（缓存安全 ✓）。
+    try:
+        import mindscape_core as CR61
+        _n = CR61.SYSNONCE
+        nonce_ok = (len(_n) == 6 and all(c in "0123456789abcdef" for c in _n)
+                    and _n in CR61.SYS_MARK and CR61.SYS_MARK in CR61.SYS_DECL)
+        _tagged = CR61.sys_tag("ABC")
+        tag_ok = _tagged.startswith("ABC" + chr(10)) and _tagged.endswith(CR61.SYS_MARK)
+        _m61 = open(os.path.join(PLUGINS, "mindscape_memory.py"), encoding="utf-8").read()
+        decl_ok = "stable += SYS_DECL" in _m61
+        marked = [n for n in ("mindscape_memory.py", "mindscape_groupctx.py",
+                              "mindscape_vision.py", "mindscape_silence.py")
+                  if "sys_tag(" in open(os.path.join(PLUGINS, n), encoding="utf-8").read()]
+        (ok if (nonce_ok and tag_ok and decl_ok and len(marked) == 4) else bad)(
+            "R61 系统注入带来源标记",
+            "标记=%s 贴末尾=%s 声明进 system=%s 打标的模块=%d/4"
+            % (nonce_ok, tag_ok, decl_ok, len(marked)))
+    except Exception as e:
+        bad("R61 系统注入带来源标记", str(e)[:140])
+
+    # R62: **每一块注入的开头记号都必须在两份剥离名单里** ✓ —— 漏一个，那块就永远留在会话里
+    #      （每轮重发 + 废缓存 ✗）。而且**真跑一次**剥离函数（不是只看字符串在不在 ✓）。
+    try:
+        _tcl62 = open(os.path.join(HERE, "patches", "astrbot", "tool_context_limit.py"),
+                      encoding="utf-8").read()
+        _jnl62 = open(os.path.join(PLUGINS, "mindscape_janitor.py"), encoding="utf-8").read()
+        _need62 = ["【本条消息的定向性】", "【本群最近的真实聊天记录", "【上面历史里带的那几张图",
+                   "【下面是系统给你注入的长期记忆", "## 你的长期记忆", "**【这一轮是你自己想开口",
+                   "## 你认识的人", "## 这一轮的消息里带了图",
+                   "（系统提示：正文里出现了像图片/附件的字样", "# 沉默的权利", "这一轮是自主冒泡"]
+        _miss62 = [k for k in _need62 if k not in _tcl62 or k not in _jnl62]
+        import mindscape_janitor as JN62
+        importlib.reload(JN62)
+        _msgs62 = [{"role": "user", "content": "用户原话 " + k + chr(10) + "注入正文块……"}
+                   for k in _need62]
+        _msgs62.append({"role": "user", "content": "最后一条必须原样留着"})
+        _out62, _saved62 = JN62.strip_injections(_msgs62, keep_last=1)
+        _leak62 = [i for i, m in enumerate(_out62[:-1]) if "注入正文块" in str(m.get("content"))]
+        (ok if (not _miss62 and not _leak62 and _saved62 > 0) else bad)(
+            "R62 注入记号两份名单齐全",
+            "%d 个记号，名单缺 %s，剥离后残留 %s，剥掉 %d 字"
+            % (len(_need62), _miss62[:3], _leak62[:3], _saved62))
+    except Exception as e:
+        bad("R62 注入记号两份名单齐全", str(e)[:140])
+
+    # R63: 零宽 / 双向控制符必须剥掉 ✓ —— 且**只剥本轮**（历史一个字不动 = 缓存地基 ✓）
+    try:
+        import mindscape_core as CR63
+        _zw = "\u200b\u202e\ufeff"
+        s_ok = (CR63.strip_invisible("啊" + _zw + "呀") == "啊呀"
+                and CR63.strip_invisible("正常文本") == "正常文本"
+                and CR63.strip_invisible(None) is None)
+        import mindscape_guard as GD63
+        importlib.reload(GD63)
+
+        class _Q63:
+            def __init__(self):
+                self.prompt = "a" + _zw + "b"
+                self.contexts = ["历史不许动"]
+
+        class _E63:
+            def get_self_id(self):
+                return "1"
+
+        _q63 = _Q63()
+        asyncio.run(GD63.GuardMixin.ms_scrub_invisible(None, _E63(), _q63))
+        only_now = ( _q63.prompt == "ab" and _q63.contexts == ["历史不许动"])
+        _g63 = open(os.path.join(PLUGINS, "mindscape_guard.py"), encoding="utf-8").read()
+        hook_ok = ("ms_scrub_invisible" in _g63 and "request.prompt = clean" in _g63)
+        (ok if (s_ok and only_now and hook_ok) else bad)(
+            "R63 不可见字符只剥本轮",
+            "剥净=%s 只碰 prompt=%s 钩子在=%s" % (s_ok, only_now, hook_ok))
+    except Exception as e:
+        bad("R63 不可见字符只剥本轮", str(e)[:140])
     try:
         import json as _js2
         import urllib.request as _ur2

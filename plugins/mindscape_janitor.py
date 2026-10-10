@@ -256,6 +256,12 @@ INJECT_MARKERS = (
     "【下面是系统给你注入的长期记忆",          # mindscape_memory
     "## 你的长期记忆",                        # mindscape_memory（SECTION_TITLE）
     "**【这一轮是你自己想开口",                # mindscape_memory（cron 轮）
+    # ⚠️ 2026-10-10 补齐 ✓：漏一个记号 = 那块永远留在会话里（每轮重发 + 废缓存 ✗）→ 自检 R62 守着 ✓
+    "## 你认识的人",                          # mindscape_memory（人物画像）
+    "## 这一轮的消息里带了图",                # mindscape_vision（有图提醒）
+    "（系统提示：正文里出现了像图片/附件的字样",  # mindscape_vision（假图标注）
+    "# 沉默的权利",                           # mindscape_silence（回复轮）
+    "这一轮是自主冒泡",                       # mindscape_silence（冒泡轮）
 )
 
 
