@@ -1782,6 +1782,39 @@ def check_regressions():
     except Exception as e:
         bad("R44 救援带人格", str(e)[:140])
 
+    # R64: 记账**不许把这一轮结束掉** ✓（2026-10-10 主人报「两次 @ 她没回复」✗ 实测两起：21:52 / 22:00）——
+    #      save_note 成功若返 None ✗，框架**直接 DONE**（tool_loop_agent_runner 的 `elif resp is None` ✗）
+    #      → 她若把「顺手记一笔」当最后一步（正文只有 think、没有 text ✓ 实测如此 ✗），这一轮就以
+    #      **空回复**收场 ✗ → respond.stage 判「The message is empty」→ 群里静悄悄 ✗；而
+    #      on_llm_response 在这种轮次**根本不派发** ✗ → rescue 结构性看不见 ✗。所以必须回一句 ✓。
+    #      这里**真调一次** save_note（临时目录 + 假 event ✓ 不是只看源码里有没有那行字 ✓）。
+    try:
+        import mindscape_notes as NT64
+        importlib.reload(NT64)
+        import tempfile as _tf64
+
+        class _E64:
+            def get_self_id(self):
+                return "999999"
+
+        _d64 = _tf64.mkdtemp(prefix="ms_r64_")
+        _orig64 = NT64.notes_path
+        NT64.notes_path = lambda sid: os.path.join(_d64, "notes.md")
+        try:
+            _r1 = asyncio.run(NT64.save_note(_E64(), key="测试", value="值（来源：甲）"))
+            _r2 = asyncio.run(NT64.save_note(_E64(), key="测试", value="值（来源：甲）"))
+            _r3 = asyncio.run(NT64.save_note(_E64(), key="", value=""))
+        finally:
+            NT64.notes_path = _orig64
+        _a64 = isinstance(_r1, str) and _r1.strip() != ""        # 首次写入：必须回一句 ✓
+        _b64 = isinstance(_r2, str) and "刚刚记过" in _r2         # 重复：回「不用再记」✓
+        _c64 = isinstance(_r3, str) and _r3.strip() != ""         # 空参数：回提示 ✓
+        (ok if (_a64 and _b64 and _c64) else bad)(
+            "R64 记账不许把这一轮结束掉",
+            "首次=%r 重复=%r 空参=%r" % (str(_r1)[:26], str(_r2)[:26], str(_r3)[:26]))
+    except Exception as e:
+        bad("R64 记账不许把这一轮结束掉", str(e)[:140])
+
     # R45: 账本重复记账必须拦住（实测她 12 秒把**同一条**记了 6 遍 ✗ → 白烧 6 轮、那一轮卡 24 秒 ✗）
     try:
         import mindscape_notes as NT5

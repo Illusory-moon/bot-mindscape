@@ -2127,11 +2127,19 @@ async def save_note(*args, **kwargs):
             return "这条你**刚刚记过**了，不用再记 —— 直接回答就行。"
         write_notes(path, new_text)
         logger.info("[mindscape_notes] %s 记下 %s", sid, key)
-        # ★ ①（2026-10-09 主人批 ✓）：**成功就返回 None** ✗ —— 账已经记进去了 ✓
-        #   没必要再让模型看一句「记下了」✓ 那会白花一整轮完整上下文的请求 ✗
-        #   （框架对 None 直接 DONE ✓ 见 tool_loop_agent_runner 的 elif resp is None 分支 ✓）
-        #   失败/提示类**照旧返回** ✓ —— 与 say_lines 同一套顺序纪律 ✓
-        return None
+        # ⚠️ 2026-10-10 反案（主人当天报「两次 @ 她没回复」✓ 实测两起：21:52 / 22:00 ✗）：
+        #   原先这里 `return None`（2026-10-09 ★① 主人批，为省一轮请求 ✗）—— 但框架对 None
+        #   **直接 DONE** ✗（tool_loop_agent_runner 的 `elif resp is None` 分支 ✓）→ 她若把
+        #   「顺手记一笔」当成**最后一步**（正文只有 think、没有 text ✓ 实测正是如此 ✗），
+        #   这一轮就**以一个空回复结束** ✗ → respond.stage 判「The message is empty」→
+        #   群里静悄悄 ✗（她以为记下就算答了 ✓）。
+        #   ⚠️ 而 `on_llm_response` 在**有工具调用的轮次根本不派发** ✗（只在「无工具调用的
+        #   终止步」派发 ✓ —— 所以 trace 的「完成」行也不出现 ✓）→ `mindscape_rescue` 是
+        #   **结构性看不见**这种轮次的 ✗（挂 decorating 也来不及：那一步跑在工具执行**之前** ✓
+        #   没法知道接下来要调什么 ✗）。⇒ 只能在这里把话头交回去 ✓。
+        #   代价：+1 轮请求 ✓ 但前缀已缓存（实测 miss≈百 token / hit≈万 ✗）≈ ¥0.001 量级 ✓。
+        #   失败/提示类照旧返回字符串 ✓ —— 与 say_lines 同一套顺序纪律 ✓
+        return "已记入账本（不用再记一遍）。接着把要说的话说完。"
     except Exception as e:
         logger.warning("[mindscape_notes] 记账失败: %s", str(e)[:120])
         return "这本账我一时写不进去，先记在心里。"
