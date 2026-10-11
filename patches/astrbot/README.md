@@ -160,3 +160,16 @@ docker exec qqbot-astrbot /opt/astrbot/.venv/bin/python -c \
 如果你用的不是 AstrBot，思路是一样的：
 找到「消息分发前决定是否处理」的那个阶段，把同样的判定逻辑插进去。
 本项目提供的是**策略设计**和**参考实现**。
+
+## 同目录还有：另外几处框架补丁（2026-10-12 清点）
+
+| 补丁 | 应用器 / 依据 | 说明 |
+|---|---|---|
+| 唤醒策略 | `install.py` + `waking_sites.json` | 就是本文档上半部分 |
+| tool 结果体量 · 缓存前缀指纹 · 用量日志 | `tool_context_limit.py`、`cache_prefix_fingerprint.py`、`cache_usage_log.py` | 见 `2026-10-09-tool-result-size.md` |
+| **cron 节奏 + cron 轮上下文 + 火花号人格路由** | `cron_sites.json`、`persona_sites.json` | 见 `2026-10-12-cron-persona-patches.md`（**补档**：此前只活在容器里）|
+
+> ⚠️ 所有框架补丁都打在**容器可写层**（不在任何挂载中）⇒ **删容器重建就丢**。
+> 核验一律走 `docker cp` 取出容器内那份 + 对应脚本的 `check`
+> （`sftp` / 宿主机 `/opt/astrbot/.venv/...` 拿到的是**另一份文件**，不是同一个 ✗）。
+> 自检 **R73** 守着 `cron_sites.json` / `persona_sites.json` 的自洽性。

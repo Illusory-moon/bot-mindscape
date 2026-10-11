@@ -1680,6 +1680,39 @@ def check_regressions():
     except Exception as e:
         bad("R72 工具标记泄漏要拦下", str(e)[:140])
 
+    # R73: 两处「只活在容器里」的框架补丁，必须留下**能逐字节重建**的依据 ✓（2026-10-12 补档）——
+    #      `cron/manager.py`（冒泡闸门 + 按任务 jitter + cron 轮 self_id 修正 + cron 轮补
+    #      OnLLMRequestEvent 派发）与 `persona_mgr.py`（火花号强制 sparxie 人格）此前只存在于
+    #      容器可写层，**删容器重建就全没了** ✗。现在留「底本 md5 + 站点表」，
+    #      用 scripts/wake_stage_apply.py 就能重建并核验
+    #      （见 patches/astrbot/2026-10-12-cron-persona-patches.md）。
+    #      这里**不提交框架文件** ✓，所以只验**站点表自身的算术自洽**：
+    #          线上行数 == 底本行数 − 被替换掉的行数 + 新增的行数
+    #      （表格被改坏或抄错时，这条立刻红 ✓）
+    try:
+        import json as _j73
+        _p73 = os.path.join(HERE, "patches", "astrbot")
+        _rows73, _bad73 = [], 0
+        for _n73 in ("cron_sites.json", "persona_sites.json"):
+            _d73 = _j73.load(open(os.path.join(_p73, _n73), encoding="utf-8"))
+            _s73 = _d73.get("sites") or []
+            _rm73 = sum(int(s.get("i2", 0)) - int(s.get("i1", 0)) for s in _s73)
+            _add73 = sum(len(s.get("new") or []) for s in _s73)
+            _calc73 = int(_d73.get("base_lines", 0)) - _rm73 + _add73
+            _this73 = (len(_s73) > 0 and bool(_d73.get("base_md5"))
+                       and bool(_d73.get("live_md5"))
+                       and _calc73 == int(_d73.get("live_lines", -1)))
+            _bad73 += 0 if _this73 else 1
+            _rows73.append("%s 站%d %d→%d %s" % (_n73, len(_s73), _d73.get("base_lines", 0),
+                                                 _d73.get("live_lines", 0),
+                                                 "✓" if _this73 else "✗算术不符"))
+        _doc73 = os.path.exists(os.path.join(_p73, "2026-10-12-cron-persona-patches.md"))
+        (ok if (_bad73 == 0 and _doc73) else bad)(
+            "R73 框架补丁站点表自洽",
+            "%s｜补档文档=%s" % ("；".join(_rows73), _doc73))
+    except Exception as e:
+        bad("R73 框架补丁站点表自洽", str(e)[:140])
+
     # R67: 资料库的工具说明必须提到**战斗常识**这一层（2026-10-11 主人批的块 4）——
     #      同 R66 的道理：**不写进说明书，她就想不到来查** ✓。
     try:
