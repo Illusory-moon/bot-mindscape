@@ -144,24 +144,85 @@ def _entry(fname, category, name, tags, desc):
     }
 
 
+def _seen_path(index_path):
+    """去重表的位置：配置里的 stickers.seen 优先，否则取索引同目录的 seen.json。"""
+    if cfg:
+        p = _abs((cfg.section("stickers") or {}).get("seen") or "")
+        if p:
+            return p
+    return os.path.join(os.path.dirname(os.path.abspath(index_path)), "seen.json")
+
+
+def _register_seen(index_path, out_dir, entries):
+    """把刚入库的图登记进去重表（accepted 键 = `分类:内容md5`）。
+
+    为什么必须登记：插件判「这张图处理过没有」用的是**内容 md5**，而导入脚本从前
+    只写索引、不写这张表 —— bot 后来收到同一张图时认为没见过，重新判定、再用自己的
+    命名（`<md5 前 10 位>.ext`）存一份，于是图库里出现两张内容相同、名字不同的图。
+    2026-10-12 在主人的库上实测到 6 组这种重复，其中 `28e6b2a9aa.gif` 与
+    `sparxie_28e6b2a9aa.gif` **两条条目同时在库**（`--prefix` 那条来自本脚本）。
+    登记之后这条路径就闭合了；改动落在索引锁内，不会与在线采集互相覆盖。
+    """
+    if not entries:
+        return 0
+    p = _seen_path(index_path)
+    try:
+        with open(p, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        d = {}
+    if isinstance(d, dict):
+        acc = [str(k) for k in (d.get("accepted") or [])]
+        rej = [str(k) for k in (d.get("rejected") or [])]
+    elif isinstance(d, list):          # 旧平表：来源分不清，先全部按入库列
+        acc, rej = [str(k) for k in d], []
+    else:
+        acc, rej = [], []
+    have = set(acc) | set(rej)
+    added = 0
+    for it in entries:
+        fn = str(it.get("file") or "")
+        fp = os.path.join(out_dir, fn)
+        if not fn or not os.path.exists(fp):
+            continue
+        k = "%s:%s" % (it.get("category") or "", _md5(fp))
+        if k not in have:
+            acc.append(k)
+            have.add(k)
+            added += 1
+    if not added:
+        return 0
+    tmp = p + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"accepted": sorted(set(acc)), "rejected": sorted(set(rej))}, f)
+        os.replace(tmp, p)
+    except Exception as e:
+        print("  [警告] 去重表登记失败（索引已写入）: %s" % str(e)[:60])
+        return 0
+    print("  去重表登记 %d 条 -> %s" % (added, p))
+    return added
+
+
 def _commit(index_path, out_dir, new_entries):
-    """加锁 → 重读最新索引 → 合并 → 原子写。"""
+    """加锁 → 重读最新索引 → 合并 → 原子写 → 登记去重表。"""
     with IndexLock(index_path):
         idx = load_index(index_path)
         if idx is None:
             print("  [错误] 索引文件损坏，已中止（不会覆盖）")
             return 0
         have = {(x.get("category"), x.get("file")) for x in idx}
-        added = 0
+        added_entries = []
         for it in new_entries:
             key = (it.get("category"), it.get("file"))
             if key in have:
                 continue
             idx.append(it)
             have.add(key)
-            added += 1
+            added_entries.append(it)
         save_index(index_path, idx)
-        return added
+        _register_seen(index_path, out_dir, added_entries)
+        return len(added_entries)
 
 
 def from_dir(src, out_dir, index_path, category, use_ai, jcfg, tags, prefix):

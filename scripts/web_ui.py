@@ -11,6 +11,7 @@
 安全说明：写操作要求同源 + 页面令牌；换 --host 对外监听时请自加认证。
 """
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -91,54 +92,132 @@ def seen_path():
     return _abs(s.get("seen") or os.path.join(stickers_dir(), "seen.json"))
 
 
-def load_seen():
+def load_seen_lists():
+    """读去重表，返回 (accepted, rejected)。
+
+    2026-10-12 修：插件早已把 seen.json 从「平表」升级成
+    {"accepted": [...], "rejected": [...]}（键 = `分类:内容md5`）。旧版管理台
+    只认平表 —— 遇到 dict 直接返回空表，于是去重表页**恒为空白**，而「清理墓碑」
+    拿到空表后会把整张 seen.json 写成 `[]`（等于清空去重表、让 bot 把见过的图
+    全部重判一遍）。这里两种格式都认；旧平表来源分不清，先一律按「入库」列。
+    """
     try:
         with open(seen_path(), encoding="utf-8") as f:
             d = json.load(f)
-        return [str(k) for k in d] if isinstance(d, list) else []
     except Exception:
-        return []
+        return [], []
+    if isinstance(d, dict):
+        return ([str(k) for k in (d.get("accepted") or [])],
+                [str(k) for k in (d.get("rejected") or [])])
+    if isinstance(d, list):
+        return [str(k) for k in d], []
+    return [], []
 
 
-def save_seen(keys):
+def load_seen():
+    """去重表里的全部键（入库 + 拒收）—— 旧接口，保留给别处用。"""
+    accepted, rejected = load_seen_lists()
+    return accepted + rejected
+
+
+def save_seen(accepted, rejected=None):
+    """写回去重表，**保持插件的 dict 格式**（写前留 .bak，原子替换）。"""
     import datetime
     import shutil
+    if rejected is None:              # 兼容旧签名 save_seen(keys)：全部算入库
+        accepted, rejected = accepted, []
     p = seen_path()
     if os.path.exists(p):
         shutil.copy2(p, p + ".bak-" + datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
     tmp = p + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(sorted(set(keys)), f)
+        json.dump({"accepted": sorted(set(str(k) for k in accepted)),
+                   "rejected": sorted(set(str(k) for k in rejected))}, f)
     os.replace(tmp, p)
+
+
+_LIVE_CACHE = {"sig": None, "keys": None}
+
+
+def live_seen_keys():
+    """图库里每张图的 `<分类>:<内容md5>` 集合 —— 判活口径与插件**完全一致**。
+
+    为什么不能用文件名前缀凑：导入脚本会生成 `sparxie_<md5前10位>.gif` 这种名字，
+    前缀不再是 md5，拿前缀匹配就会把真实存在的图误判成墓碑（插件源码
+    `mindscape_stickers._load_seen` 的注释专门记了这条教训）。
+    读不出来返回 None：调用方一律不标墓碑 —— 宁可不标，也不误删。
+    按索引 mtime + 大小缓存，避免每次刷新都重算一百多个文件的 md5。
+    """
+    ip = index_path()
+    try:
+        sig = (ip, os.path.getmtime(ip), os.path.getsize(ip), stickers_dir())
+    except Exception:
+        return None
+    if _LIVE_CACHE["sig"] == sig:
+        return _LIVE_CACHE["keys"]
+    keys = set()
+    try:
+        with open(ip, encoding="utf-8") as f:
+            idx = json.load(f)
+        d = stickers_dir()
+        for it in (idx if isinstance(idx, list) else []):
+            fn = str(it.get("file") or "")
+            if not fn:
+                continue
+            with open(os.path.join(d, fn), "rb") as fp:
+                keys.add("%s:%s" % (it.get("category") or "",
+                                    hashlib.md5(fp.read()).hexdigest()))
+    except Exception:
+        return None
+    _LIVE_CACHE["sig"] = sig
+    _LIVE_CACHE["keys"] = keys
+    return keys
 
 
 def seen_rows():
     """把去重表摊开给主人看。
 
-    bot 用它判断「这张图处理过了，别再折腾」。**删图库条目时它不会跟着删**，
-    于是留下一条墓碑：那张图再发一次也收不进来。这里把墓碑标出来，
-    既能单独解除（我想让它重新判一次），也能一键清理（删错了想收回来）。
+    表里是两类记录（插件 2026-09 起分开存）：
+      · accepted —— 真正入库过的图。**删图库条目时它不会跟着删**，于是留下墓碑；
+        但插件**下次启动会自愈清掉**墓碑（`mindscape_stickers._load_seen`），
+        所以「那张图再发也收不进来」只成立到下一次重启为止。
+      · rejected —— **明确拒绝**过的图（超尺寸 / 判定不相关），重启也保留；
+        这一类才是真的「再发也不收」。
+    判活按 `分类:内容md5`（同插件），不能用文件名前缀。
     """
-    keys = load_seen()
-    try:
-        with open(index_path(), encoding="utf-8") as f:
-            idx = json.load(f)
-    except Exception:
-        idx = []
-    name_of = {}
-    for it in (idx if isinstance(idx, list) else []):
-        fn = str(it.get("file") or "")
-        if fn:
-            name_of[str(it.get("category") or "") + ":" + fn[:10]] = \
-                str(it.get("name") or fn)
+    accepted, rejected = load_seen_lists()
+    live = live_seen_keys()
     rows = []
-    for k in keys:
-        cat, _, h = k.partition(":")
-        hit = name_of.get(cat + ":" + h[:10])
-        rows.append({"key": k, "cat": cat, "live": bool(hit),
-                     "label": hit or "已不在图库（墓碑）"})
-    rows.sort(key=lambda r: (r["live"], r["cat"], r["key"]))
+    for kind, keys in (("accepted", accepted), ("rejected", rejected)):
+        for k in keys:
+            cat = k.partition(":")[0]
+            if kind == "rejected":
+                state, label = "rejected", "拒收（重启也保留）"
+            elif live is None:
+                state, label = "unchecked", "入库（图库读不出来，未核对）"
+            elif k in live:
+                state, label = "live", "入库"
+            else:
+                state, label = "tomb", "墓碑（图不在图库，插件重启即清）"
+            rows.append({"key": k, "cat": cat, "kind": kind, "state": state,
+                         "live": state != "tomb", "label": label})
+    rows.sort(key=lambda r: (r["state"] != "tomb", r["cat"], r["key"]))
     return rows
+
+
+def prune_seen_plan():
+    """「清理墓碑」到底该写成什么：只删 accepted 里对不上图库的。
+
+    rejected（明确拒绝）重启也保留，**不能**当墓碑删掉；图库/索引读不出来时返回
+    None —— 宁可这次不删，也不能拿一份不可信的判活结果去改表。
+    返回 (accepted, rejected, removed)。
+    """
+    accepted, rejected = load_seen_lists()
+    live = live_seen_keys()
+    if live is None:
+        return None
+    kept = [k for k in accepted if k in live]
+    return kept, rejected, len(accepted) - len(kept)
 
 
 def read_text(path, limit=None):
@@ -703,8 +782,10 @@ table.seen button:hover{{border-color:#e85a9b}}
 <button onclick="pruneSeen()">清理墓碑</button>
 <span class="msg" id="kmsg"></span>
 </div>
-<p class="hint">bot 靠这张表判断「这张图处理过了」。共 <b>{seencount}</b> 条，
-其中 <b>{stale}</b> 条已不在图库（<b>墓碑</b>）—— 它们会让那张图再发也收不进来。</p>
+<p class="hint">bot 靠这张表判断「这张图处理过了」。共 <b>{seencount}</b> 条
+（入库 <b>{livecount}</b> / 拒收 <b>{rejcount}</b>），其中 <b>{stale}</b> 条是<b>墓碑</b>
+（图已不在图库）—— 插件<b>下次启动会自愈清掉</b>它们，所以「再发也收不进来」只成立到
+重启为止；长期真的拦着不收的是<b>拒收</b>那一类（重启也保留）。</p>
 <table class="seen">{seenrows}</table>
 </div>
 
@@ -814,7 +895,9 @@ def render():
                   if sync_settings.get("restart_command") else
                   "同步后需手动重启 bot 才会生效。服务器配置与唤醒设置会分别备份。")
     srows = seen_rows()
-    stale_n = sum(1 for r in srows if not r["live"])
+    stale_n = sum(1 for r in srows if r["state"] == "tomb")
+    live_n = sum(1 for r in srows if r["kind"] == "accepted")
+    rej_n = sum(1 for r in srows if r["kind"] == "rejected")
     seenrows = "".join(
         '<tr%s data-k="%s"><td><code>%s</code></td><td>%s</td>'
         '<td style="text-align:right"><button onclick="rmSeen(this)">移除</button></td></tr>'
@@ -825,7 +908,8 @@ def render():
                        token=TOKEN, syncmsg=html.escape(syncmsg),
                        restartmsg=html.escape(restartmsg),
                        gdir=html.escape(stickers_dir()), gcount=gcount,
-                       seencount=len(srows), stale=stale_n, seenrows=seenrows)
+                       seencount=len(srows), stale=stale_n, seenrows=seenrows,
+                       livecount=live_n, rejcount=rej_n)
     # JS 走占位符注入，不进 str.format —— 否则 JS 里每个花括号都要手写双份
     return page.replace("__JS__", JS.replace("@@TOKEN@@", TOKEN)
                                  .replace("@@ITEMS@@", items_js))
@@ -1033,19 +1117,27 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "error": "参数不是合法 JSON"})
                 return
             k = str(d.get("key") or "")
-            keys = load_seen()
-            if k not in keys:
+            accepted, rejected = load_seen_lists()
+            if k in accepted:
+                accepted, kind = [x for x in accepted if x != k], "入库"
+            elif k in rejected:
+                rejected, kind = [x for x in rejected if x != k], "拒收"
+            else:
                 self._json({"ok": False, "error": "去重表里没有这条"})
                 return
-            save_seen([x for x in keys if x != k])
-            self._json({"ok": True, "message": "已解除"})
+            save_seen(accepted, rejected)
+            self._json({"ok": True, "message": "已解除%s记录：%s" % (kind, k)})
             return
 
         if path == "/api/seen/prune":
-            dead = [r["key"] for r in seen_rows() if not r["live"]]
-            keys = load_seen()
-            save_seen([x for x in keys if x not in set(dead)])
-            self._json({"ok": True, "message": "清掉 %d 条墓碑" % len(dead)})
+            plan = prune_seen_plan()
+            if plan is None:
+                self._json({"ok": False, "error": "读不到图库/索引，为了安全不清墓碑"})
+                return
+            accepted, rejected, removed = plan
+            save_seen(accepted, rejected)
+            self._json({"ok": True, "message": "清掉 %d 条墓碑；拒收记录 %d 条原样保留"
+                                                % (removed, len(rejected))})
             return
 
         if path.startswith("/api/sync/"):

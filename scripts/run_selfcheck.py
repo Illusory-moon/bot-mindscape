@@ -1588,6 +1588,57 @@ def check_regressions():
     except Exception as e:
         bad("R68 资料库说明含当期", str(e)[:140])
 
+    # R69: 管理台的去重表必须按「插件的 dict 格式 + 内容 md5」判活 ✓（2026-10-12 修）——
+    #      旧版只认平表：遇到 dict 就返回空表 ⇒ 去重表页**恒为空白**，而「清理墓碑」
+    #      拿到空表后会把整张 seen.json 写成 `[]`，**连 rejected 一起删**（rejected 是
+    #      「明确拒绝」，插件重启也保留，删了那张图就会被反复重判、白烧 API）✗。
+    #      判活也不能用文件名前缀凑：导入脚本会产 `sparxie_<md5前10位>.gif` ✗
+    #      （插件 mindscape_stickers 的注释专门记过这条教训）。
+    try:
+        _r69 = open(os.path.join(HERE, "scripts", "web_ui.py"), encoding="utf-8").read()
+        _a69 = 'd.get("accepted")' in _r69 and 'd.get("rejected")' in _r69
+        _b69 = "def live_seen_keys" in _r69 and "hashlib.md5" in _r69
+        _c69 = "def prune_seen_plan" in _r69 and "[k for k in accepted if k in live]" in _r69
+        _d69 = "def load_seen_lists" in _r69
+        _e69 = "prefix" not in _r69.split("def live_seen_keys")[1][:1200]
+        (ok if (_a69 and _b69 and _c69 and _d69 and _e69) else bad)(
+            "R69 去重表按 dict+内容md5",
+            "认dict=%s 内容md5=%s 只清accepted=%s 有读取器=%s 不用前缀=%s"
+            % (_a69, _b69, _c69, _d69, _e69))
+    except Exception as e:
+        bad("R69 去重表按 dict+内容md5", str(e)[:140])
+
+    # R70: 图库导入必须登记去重表 ✓（2026-10-12 修）——
+    #      只写索引、不写 `分类:内容md5`：bot 后来收到同一张图会认为「没见过」，
+    #      重新判定、再用自己的命名存一份 ⇒ 图库里出现同内容不同名的两条
+    #      （在主人的库上实测 6 组，其中两组条目同时在库）✗。
+    try:
+        _r70 = open(os.path.join(HERE, "scripts", "import_stickers.py"), encoding="utf-8").read()
+        _a70 = "def _register_seen" in _r70
+        _b70 = "_register_seen(index_path, out_dir, added_entries)" in _r70
+        _seg70 = _r70.split("def _register_seen")[1][:1500] if _a70 else ""
+        _c70 = "_md5(fp)" in _seg70 and '"accepted"' in _seg70
+        (ok if (_a70 and _b70 and _c70) else bad)(
+            "R70 导入登记去重表",
+            "有函数=%s 入库后调用=%s 写accepted=%s" % (_a70, _b70, _c70))
+    except Exception as e:
+        bad("R70 导入登记去重表", str(e)[:140])
+
+    # R71: 插件判「这张图处理过没有」必须把**图库现有的**也算进去 ✓（2026-10-12 修）——
+    #      去重键是 `分类:内容md5`，所以跨分类收同一张图不受影响（那是设计允许的）。
+    #      只认表里那几条时，手工/脚本放进图库的图会被当成「没见过」→ 再收一次就多一条
+    #      同内容不同名的重复。同时守住「启动自愈清墓碑」这条老规矩别被弄丢。
+    try:
+        _r71 = open(os.path.join(PLUGINS, "mindscape_stickers.py"), encoding="utf-8").read()
+        _a71 = "return self.seen_ok | self.seen_no | live" in _r71
+        _b71 = "清掉 %d 条墓碑" in _r71
+        _c71 = "self.seen_ok = set(k for k in acc if k in live)" in _r71
+        (ok if (_a71 and _b71 and _c71) else bad)(
+            "R71 图库现有的也算处理过",
+            "dedup含live=%s 墓碑自愈在=%s 判活在=%s" % (_a71, _b71, _c71))
+    except Exception as e:
+        bad("R71 图库现有的也算处理过", str(e)[:140])
+
     # R67: 资料库的工具说明必须提到**战斗常识**这一层（2026-10-11 主人批的块 4）——
     #      同 R66 的道理：**不写进说明书，她就想不到来查** ✓。
     try:
