@@ -105,23 +105,25 @@ def load_seen_lists():
         with open(seen_path(), encoding="utf-8") as f:
             d = json.load(f)
     except Exception:
-        return [], []
+        return None, None          # 读不出来 ⇒ 不可信（调用方必须区分「坏了」与「空表」）
     if isinstance(d, dict):
         return ([str(k) for k in (d.get("accepted") or [])],
                 [str(k) for k in (d.get("rejected") or [])])
     if isinstance(d, list):
         return [str(k) for k in d], []
-    return [], []
+    return None, None              # 形状不认识 ⇒ 同样不可信
 
 
 def load_seen():
-    """去重表里的全部键（入库 + 拒收）—— 旧接口，保留给别处用。"""
+    """去重表里的全部键（入库 + 拒收）—— 旧接口，保留给别处用。读不出来就当空表（只读用途）。"""
     accepted, rejected = load_seen_lists()
-    return accepted + rejected
+    return (accepted or []) + (rejected or [])
 
 
 def save_seen(accepted, rejected=None):
     """写回去重表，**保持插件的 dict 格式**（写前留 .bak，原子替换）。"""
+    if accepted is None or rejected is None:
+        raise ValueError("去重表读不出来，拒绝用不可信的数据覆盖它")   # 兜底：任何调用方都不许写 None
     import datetime
     import shutil
     if rejected is None:              # 兼容旧签名 save_seen(keys)：全部算入库
@@ -186,6 +188,12 @@ def seen_rows():
     判活按 `分类:内容md5`（同插件），不能用文件名前缀。
     """
     accepted, rejected = load_seen_lists()
+    if accepted is None:
+        # 去重表读不出来：**绝不能**当成「空表」显示 —— 页面看着像"表是空的"，
+        # 而「清理墓碑」会顺着空表把整张表写掉 ✗（2026-10-12 自查抓到）。
+        return [{"key": "(读不出来)", "cat": "-", "kind": "error", "state": "error",
+                 "live": False,
+                 "label": "去重表文件读取失败（损坏或不可读）—— 先别点「清理墓碑」"}]
     live = live_seen_keys()
     rows = []
     for kind, keys in (("accepted", accepted), ("rejected", rejected)):
@@ -213,6 +221,8 @@ def prune_seen_plan():
     返回 (accepted, rejected, removed)。
     """
     accepted, rejected = load_seen_lists()
+    if accepted is None:
+        return None          # 表本身读不出来 ⇒ 同样不敢改（旧版会把它写成空表 ✗）
     live = live_seen_keys()
     if live is None:
         return None
@@ -1136,6 +1146,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             k = str(d.get("key") or "")
             accepted, rejected = load_seen_lists()
+            if accepted is None:
+                self._json({"ok": False, "error": "去重表读不出来，不敢改（先看文件是不是坏了）"})
+                return
             if k in accepted:
                 accepted, kind = [x for x in accepted if x != k], "入库"
             elif k in rejected:
