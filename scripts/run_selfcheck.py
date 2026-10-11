@@ -1752,6 +1752,26 @@ def check_regressions():
     except Exception as e:
         bad("R75 存图 desc 要写场景", str(e)[:140])
 
+    # R76: 去重表**自己**读不出来时，不许当成「空表」✗（2026-10-12 用 docs/review-prompt.md
+    #      自查自己的改动时抓到的那半）—— 上一版只在「图库/索引读不出来」时拒绝清理
+    #      （R69 那批 + test_seen_table 的 library_unreadable 用例），但 `seen.json` **自己**
+    #      损坏/缺失（或形状不认识）时 `load_seen_lists()` 返回 `([], [])` ⇒ 点一次
+    #      「清理墓碑」就把整张表**写成空** ✗（rejected 一丢，bot 会把明确拒绝过的图反复
+    #      重判、白烧视觉 API —— 正是当初那个 bug 的后果）。
+    #      现在：读不出来 ⇒ 返回 `(None, None)`；prune 与「解除记录」接口一律拒绝；
+    #      `save_seen` 兜底抛错 ✓；页面显式显示「读不出来」，不能看着像空表 ✓。
+    try:
+        _r76 = open(os.path.join(HERE, "scripts", "web_ui.py"), encoding="utf-8").read()
+        _a76 = "return None, None" in _r76                 # 读失败/形状不认识 ⇒ 不可信 ✓
+        _b76 = "if accepted is None:" in _r76              # 调用方必须显式处理 ✓
+        _c76 = "拒绝用不可信的数据覆盖它" in _r76           # save_seen 兜底 ✓
+        _d76 = '"state": "error"' in _r76                  # 页面显示「读不出来」✓
+        (ok if (_a76 and _b76 and _c76 and _d76) else bad)(
+            "R76 去重表读不出来要保守",
+            "返回None=%s 显式处理=%s 写前兜底=%s 页面提示=%s" % (_a76, _b76, _c76, _d76))
+    except Exception as e:
+        bad("R76 去重表读不出来要保守", str(e)[:140])
+
     # R67: 资料库的工具说明必须提到**战斗常识**这一层（2026-10-11 主人批的块 4）——
     #      同 R66 的道理：**不写进说明书，她就想不到来查** ✓。
     try:

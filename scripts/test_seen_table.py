@@ -142,6 +142,37 @@ class SeenTableTest(unittest.TestCase):
         self._write_seen({"accepted": ["sparxie:whatever"], "rejected": []})
         self.assertIsNone(self.web.prune_seen_plan())
 
+    # ── 6. 去重表**自己**读不出来时同样要保守（2026-10-12 自查抓到的那半）────
+    def test_missing_seen_is_not_an_empty_table(self):
+        # 文件不存在 ≠ 空表：必须返回 (None, None)，让调用方能区分
+        if os.path.exists(self.seen):
+            os.remove(self.seen)
+        self.assertEqual(self.web.load_seen_lists(), (None, None))
+        self.assertEqual(self.web.load_seen(), [])             # 只读接口仍要好用
+        rows = self.web.seen_rows()
+        self.assertTrue(rows and rows[0]["state"] == "error")  # 页面要显示"读不出来"
+
+    def test_prune_refuses_when_seen_is_corrupt(self):
+        # 去重表坏了 → 判活结果不可信 → 不能删（旧版会把它写成空表、连 rejected 一起丢 ✗）
+        with open(self.seen, "w", encoding="utf-8") as f:
+            f.write("{ 这不是合法 JSON")
+        self.assertIsNone(self.web.prune_seen_plan())
+
+    def test_prune_refuses_when_seen_shape_unknown(self):
+        self._write_seen(42)                                   # 形状不认识，也算不可信
+        self.assertEqual(self.web.load_seen_lists(), (None, None))
+        self.assertIsNone(self.web.prune_seen_plan())
+
+    def test_save_refuses_untrusted_data(self):
+        self._write_seen({"accepted": ["sparxie:keep"], "rejected": ["shuimeng:keep"]})
+        with self.assertRaises(ValueError):
+            self.web.save_seen(None, None)
+        with self.assertRaises(ValueError):
+            self.web.save_seen(["sparxie:x"], None)            # rejected 也不许是 None
+        with open(self.seen, encoding="utf-8") as f:           # 原表没被动过
+            d = json.load(f)
+        self.assertEqual(d["rejected"], ["shuimeng:keep"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
