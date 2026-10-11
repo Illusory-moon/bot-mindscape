@@ -3927,7 +3927,12 @@ class StickersMixin:
                         len(acc), len(self.seen_ok), len(acc) - len(self.seen_ok),
                         len(self.seen_no))
             self._save_seen()
-        return self.seen_ok | self.seen_no
+        # 「图库里现有的」也算处理过 —— 去重键是 `分类:内容 md5`，所以**跨分类**收同一张图
+        # 不受影响（那是设计允许的：同一张图可以同时属于 sparxie 与 shuimeng）。
+        # 2026-10-12 补：以前只认表里那几条，于是**导入脚本 / 手工放进图库**的图会被当成
+        # 「没见过」，再收一次就多出一条同内容不同名的重复条目（在主人的库上实测到 6 组，
+        # 其中两组名字不同、条目同时在库）。把 live 一并算进已处理，这条路径闭合。
+        return self.seen_ok | self.seen_no | live
 
     def _save_seen(self):
         try:
