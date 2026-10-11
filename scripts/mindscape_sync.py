@@ -118,8 +118,14 @@ def _local_paths(st=None, local_index=None, local_dir=None):
     return ld, li
 
 
+def _seen_local_path(local_dir):
+    """本机去重表的位置：配置里的 stickers.seen 优先，否则取图库目录下的 seen.json。"""
+    st = cfg.section("stickers") if cfg else {}
+    return _abs(st.get("seen") or os.path.join(local_dir, "seen.json"))
+
+
 def pull(local_index=None, local_dir=None, verbose=True):
-    """服务器 -> 本地（只下缺的图片）。"""
+    """服务器 -> 本地（只下缺的图片，顺带拉一份去重表）。"""
     s = sync_cfg()
     if not available():
         raise RuntimeError("未配置 ui.sync 或未启用")
@@ -127,6 +133,7 @@ def pull(local_index=None, local_dir=None, verbose=True):
     rdir, rindex = _paths(s)
     os.makedirs(local_dir, exist_ok=True)
     c = _connect(s)
+    seen_raw = None
     try:
         sftp = c.open_sftp()
         with sftp.file(rindex, "r") as f:
@@ -149,12 +156,37 @@ def pull(local_index=None, local_dir=None, verbose=True):
             except Exception as e:
                 if verbose:
                     print("  [skip] %s: %s" % (fn, str(e)[:60]))
+        # 去重表一并拉：管理台的去重表页读的就是它（不拉的话那页永远是空的）。
+        # 它由插件在服务器上维护，所以这里**只拉不推** —— 本机的移除/清理只作用于
+        # 这份快照，下一次 pull 会被服务器版本覆盖（见 docs/seen-table.md）。
+        remote_seen = s.get("remote_seen") or (rdir + "/seen.json")
+        try:
+            with sftp.file(remote_seen, "r") as f:
+                raw = f.read().decode("utf-8")
+            json.loads(raw)                 # 解析不过就宁可不动本机那份
+            seen_raw = raw
+        except FileNotFoundError:
+            if verbose:
+                print("  远端没有 seen.json（%s），跳过" % remote_seen)
+        except Exception as e:
+            if verbose:
+                print("  远端 seen.json 读取失败，跳过：%s" % str(e)[:60])
         sftp.close()
     finally:
         c.close()
     _save(local_index, remote)
+    seen_note = ""
+    if seen_raw is not None:
+        _save(_seen_local_path(local_dir), json.loads(seen_raw))
+        try:
+            _d = json.loads(seen_raw)
+            seen_note = "，去重表 %d 入库 / %d 拒收" % (
+                len(_d.get("accepted") or []), len(_d.get("rejected") or [])) \
+                if isinstance(_d, dict) else "，去重表 %d 条" % len(_d)
+        except Exception:
+            seen_note = "，去重表已更新"
     if verbose:
-        print("拉取完成: %d 条索引，新下载 %d 张" % (len(remote), got))
+        print("拉取完成: %d 条索引，新下载 %d 张%s" % (len(remote), got, seen_note))
     return len(remote), got
 
 
