@@ -826,6 +826,23 @@ DEFAULT_PATTERNS = [
 ]
 
 
+_LEAK_LT = chr(60)
+
+
+_LEAK_PAT = r"\s*(?:\|+\s*[A-Za-z]*\s*\|+\s*)?/?\s*(?:tool_calls?|function_calls?|invoke|parameter|calls|function)\b"
+
+
+LEAK_RE = re.compile(_LEAK_LT + _LEAK_PAT, re.I)
+
+
+def has_tool_leak(text):
+    """正文里有没有「工具调用标记漏出来」✗（整段都不该发出去）。"""
+    try:
+        return bool(LEAK_RE.search(text or ""))
+    except Exception:
+        return False
+
+
 DEFAULT_REGEX = r"(?:[A-Za-z_]*Error|[A-Za-z_]*Exception|Timeout|Failed)\s*[:：]"
 
 
@@ -1577,7 +1594,10 @@ def read_many(paths, max_chars):
 DEFAULT_LIMIT = 15
 
 
-FULL_CAP = 80          # full 模式的上限：要数数就得多给，但也不能把 prompt 撑爆
+FULL_CAP = 25          # full 模式的**条数**上限：要数数就得多给，但也不能把 prompt 撑爆
+
+
+FULL_CHARS = 1200      # full 模式的**总字数**上限 ✗ —— 只限条数不够：2026-10-11 真事故，
 
 
 SCAN_LINE_CAP = 200000
@@ -1751,6 +1771,13 @@ def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP,
     scored.sort(key=lambda x: (-x[0], -x[1]))
     total = len(scored)
     picked = scored[:FULL_CAP] if full else scored[:limit]
+    if full:                       # 条数够了还要卡**体积**（条数上限 != 体积上限）
+        budget, keep = FULL_CHARS, []
+        for s in picked:
+            if keep and budget - len(s[2]) < 0:
+                break
+            keep.append(s); budget -= len(s[2])
+        picked = keep
     return [s[2] for s in picked], total
 
 
@@ -3539,8 +3566,8 @@ class GuardMixin:
                     len(self.patterns), self.g_send, armed)
 
     def _ms_hit(self, text):
-        """这条文本是不是框架报错（结果管线与 send 级兜底共用同一套判据）。"""
-        return is_error_text(text, self.patterns, self.regex)
+        """这条文本该不该拦：框架报错 **或** 漏出来的工具调用标记（两层共用同一套判据 ✓）。"""
+        return is_error_text(text, self.patterns, self.regex) or has_tool_leak(text)
 
     def _ms_arm_send_guard(self):
         """装 send 级兜底（幂等）。平台事件类这时可能还没 import，等下面那个钩子再补一次。"""
@@ -3586,11 +3613,13 @@ class GuardMixin:
             txt = result.get_plain_text() or ""
             if not txt.strip():
                 return
-            if is_error_text(txt, self.patterns, self.regex):
+            leak = has_tool_leak(txt)
+            if leak or is_error_text(txt, self.patterns, self.regex):
                 self.blocked += 1
                 # S03: 只记录脱敏摘要，避免上游报错里夹带的密钥进日志
                 logger.warning(
-                    "[mindscape_guard] 拦下报错（第 %d 条）: %s",
+                    "[mindscape_guard] 拦下%s（第 %d 条）: %s",
+                    "工具标记泄漏" if leak else "报错",
                     self.blocked,
                     redact(txt),
                 )

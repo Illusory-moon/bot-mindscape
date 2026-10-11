@@ -705,8 +705,20 @@ def check_regressions():
                          + "- 第 %d 条示例记录" % i + chr(10))
         hits, total = RC.search_diary(f, "示例记录")
         capped = (len(hits) == RC.DEFAULT_LIMIT and total == 40)
+        # full 模式的契约（2026-10-11 事故后收紧）：条数 ≤ FULL_CAP，且**总字数 ≤ FULL_CHARS**
+        # —— 只限条数不够：一条日记可能几千字，条数达标也照样能把 prompt 撑爆 ✗
         allhits, total2 = RC.search_diary(f, "示例记录", full=True)
-        full_ok = (len(allhits) == 40 and total2 == 40)
+        full_ok = (len(allhits) <= RC.FULL_CAP and total2 == 40
+                   and sum(len(x) for x in allhits) <= RC.FULL_CHARS)
+        # 体积上限真兜得住：塞超长记录，返回条数必须被砍、总字数不许越线
+        f2 = os.path.join(HERE, "_sc_recall_fat.md")
+        with open(f2, "w", encoding="utf-8") as fp:
+            for i in range(12):
+                fp.write("## 2026-02-%02d" % (i + 1) + chr(10)
+                         + "- 超长示例记录" + "甲" * 800 + chr(10))
+        fat, ftotal = RC.search_diary(f2, "超长示例记录", full=True)
+        fat_ok = bool(fat) and len(fat) < ftotal and sum(len(x) for x in fat) <= RC.FULL_CHARS
+        os.remove(f2)
         # 提问用的词常常不是记日记用的词：允许给一组近义词，命中任意一个都算
         syn = RC.split_terms("示例记录 近义词甲,近义词乙")
         multi, mtotal = RC.search_diary(f, "完全对不上的词 示例记录")
@@ -727,10 +739,10 @@ def check_regressions():
         mem_src = open(os.path.join(PLUGINS, "mindscape_memory.py"),
                        encoding="utf-8").read()
         told = ("不是你的全部记忆" in mem_src and "先查再答" in mem_src)
-        (ok if (capped and full_ok and told and multi_ok and honest) else bad)(
+        (ok if (capped and full_ok and fat_ok and told and multi_ok and honest) else bad)(
             "R18 检索知道自己的边界",
-            "总数=%d 默认返回=%d full返回=%d 多词=%s 文案不谎报=%s 注入有提醒=%s"
-            % (total, len(hits), len(allhits), multi_ok, honest, told))
+            "总数=%d 默认返回=%d full返回=%d(上限%d) 体积兜住=%s 多词=%s 文案不谎报=%s 注入有提醒=%s"
+            % (total, len(hits), len(allhits), RC.FULL_CAP, fat_ok, multi_ok, honest, told))
         os.remove(f)
     except Exception as e:
         bad("R18 检索知道自己的边界", str(e)[:140])
@@ -1638,6 +1650,35 @@ def check_regressions():
             "dedup含live=%s 墓碑自愈在=%s 判活在=%s" % (_a71, _b71, _c71))
     except Exception as e:
         bad("R71 图库现有的也算处理过", str(e)[:140])
+
+    # R72: 「工具调用标记漏进正文」必须被拦下 ✓（2026-10-11 线上事故后加的护栏）——
+    #      这段代码一度**只活在部署产物里**（2026-10-12 用「构建结果与线上产物逐字节一致」
+    #      的办法把它抢救回源码 ✓）。判据在 guard 里（has_tool_leak + LEAK_RE），两层共用：
+    #      结果管线直接调，send 级兜底经 GuardMixin._ms_hit 走同一套 ✓。
+    #      注意源码里**不写字面尖括号**，用 chr(60) 拼 ✓（免得构建/转义环节把它吃掉）。
+    try:
+        _src72 = open(os.path.join(PLUGINS, "mindscape_guard.py"), encoding="utf-8").read()
+        _a72 = "def has_tool_leak" in _src72 and "LEAK_RE = re.compile(" in _src72
+        _b72 = "chr(60)" in _src72
+        _c72 = "or has_tool_leak(text)" in _src72                      # _ms_hit 接上 ✓
+        _d72 = "if leak or is_error_text(txt" in _src72                # 结果管线接上 ✓
+        _g72 = load("mindscape_guard")
+        # 认得出「漏出来的标记」：<tool_call / </invoke> / <parameter … ✓
+        # 判据要求**尖括号在前**：光有 tool_call 三个词不算漏（见下面的不误伤）✓
+        _hit72 = bool(_g72.has_tool_leak("前面<tool_calls>后面")
+                      and _g72.has_tool_leak("</invoke>")
+                      and _g72.has_tool_leak("正文 <parameter name=x>"))
+        _safe72 = not (_g72.has_tool_leak("今天天气不错")
+                       or _g72.has_tool_leak("")
+                       or _g72.has_tool_leak(None)
+                       or _g72.has_tool_leak("小于号 < 而已")
+                       or _g72.has_tool_leak("tool_call 这个词本身不算漏"))
+        (ok if (_a72 and _b72 and _c72 and _d72 and _hit72 and _safe72) else bad)(
+            "R72 工具标记泄漏要拦下",
+            "判据在=%s 非字面尖括号=%s _ms_hit接上=%s 管线接上=%s 认得出=%s 不误伤=%s"
+            % (_a72, _b72, _c72, _d72, _hit72, _safe72))
+    except Exception as e:
+        bad("R72 工具标记泄漏要拦下", str(e)[:140])
 
     # R67: 资料库的工具说明必须提到**战斗常识**这一层（2026-10-11 主人批的块 4）——
     #      同 R66 的道理：**不写进说明书，她就想不到来查** ✓。

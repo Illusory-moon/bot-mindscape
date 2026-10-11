@@ -13,7 +13,8 @@ from astrbot.api import llm_tool, logger
 import mindscape_config as cfg
 
 DEFAULT_LIMIT = 15
-FULL_CAP = 80          # full 模式的上限：要数数就得多给，但也不能把 prompt 撑爆
+FULL_CAP = 25          # full 模式的**条数**上限：要数数就得多给，但也不能把 prompt 撑爆
+FULL_CHARS = 1200      # full 模式的**总字数**上限 ✗ —— 只限条数不够：2026-10-11 真事故，
 SCAN_LINE_CAP = 200000
 
 
@@ -187,6 +188,13 @@ def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP,
     scored.sort(key=lambda x: (-x[0], -x[1]))
     total = len(scored)
     picked = scored[:FULL_CAP] if full else scored[:limit]
+    if full:                       # 条数够了还要卡**体积**（条数上限 != 体积上限）
+        budget, keep = FULL_CHARS, []
+        for s in picked:
+            if keep and budget - len(s[2]) < 0:
+                break
+            keep.append(s); budget -= len(s[2])
+        picked = keep
     return [s[2] for s in picked], total
 
 
