@@ -229,7 +229,7 @@ def read_text(path, limit=None):
         return "(读取失败: %s)" % str(e)[:100]
 
 
-JS = r"""const TK = '@@TOKEN@@';
+JS = r"""let TK = '@@TOKEN@@';   // 管理台重启会换令牌 ⇒ 允许替换（post 里令牌过期就自动换新 ✓）
 const ITEMS = @@ITEMS@@;
 const K_TAB = 'mindscape.tab';
 const K_CFG = 'mindscape.draft.config';
@@ -261,10 +261,24 @@ function show(i, btn){
   ls(K_TAB, String(i));
 }
 
+async function fetchToken(){
+  // 管理台重启过 → 页面里那份令牌就废了。就地从同源页面再取一次 ✓。
+  // 安全性不变：跨站脚本读不到 GET / 的正文（CORS），所以令牌照样挡得住跨站 POST ✓。
+  try {
+    const r = await fetch('/', {cache:'no-store'});
+    const m = (await r.text()).match(/(?:const|let) TK = '([^']+)'/);
+    return m ? m[1] : null;
+  } catch (e) { return null; }
+}
 async function post(url, body){
-  const r = await fetch(url, {method:'POST', headers:{'X-Mindscape-Token':TK,
+  const send = () => fetch(url, {method:'POST', headers:{'X-Mindscape-Token':TK,
     'X-Privacy-Credential':CREDENTIAL}, body:body});
-  return await r.json();
+  let j = await (await send()).json();
+  if (j && j.stale){          // 服务端说「你这令牌是上一轮进程的」
+    const t = await fetchToken();
+    if (t){ TK = t; j = await (await send()).json(); }   // 不刷新页面、不丢草稿 ✓
+  }
+  return j;
 }
 
 function configStatus(message, error=false){
@@ -978,7 +992,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": False, "error": "拒绝跨站请求"}, 403)
             return
         if self.headers.get("X-Mindscape-Token") != TOKEN:
-            self._json({"ok": False, "error": "缺少或错误的管理令牌"}, 403)
+            # 令牌每次启动都换 ⇒ 开着旧页面的标签页会拿上一轮的令牌 ✗。
+            # 2026-10-12：别只丢一句看不懂的「缺少或错误的管理令牌」——
+            # 带上可区分的 stale 标记，前端会自动取新令牌重试一次 ✓。
+            self._json({"ok": False, "stale": True,
+                        "error": "管理台重启过（令牌每次启动都会换）—— 页面会自动换新令牌，请重试刚才的操作"}, 403)
             return
         body = self._body()
         if body is None:
