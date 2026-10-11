@@ -132,6 +132,9 @@ class StickerUseMixin:
         tags = [x.strip()[:10] for x in raw.replace("，", ",").split(",") if x.strip()][:6]
         if not tags:
             tags = ["私藏", "表情包"]
+        # desc 是**挑图时模型唯一读的实质字段**（见 _pick 的候选行：只渲染 tags[:5] + desc[:60]）——
+        # 所以让模型自己写「什么场景用」，别再拿标签抄一遍（2026-10-12 修）。
+        desc = str(kwargs.get("desc") or "").strip()[:80]
         cat = self._category_of(event.get_self_id())
         if not cat:
             return "你还没有配置表情包分类，存不了。"
@@ -166,7 +169,9 @@ class StickerUseMixin:
                     return "这张我已经收过啦。"
                 shutil.copy2(path, dst)
                 idx.append({"file": fname, "category": cat, "name": name,
-                            "tags": tags, "desc": "收的：" + (raw or name)[:80]})
+                            "tags": tags,
+                            # 模型写了场景就用它；没写才退回旧写法（老行为不变 ✓）
+                            "desc": desc or ("收的：" + (raw or name)[:80])})
                 save_index(self.index_path, idx)
         except Exception as e:
             return "存图失败：" + str(e)[:60]
@@ -371,7 +376,8 @@ async def save_sticker(*args, **kwargs):
 
     Args:
         name(string): 给这张图起个中文短名
-        tags(string): 标签，用逗号分隔
+        tags(string): 标签，用逗号分隔，**最有用的放前面**（挑图时只看前 5 个）
+        desc(string): 一句话说明这张图**什么场景用**（例：适合被夸时得意地发）。挑图时模型会读它，写得越具体越好，60 字内
     """
     ev = None
     for a in args:
