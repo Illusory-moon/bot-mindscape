@@ -1772,6 +1772,25 @@ def check_regressions():
     except Exception as e:
         bad("R76 去重表读不出来要保守", str(e)[:140])
 
+    # R77: janitor 拼进 SQL 的**标识符**必须过白名单，而且**两处口径一致** ✓（2026-10-12 复查补）——
+    #      配置里的 `table`/`column`/`id_column` 是要拼进 SQL 的（值早就参数化了 ✓，标识符只能拼 ✗）。
+    #      作者其实写好了 `_safe_ident()`，但**只在 `clean()` 里用了**，`archive_talk()` 那条路拿的是
+    #      没净化的原值 ✗ ⇒ 同一份配置两处口径不一致，等于白防（配置被写坏、或从别处同步进来时，
+    #      archive 那半边就是注入面）。现在：`main()` 两处净化 + `archive_talk()` 自防御 ✓。
+    try:
+        _j77 = open(os.path.join(PLUGINS, "mindscape_janitor.py"), encoding="utf-8").read()
+        _arch77 = _j77.split("def archive_talk")[1][:600]
+        _a77 = '_safe_ident(table, "conversations")' in _arch77       # archive 自防御 ✓
+        _b77 = '_safe_ident(column, "content")' in _arch77
+        _c77 = '_safe_ident(id_column, "user_id")' in _arch77
+        _d77 = ('_safe_ident(c.get("table")' in _j77 and '_safe_ident(c.get("column")' in _j77
+                and '_safe_ident(ac.get("id_column")' in _j77)         # main() 两处 ✓
+        (ok if (_a77 and _b77 and _c77 and _d77) else bad)(
+            "R77 janitor 标识符要净化",
+            "archive自防御=%s/%s/%s main净化=%s" % (_a77, _b77, _c77, _d77))
+    except Exception as e:
+        bad("R77 janitor 标识符要净化", str(e)[:140])
+
     # R67: 资料库的工具说明必须提到**战斗常识**这一层（2026-10-11 主人批的块 4）——
     #      同 R66 的道理：**不写进说明书，她就想不到来查** ✓。
     try:
