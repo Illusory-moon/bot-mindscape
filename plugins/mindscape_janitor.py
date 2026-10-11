@@ -327,6 +327,10 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
     返回 (处理会话数, 归档条数)。**先写档案、后改库** —— 宁可重复，不可丢失 ✓。
     带 tool_calls 的 assistant 消息**不碰**（删了会让 tool 结果变孤儿、API 报错 ✗）。
     """
+    # 自防御：不管谁调用，**进 SQL 的标识符一律先净化** ✓（与 clean() 的口径一致）
+    table = _safe_ident(table, "conversations")
+    column = _safe_ident(column, "content")
+    id_column = _safe_ident(id_column, "user_id")
     targets = targets or []
     if not db or not os.path.exists(db) or not targets:
         return (0, 0)
@@ -463,8 +467,10 @@ def jn_main():
         print("[mindscape_janitor] 未找到 janitor 配置，跳过")
         return
     db = jn_abs(c.get("db"))
-    table = c.get("table") or "conversations"
-    column = c.get("column") or "content"
+    # 标识符先净化再往下传 ✓（2026-10-12 补：`clean()` 内部本来就这么做，但 archive 那条路
+    # 拿的是**没净化**的原值 ✗ —— 同一份配置两处口径不一致，等于白防）
+    table = _safe_ident(c.get("table") or "conversations", "conversations")
+    column = _safe_ident(c.get("column") or "content", "content")
     max_mb = float(c.get("max_mb") or DEFAULT_MAX_MB)
     log_path = jn_abs(c.get("log") or DEFAULT_LOG)
 
@@ -478,7 +484,7 @@ def jn_main():
     # 发言档案：把她的历史回复从会话搬进档案（风格锚 vs 记忆，两全）
     ac = cfg.section("archive") or {}
     n_sess, n_arch = archive_talk(db, table, column,
-                                  str(ac.get("id_column") or "user_id"),
+                                  _safe_ident(ac.get("id_column") or "user_id", "user_id"),
                                   ac.get("targets") or [], log_path)
     if n_arch:
         log("发言归档: %d 个会话 / %d 条 -> 档案（keep_last 已在会话里保留）"
