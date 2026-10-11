@@ -1735,6 +1735,23 @@ def check_regressions():
     except Exception as e:
         bad("R74 令牌过期要能自愈", str(e)[:140])
 
+    # R75: 存图时 desc 必须是**模型写的场景说明**，不能是标签的副本 ✓（2026-10-12 修）——
+    #      挑图时模型只读 `tags[:5]` 与 `desc[:60]`（见 mindscape_sticker_use._pick 的候选行），
+    #      而 save_sticker 以前把 desc 写成「收的：<标签串>」⇒ 图库 119 条里 71 条（67%）
+    #      的 desc 是标签搬运、零场景信息，**等于把最重要的字段浪费掉** ✗。
+    #      现在：工具参数里加了 desc，存图优先用它；模型没给才退回旧写法（老行为不变 ✓）。
+    try:
+        _r75 = open(os.path.join(PLUGINS, "mindscape_sticker_use.py"), encoding="utf-8").read()
+        _a75 = 'kwargs.get("desc")' in _r75            # 会读工具传来的 desc ✓
+        _b75 = '"desc": desc or (' in _r75             # 优先用它，旧写法只作兜底 ✓
+        _c75 = 'desc(string):' in _r75                 # 工具文档里有这个参数（模型才看得见）✓
+        _d75 = "desc[:60]" in _r75 or "tags[:5]" in _r75   # 挑图两处截断口径还在（依据）✓
+        (ok if (_a75 and _b75 and _c75 and _d75) else bad)(
+            "R75 存图 desc 要写场景",
+            "读desc=%s 优先用它=%s 文档有参数=%s 截断口径在=%s" % (_a75, _b75, _c75, _d75))
+    except Exception as e:
+        bad("R75 存图 desc 要写场景", str(e)[:140])
+
     # R67: 资料库的工具说明必须提到**战斗常识**这一层（2026-10-11 主人批的块 4）——
     #      同 R66 的道理：**不写进说明书，她就想不到来查** ✓。
     try:
