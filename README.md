@@ -344,7 +344,7 @@ silence:                   # 沉默的权利：不想说话时**真的什么都�
 
 ### 远程同步（可选）
 
-在 `ui.sync` 里填好服务器信息后，本地管理台可拉取图库、记忆与日志。记忆来自服务器配置的记忆文件路径；日志来自 `janitor.log` 同目录和重启命令对应容器，其他来源可用 `remote_logs` / `log_containers` 追加。快照保存在本机已忽略的 `data/observe/`，记忆和日志分开查看。图库也可以在命令行直接同步：
+在 `ui.sync` 里填好服务器信息后，本地管理台可拉取图库、记忆与日志。去重表（`seen.json`）也随 `pull` 拉下来（**只拉不推**，它由插件在服务器上维护，见 [docs/seen-table.md](docs/seen-table.md)）。记忆来自服务器配置的记忆文件路径；日志来自 `janitor.log` 同目录和重启命令对应容器，其他来源可用 `remote_logs` / `log_containers` 追加。快照保存在本机已忽略的 `data/observe/`，记忆和日志分开查看。图库也可以在命令行直接同步：
 
 管理台配置页分为「规矩 / 记忆 / 认知 / 表达 / 运行」五个标签。表单修改自动保存到本机的
 `config/managed.yaml` 与 `config/managed-wake.json`，点击「同步服务器」才上传。
