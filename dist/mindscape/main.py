@@ -3197,18 +3197,34 @@ def mn_match_member(who, members):
     return "", ""
 
 
+MN_SEP_RE = re.compile(r"(?:[ \t]*\|{3,}[ \t]*)+$")
+
+
+def mn_trim_sep(text):
+    """剥掉行尾多余的 `|||`（**只动行尾** ✓ 正文一个字不删 ✓）"""
+    if not text or LINE_SEP not in str(text):
+        return text
+    return MN_SEP_RE.sub("", str(text))
+
+
 def mn_split_lines(text, limit=None):
     """把「几句 + |||」拆成气泡列表 ✓（纯函数 ✓ 便于自检 ✓）。
 
     返回**空列表**表示「不拆」✓ —— 只有真的出现分隔符、且拆出来 ≥2 段才拆 ✓。
+    ⚠️ 行尾那个多余的 `|||` 先剥掉；若剥完还剩 `|||`（= 内部有），
+       就把它**留一个**再走后面的兜底（换成换行 ✓），不让它漏进群 ✗
     """
     if not text or LINE_SEP not in str(text):
         return []
-    parts = [x.strip() for x in str(text).split(LINE_SEP)]
+    trimmed = mn_trim_sep(str(text))
+    parts = [x.strip() for x in trimmed.split(LINE_SEP)]
     parts = [x for x in parts if x]
-    if len(parts) < 2:
-        return []
-    return parts[:limit or LINE_SEP_MAX]
+    if len(parts) >= 2:
+        return parts[:limit or LINE_SEP_MAX]
+    if LINE_SEP in trimmed:
+        # 只有行尾那个分隔符（或分隔符之间没字）⇒ 拆不出来，但**剥干净交给调用方** ✓
+        return [trimmed] if trimmed else []
+    return []
 
 
 def mn_plain_text(chain):
