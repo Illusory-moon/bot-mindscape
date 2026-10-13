@@ -42,10 +42,17 @@ def workdir(repo_root):
 
 
 def doc_files(root):
-    """工作区里要守的文档清单（glob 得到，随文件增减自动跟上 ✓）"""
+    """工作区里要守的文档清单（glob 得到，随文件增减自动跟上 ✓）
+
+    ⚠️ **把台账自己排除掉**：它的 `_说明` 里要写 `⟦待办:ID⟧` 这种**示例**，
+       不排除就会把自己扫成「孤儿编号」✗（2026-10-13 当场踩到 ✓）
+    """
     out = []
+    ledger_abs = os.path.normcase(os.path.abspath(os.path.join(root, LEDGER)))
     for pat in DOC_GLOBS:
         for fp in sorted(glob.glob(os.path.join(root, pat.replace("/", os.sep)))):
+            if os.path.normcase(os.path.abspath(fp)) == ledger_abs:
+                continue
             rel = os.path.relpath(fp, root).replace("\\", "/")
             if os.path.basename(rel) in DOC_SKIP:
                 continue
