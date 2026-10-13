@@ -82,7 +82,13 @@ def load_ledger(root):
 
 
 def scan_docs(root):
-    """扫文档，返回 {id: [(rel, lineno, 行文本)]}（编号挂在本行或其后 TAIL_WIN 字符内的行上）"""
+    """扫文档，返回 {id: [(rel, lineno, 行文本)]}
+
+    ⚠️ **只在「编号所在那一行」上判措辞**（不往后找几行）——
+       踩过：`_11` 里小节标题写着「未做 / 等主人发话」，编号挂在标题后面几行 ⇒
+       把**标题**当成了条目的措辞 ⇒ 假警报 ✗（2026-10-13 当场踩到 ✓）。
+       约定：**编号与它那句话写在同一行** ✓
+    """
     found = {}
     for rel in doc_files(root):
         fp = os.path.join(root, rel.replace("/", os.sep))
@@ -92,15 +98,6 @@ def scan_docs(root):
         for i, line in enumerate(lines):
             for m in MARK_RE.finditer(line):
                 found.setdefault(m.group(1), []).append((rel, i + 1, line.strip()))
-            if MARK in line:
-                # 编号可能挂在下几行（条目换行写）—— 往后找一段
-                buf = ""
-                for j in range(i + 1, min(i + 4, len(lines))):
-                    buf += lines[j] + "\n"
-                    if len(buf) > TAIL_WIN:
-                        break
-                for m in MARK_RE.finditer(buf):
-                    found.setdefault(m.group(1), []).append((rel, i + 1, line.strip()))
     return found
 
 
