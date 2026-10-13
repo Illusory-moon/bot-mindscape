@@ -154,14 +154,14 @@ def _seen_path(index_path):
 
 
 def _register_seen(index_path, out_dir, entries):
-    """把刚入库的图登记进去重表（accepted 键 = `分类:内容md5`）。
+    """把刚入库的图写进去重表（accepted 键 = `分类:内容md5`）。
 
-    为什么必须登记：插件判「这张图处理过没有」用的是**内容 md5**，而导入脚本从前
+    为什么必须写这张表：插件判「这张图处理过没有」用的是**内容 md5**，而导入脚本从前
     只写索引、不写这张表 —— bot 后来收到同一张图时认为没见过，重新判定、再用自己的
     命名（`<md5 前 10 位>.ext`）存一份，于是图库里出现两张内容相同、名字不同的图。
-    2026-10-12 在主人的库上实测到 6 组这种重复，其中 `28e6b2a9aa.gif` 与
-    `sparxie_28e6b2a9aa.gif` **两条条目同时在库**（`--prefix` 那条来自本脚本）。
-    登记之后这条路径就闭合了；改动落在索引锁内，不会与在线采集互相覆盖。
+    2026-10-12 在真实图库上实测到 6 组这种重复，其中一组是**同一张图的两条条目**
+    （一条按内容 md5 命名、一条带 `--prefix` 前缀）**同时在库**，前缀那条来自本脚本。
+    写好这张表之后这条路径就闭合了；改动落在索引锁内，不会与在线采集互相覆盖。
     """
     if not entries:
         return 0
@@ -198,14 +198,14 @@ def _register_seen(index_path, out_dir, entries):
             json.dump({"accepted": sorted(set(acc)), "rejected": sorted(set(rej))}, f)
         os.replace(tmp, p)
     except Exception as e:
-        print("  [警告] 去重表登记失败（索引已写入）: %s" % str(e)[:60])
+        print("  [警告] 去重表写入失败（索引已写入）: %s" % str(e)[:60])
         return 0
-    print("  去重表登记 %d 条 -> %s" % (added, p))
+    print("  去重表写入 %d 条 -> %s" % (added, p))
     return added
 
 
 def _commit(index_path, out_dir, new_entries):
-    """加锁 → 重读最新索引 → 合并 → 原子写 → 登记去重表。"""
+    """加锁 → 重读最新索引 → 合并 → 原子写 → 写去重表。"""
     with IndexLock(index_path):
         idx = load_index(index_path)
         if idx is None:

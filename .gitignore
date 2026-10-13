@@ -17,6 +17,10 @@ docs/review-bundle.md
 # 只在本地有效的敏感词表（仓库里只留 .example 模板）
 scripts/private-names.txt
 
+# 部署侧私有记录（站点表 / 补档文档）—— 见 patches/astrbot/PRIVATE.md
+# 内容在私有仓，本机放在这个目录；公开仓只留「怎么用」的说明 ✓
+patches/astrbot/.private/
+
 # Python
 __pycache__/
 *.py[cod]

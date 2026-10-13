@@ -40,6 +40,31 @@ def section(title):
     print("== " + title + " " + "=" * max(0, 50 - len(title)))
 
 
+def _private_file(name):
+    """私有部署记录（站点表 / 补档文档）的取用约定。返回路径，或 None。
+
+    ⚠️ 这些文件**不进公开仓**（它们是「线上容器里逐字节是什么」的记录，
+    天然带私域标识 ✗）—— 只留一份约定在 `patches/astrbot/PRIVATE.md` ✓，
+    内容在私有仓，本机放在 `patches/astrbot/.private/`（已 gitignore）。
+
+    两条口径（照项目铁律「只打印不分支的校验等于没有校验」✗）：
+      · 默认（公开口径）：文件不在 ⇒ 返回 None，调用方**显式打印「跳过」** ✓，
+        不许并进「全绿」✓ —— 让「没有验」和「验过了」看起来不一样；
+      · `MINDSCAPE_PRIVATE=1`（本机 / 部署机）：文件不在 ⇒ **直接抛错** ✗
+        —— 部署机上缺了它就是真事故（私仓没同步），必须红 ✓
+    兼容旧的就地布局 `patches/astrbot/<name>`（迁移期）✓
+    """
+    legacy = os.path.join(HERE, "patches", "astrbot", name)
+    if os.path.exists(legacy):
+        return legacy
+    p = os.path.join(HERE, "patches", "astrbot", ".private", name)
+    if os.path.exists(p):
+        return p
+    if os.environ.get("MINDSCAPE_PRIVATE"):
+        raise RuntimeError("私有记录缺失：" + name + "（放了私仓内容再来跑 MINDSCAPE_PRIVATE=1）")
+    return None
+
+
 # ── 1. 语法 ──
 def check_syntax():
     section("1. 语法编译")
@@ -295,7 +320,12 @@ def _private_names():
     刻意**不写进源码**：这份清单本身也会被公开，明文列出来等于把要藏的东西
     印在封面上 —— 而且扫描器还得为了「不扫自己」开一个例外，越描越黑。
     改成读 scripts/private-names.txt（一行一个，# 开头是注释，已被 .gitignore
-    忽略）；仓库里只留 .example 模板。文件不存在时这一项自动跳过。
+    忽略）；仓库里只留 .example 模板。
+
+    ⚠️ 文件缺失时返回 **None**（不是空表 ✗）—— 空表会让扫描「0 命中」，
+    汇总照样打「未发现敏感信息」，那就是一次**假绿** ✗（2026-10-13 踩过：
+    克隆里天生没有词表 ⇒ 红灯不亮 ⇒ 13 处私域名词就这么进了公开仓）。
+    调用方必须把「没有词表」显式说成一种结论 ✓
     """
     words = []
     try:
@@ -306,20 +336,24 @@ def _private_names():
                 if line and not line.startswith("#"):
                     words.append(line)
     except Exception:
-        pass
+        return None
     return words
 
 
 def _gitignored():
-    """读 .gitignore，返回 (目录名集合, 精确相对路径集合, 裸文件名集合)。
+    """读 .gitignore，返回 (精确相对目录集合, 精确相对路径集合, 裸文件名集合, 裸目录名集合)。
 
     扫描器必须认 .gitignore：本机有 config/config.yaml（含服务器密码和 bot 号）
     与 data/（拉下来的图库，标签里都是角色名）—— 这些**永远不会被提交**。
     不区分「会被提交的」和「本机私有的」，扫描就会一直报假警，最后没人看它。
 
     ⚠️ 源码里出现真实名词**依然要拦**（那是真泄漏）—— 这份忽略表只管被 git 忽略的文件。
+    ⚠️ 2026-10-13 修：以前只认**不带斜杠**的目录规则（`data/`），
+       带路径的目录规则（`patches/astrbot/.private/`）**认不出来** ✗ ——
+       于是 `.private/` 里的私有记录会被扫成「泄漏」。
+       `git check-ignore` 认它、这里不认，就是「两套口径」的老毛病 ✗ ⇒ 补齐 ✓
     """
-    dirs, files, names = set(), set(), set()
+    dirs, files, names, dirnames = set(), set(), set(), set()
     try:
         with open(os.path.join(HERE, ".gitignore"), encoding="utf-8",
                   errors="replace") as f:
@@ -329,29 +363,47 @@ def _gitignored():
                     continue
                 line = line.lstrip("/")
                 if line.endswith("/"):
-                    dirs.add(line.rstrip("/"))
+                    bare = line.rstrip("/")
+                    dirs.add(bare)
+                    dirnames.add(bare.split("/")[-1])
                 elif "/" in line:
                     files.add(line)
                 else:
                     names.add(line)
     except Exception:
         pass
-    return dirs, files, names
+    return dirs, files, names, dirnames
 
 
 def check_privacy():
     section("4. 脱敏扫描")
     pats = _private_names()
+    if pats is None:
+        # 没有词表 ⇒ 显式记一次「跳过」✓ —— 不许静默算通过（那是假绿 ✗）
+        bad("脱敏扫描", "跳过：缺 scripts/private-names.txt（仓库只带 .example 模板）"
+                        " ⇒ 本次**没有**做脱敏扫描，别把它当成通过 ✗")
+        return
     SKIP = {"run_selfcheck.py", "private-names.txt", "private-names.example.txt"}
-    idirs, ifiles, inames = _gitignored()
+    idirs, ifiles, inames, inamed = _gitignored()
+    # R78（2026-10-13 加）：忽略表必须**看得懂带路径的目录规则** ✓
+    #   踩过：`.gitignore` 里 `patches/astrbot/.private/` 这种规则以前认不出来 ⇒
+    #   私有记录会被当成「泄漏」报出来（两套口径 ✗）。这条断言把口径钉住。
+    _idirs_ok = (("patches/astrbot/.private" in idirs) and ("data" in idirs))
+    (ok if _idirs_ok else bad)(
+        "R78 忽略表认带路径的目录规则",
+        "例如 `data/` 与 `patches/astrbot/.private/` 都必须识别（否则私有记录会被当成泄漏）")
     leaked = []
     skipped = 0
+    skip_dbg = []
     for root, dirs, names in os.walk(HERE):
         rel_root = os.path.relpath(root, HERE).replace("\\", "/")
         if rel_root == ".":
             rel_root = ""
         dirs[:] = [d for d in dirs
-                   if d not in ("__pycache__", ".git") and d not in idirs]
+                   if d not in ("__pycache__", ".git")
+                   and d not in idirs and d not in inamed]
+        if rel_root and rel_root.split("/")[-1] in inamed:
+            skip_dbg.append(rel_root)
         for n in names:
             if not n.endswith((".py", ".md", ".yaml", ".json", ".txt")):
                 continue
@@ -364,8 +416,11 @@ def check_privacy():
                 txt = open(fp, encoding="utf-8", errors="replace").read()
             except Exception:
                 continue
+            # ⚠️ 匹配**不分大小写**：源码里的全大写常量从前会整片逃过检查 ✗
+            #    （词表只收小写形态时，大写写法就永远命不中 —— 这条 2026-09 起就在漏）。
+            low = txt.lower()
             for pt in pats:
-                if pt in txt:
+                if pt.lower() in low:
                     # 致谢章节里出现项目名是合理的（但那些不是上面的词）
                     leaked.append(os.path.relpath(fp, HERE) + " -> " + pt)
             if re.search(r"sk-[A-Za-z0-9]{20,}", txt):
@@ -1389,8 +1444,8 @@ def check_regressions():
     except Exception as e:
         bad("R27 沉默权", str(e)[:140])
 
-    # R28: 唤醒的名字匹配 —— 「@小星」必须叫得醒，
-    #      但「@爱小星的某某」不能被误判成在叫 bot（这个坑真踩过）。
+    # R28: 唤醒的名字匹配 —— 「@小甲」必须叫得醒，
+    #      但「@爱小甲的某某」不能被误判成在叫 bot（这个坑真踩过）。
     try:
         import re as _rex
         ja = open(os.path.join(HERE, "patches", "astrbot",
@@ -1405,17 +1460,17 @@ def check_regressions():
             def get_group_id(self):
                 return "1"
 
-        def _wake(text, names=("小星", "火花"), excl=("小白",)):
+        def _wake(text, names=("小甲", "小乙"), excl=("小白",)):
             ns = {"_ms_re": _rex, "_ms_group_ok": True, "_ms_text": text,
                   "_ms_names": list(names), "_ms_excl": list(excl),
                   "_ms_pb": {}, "_ms_groups": [], "event": _FakeEv()}
             exec(jblock, ns)
             return bool(ns["_ms_mentioned"])
 
-        at_ok = _wake("@小星 快来欢迎新人")
-        qq_ok = _wake("@小星(123456) 在吗")
-        plain_ok = _wake("错错错，小星是笨蛋机器人")
-        nick_ok = not _wake("@爱小星的某某 你好")
+        at_ok = _wake("@小甲 快来欢迎新人")
+        qq_ok = _wake("@小甲(123456) 在吗")
+        plain_ok = _wake("错错错，小甲是笨蛋机器人")
+        nick_ok = not _wake("@爱小甲的某某 你好")
         quiet_ok = not _wake("今天天气不错")
         (ok if (at_ok and qq_ok and plain_ok and nick_ok and quiet_ok) else bad)(
             "R28 @名字能叫醒且不误唤醒",
@@ -1604,7 +1659,7 @@ def check_regressions():
     #      旧版只认平表：遇到 dict 就返回空表 ⇒ 去重表页**恒为空白**，而「清理墓碑」
     #      拿到空表后会把整张 seen.json 写成 `[]`，**连 rejected 一起删**（rejected 是
     #      「明确拒绝」，插件重启也保留，删了那张图就会被反复重判、白烧 API）✗。
-    #      判活也不能用文件名前缀凑：导入脚本会产 `sparxie_<md5前10位>.gif` ✗
+    #      判活也不能用文件名前缀凑：导入脚本会产 `<分类前缀>_<md5前10位>.gif` ✗
     #      （插件 mindscape_stickers 的注释专门记过这条教训）。
     try:
         _r69 = open(os.path.join(HERE, "scripts", "web_ui.py"), encoding="utf-8").read()
@@ -1620,7 +1675,7 @@ def check_regressions():
     except Exception as e:
         bad("R69 去重表按 dict+内容md5", str(e)[:140])
 
-    # R70: 图库导入必须登记去重表 ✓（2026-10-12 修）——
+    # R70: 图库导入必须写去重表 ✓（2026-10-12 修）——
     #      只写索引、不写 `分类:内容md5`：bot 后来收到同一张图会认为「没见过」，
     #      重新判定、再用自己的命名存一份 ⇒ 图库里出现同内容不同名的两条
     #      （在主人的库上实测 6 组，其中两组条目同时在库）✗。
@@ -1631,10 +1686,10 @@ def check_regressions():
         _seg70 = _r70.split("def _register_seen")[1][:1500] if _a70 else ""
         _c70 = "_md5(fp)" in _seg70 and '"accepted"' in _seg70
         (ok if (_a70 and _b70 and _c70) else bad)(
-            "R70 导入登记去重表",
+            "R70 导入写去重表",
             "有函数=%s 入库后调用=%s 写accepted=%s" % (_a70, _b70, _c70))
     except Exception as e:
-        bad("R70 导入登记去重表", str(e)[:140])
+        bad("R70 导入写去重表", str(e)[:140])
 
     # R71: 插件判「这张图处理过没有」必须把**图库现有的**也算进去 ✓（2026-10-12 修）——
     #      去重键是 `分类:内容md5`，所以跨分类收同一张图不受影响（那是设计允许的）。
@@ -1682,7 +1737,7 @@ def check_regressions():
 
     # R73: 两处「只活在容器里」的框架补丁，必须留下**能逐字节重建**的依据 ✓（2026-10-12 补档）——
     #      `cron/manager.py`（冒泡闸门 + 按任务 jitter + cron 轮 self_id 修正 + cron 轮补
-    #      OnLLMRequestEvent 派发）与 `persona_mgr.py`（火花号强制 sparxie 人格）此前只存在于
+    #      OnLLMRequestEvent 派发）与 `persona_mgr.py`（第二个账号强制独立人格路由）此前只存在于
     #      容器可写层，**删容器重建就全没了** ✗。现在留「底本 md5 + 站点表」，
     #      用 scripts/wake_stage_apply.py 就能重建并核验
     #      （见 patches/astrbot/2026-10-12-cron-persona-patches.md）。
@@ -1690,26 +1745,32 @@ def check_regressions():
     #          线上行数 == 底本行数 − 被替换掉的行数 + 新增的行数
     #      （表格被改坏或抄错时，这条立刻红 ✓）
     try:
-        import json as _j73
-        _p73 = os.path.join(HERE, "patches", "astrbot")
-        _rows73, _bad73 = [], 0
-        for _n73 in ("cron_sites.json", "persona_sites.json"):
-            _d73 = _j73.load(open(os.path.join(_p73, _n73), encoding="utf-8"))
-            _s73 = _d73.get("sites") or []
-            _rm73 = sum(int(s.get("i2", 0)) - int(s.get("i1", 0)) for s in _s73)
-            _add73 = sum(len(s.get("new") or []) for s in _s73)
-            _calc73 = int(_d73.get("base_lines", 0)) - _rm73 + _add73
-            _this73 = (len(_s73) > 0 and bool(_d73.get("base_md5"))
-                       and bool(_d73.get("live_md5"))
-                       and _calc73 == int(_d73.get("live_lines", -1)))
-            _bad73 += 0 if _this73 else 1
-            _rows73.append("%s 站%d %d→%d %s" % (_n73, len(_s73), _d73.get("base_lines", 0),
-                                                 _d73.get("live_lines", 0),
-                                                 "✓" if _this73 else "✗算术不符"))
-        _doc73 = os.path.exists(os.path.join(_p73, "2026-10-12-cron-persona-patches.md"))
-        (ok if (_bad73 == 0 and _doc73) else bad)(
-            "R73 框架补丁站点表自洽",
-            "%s｜补档文档=%s" % ("；".join(_rows73), _doc73))
+        _n73 = ("cron_sites.json", "persona_sites.json")
+        _paths73 = [_private_file(x) for x in _n73]
+        if any(p is None for p in _paths73):
+            # 私有记录不在 ⇒ 显式说「跳过」（不许并进全绿 ✗）
+            ok("R73 框架补丁站点表自洽",
+               "跳过（私有站点表不在，公开口径）；本机/部署机用 MINDSCAPE_PRIVATE=1 跑才有这一项")
+        else:
+            import json as _j73
+            _rows73, _bad73 = [], 0
+            for _p73, _n73n in zip(_paths73, _n73):
+                _d73 = _j73.load(open(_p73, encoding="utf-8"))
+                _s73 = _d73.get("sites") or []
+                _rm73 = sum(int(s.get("i2", 0)) - int(s.get("i1", 0)) for s in _s73)
+                _add73 = sum(len(s.get("new") or []) for s in _s73)
+                _calc73 = int(_d73.get("base_lines", 0)) - _rm73 + _add73
+                _this73 = (len(_s73) > 0 and bool(_d73.get("base_md5"))
+                           and bool(_d73.get("live_md5"))
+                           and _calc73 == int(_d73.get("live_lines", -1)))
+                _bad73 += 0 if _this73 else 1
+                _rows73.append("%s 站%d %d→%d %s" % (_n73n, len(_s73), _d73.get("base_lines", 0),
+                                                     _d73.get("live_lines", 0),
+                                                     "✓" if _this73 else "✗算术不符"))
+            _doc73 = _private_file("2026-10-12-cron-persona-patches.md") is not None
+            (ok if (_bad73 == 0 and _doc73) else bad)(
+                "R73 框架补丁站点表自洽",
+                "%s｜补档文档=%s" % ("；".join(_rows73), _doc73))
     except Exception as e:
         bad("R73 框架补丁站点表自洽", str(e)[:140])
 
@@ -1851,13 +1912,13 @@ def check_regressions():
         _d53 = open(os.path.join(HERE, "plugins", "mindscape_diary.py"), encoding="utf-8").read()
         _ok53 = (_f53("#sl") is True and _f53("/help") is True
                  and _f53("   #sl") is True          # 前面有空格也算 ✓
-                 and _f53("火花花在吗") is False
+                 and _f53("小甲在吗") is False
                  and _f53("") is False and _f53(None) is False)
         _used53 = ("is_platform_command" in _g53) and ("is_platform_command" in _d53)
         (ok if (_ok53 and _used53) else bad)(
             "R53 平台指令不进上下文/记忆",
             "#sl=%s /help=%s 带空格=%s 正常话=%s ｜ 群缓冲与日记都拦=%s"
-            % (_f53("#sl"), _f53("/help"), _f53("   #sl"), _f53("火花花在吗"), _used53))
+            % (_f53("#sl"), _f53("/help"), _f53("   #sl"), _f53("小甲在吗"), _used53))
     except Exception as e:
         bad("R53 平台指令不进上下文/记忆", str(e)[:140])
 
@@ -1867,14 +1928,14 @@ def check_regressions():
     try:
         import mindscape_janitor as JN52
         importlib.reload(JN52)
-        _m52 = [{"role": "user", "content": [{"type": "text", "text": "发个火花"},
+        _m52 = [{"role": "user", "content": [{"type": "text", "text": "发个小甲"},
                                            {"type": "text", "text": "【本条消息的定向性】不是对你说的"},
                                            {"type": "text", "text": "【本群最近的真实聊天记录】" + "x" * 500}]},
                 {"role": "assistant", "content": "哦"},
                 {"role": "user", "content": [{"type": "text", "text": "新的问题"},
                                            {"type": "text", "text": "【本条消息的定向性】@了你"}]}]
         _o52, _s52 = JN52.strip_injections(_m52)
-        _a52 = _o52[0]["content"] == [{"type": "text", "text": "发个火花"}]   # 旧消息剥干净 ✓
+        _a52 = _o52[0]["content"] == [{"type": "text", "text": "发个小甲"}]   # 旧消息剥干净 ✓
         _b52 = len(_o52[2]["content"]) == 2                                  # 最后一条 user 原样留 ✓
         _c52 = _s52 > 500                                                     # 确实剥掉了 ✓
         (ok if (_a52 and _b52 and _c52) else bad)(
@@ -1997,7 +2058,7 @@ def check_regressions():
 
     # R49: janitor 必须**单实例**
     #      （2026-10-08 实测：线上 bundle 误用完整构建带上 janitor ✗ 而宿主 timer 也在跑 ✓
-    #        → 水梦梦 4 条 / 火花 12 条重复 ✗ 已清 ✓；**不按文本去重** ✗ —— archive_talk 的
+    #        → 两个 bot 的回复都有成块重复 ✗ 已清 ✓；**不按文本去重** ✗ —— archive_talk 的
     #        「先写档案、后改库 · 宁可重复不可丢失」是**故意**的 ✓ 别改 ✗）
     try:
         import mindscape_janitor as JN
@@ -2049,7 +2110,7 @@ def check_regressions():
         bad("R48 私聊日记（标签 + 发送者过滤）", str(e)[:140])
 
     # R47: 工具箱按 bot 隔离 —— 不属于这个 bot 的工具要摘掉 ✗（2026-10-07 加 ✓）
-    #      实测代价：火花看到一个**不属于她**的工具 → 调了 → 被拒 ✗ →
+    #      实测代价：bot 看到一个**不属于自己**的工具 → 调了 → 被拒 ✗ →
     #      她把那条报错读成了「对方那句话不属于我」✗ → 群里冒出一句自言自语 ✗。
     try:
         import mindscape_toolscope as TS6
@@ -2189,24 +2250,29 @@ def check_regressions():
     #      从此「仓库=线上」可被验证 ✓（build 出来的 md5 必须等于表里记的 live_md5 ✓）。
     try:
         import json as _j3
-        _sp = os.path.join(HERE, "patches", "astrbot", "waking_sites.json")
-        _doc3 = _j3.load(open(_sp, encoding="utf-8"))
-        _sites3 = _doc3.get("sites") or []
-        _shape = all(("i1" in s and "i2" in s and isinstance(s.get("new"), list)) for s in _sites3)
-        _order = all(_sites3[k]["i2"] <= _sites3[k + 1]["i1"] for k in range(len(_sites3) - 1))
-        _ok3 = (bool(_doc3.get("base_md5")) and bool(_doc3.get("live_md5"))
-                and len(_sites3) >= 10 and _shape and _order)
-        (ok if _ok3 else bad)(
-            "R32 唤醒补丁站点表",
-            "站点 %d 个，底本 %s / 线上 %s，%s" % (
-                len(_sites3), str(_doc3.get("base_md5"))[:8], str(_doc3.get("live_md5"))[:8],
-                "区间有序不重叠 ✓" if _order else "区间有问题 ✗"))
+        _sp = _private_file("waking_sites.json")
+        if _sp is None:
+            # 私有记录不在 ⇒ 显式说「跳过」✓（见 _private_file）
+            ok("R32 唤醒补丁站点表",
+               "跳过（私有站点表不在，公开口径）；本机/部署机用 MINDSCAPE_PRIVATE=1 跑才有这一项")
+        else:
+            _doc3 = _j3.load(open(_sp, encoding="utf-8"))
+            _sites3 = _doc3.get("sites") or []
+            _shape = all(("i1" in s and "i2" in s and isinstance(s.get("new"), list)) for s in _sites3)
+            _order = all(_sites3[k]["i2"] <= _sites3[k + 1]["i1"] for k in range(len(_sites3) - 1))
+            _ok3 = (bool(_doc3.get("base_md5")) and bool(_doc3.get("live_md5"))
+                    and len(_sites3) >= 10 and _shape and _order)
+            (ok if _ok3 else bad)(
+                "R32 唤醒补丁站点表",
+                "站点 %d 个，底本 %s / 线上 %s，%s" % (
+                    len(_sites3), str(_doc3.get("base_md5"))[:8], str(_doc3.get("live_md5"))[:8],
+                    "区间有序不重叠 ✓" if _order else "区间有问题 ✗"))
     except Exception as e:
         bad("R32 站点表", str(e)[:140])
 
     # R31: 「#角色面板」这类**别的 bot 的指令**不许叫醒我们、也不许进上下文缓冲（2026-10-06 ✓）。
     #      判据三条：① #/** 开头 ② 名字+查询词收尾 ③ 没有别的文字 ✓
-    #      ⚠️ 不许连关键词一起拉黑 ✗ —— 真问游戏知识（「火花，行迹怎么点」）必须照常回 ✓
+    #      ⚠️ 不许连关键词一起拉黑 ✗ —— 真问游戏知识（「小甲，行迹怎么点」）必须照常回 ✓
     try:
         import json as _json2
         import tempfile as _tf2
@@ -2224,9 +2290,9 @@ def check_regressions():
         cns["_MS_CMD_CFG_PATH"] = _tmp2
         cns["_MS_CMD_CACHE"]["mtime"] = -1.0
         _f = cns["_ms_is_cmd_query"]
-        _cases = [("#火花面板", True), ("*火花光锥", True), ("#面板", True),
-                  ("# 火花 圣遗物", True), ("#火花的面板", True),
-                  ("火花，行迹怎么点", False), ("#火花面板 帮我看看", False),
+        _cases = [("#小甲面板", True), ("*小甲光锥", True), ("#面板", True),
+                  ("# 小甲 圣遗物", True), ("#小甲的面板", True),
+                  ("小甲，行迹怎么点", False), ("#小甲面板 帮我看看", False),
                   ("#行迹怎么点", False), ("今天天气不错", False), ("#", False)]
         _got = [(t, bool(_f(t))) for t, _ in _cases]
         _bad2 = [t for (t, g), (_, e) in zip(_got, _cases) if g != e]
@@ -2871,7 +2937,7 @@ def check_regressions():
                    and "提到了你的名字" in h_mention and "不是对你说的" in h_other)
 
         # R35b: 引用里的图必须说清是谁发的 —— 实测有人引用了她自己发的表情包，
-        #       她回头对着自己的图说「诶，这不是火花花嘛~」（框架把引用里的图
+        #       她回头对着自己的图说「诶，这不是我嘛~」（框架把引用里的图
         #       渲染进了本条正文，模型当成了新收到的图）。
         class Image:
             pass
@@ -2982,7 +3048,7 @@ def check_regressions():
             _chat8 = [
                 {"ts": _now8 - 25, "who": "A", "uid": "1", "text": "[图片]", "imgs": [_live]},
                 {"ts": _now8 - 20, "who": "B", "uid": "2", "text": "插了一句"},
-                {"ts": _now8 - 1, "who": "A", "uid": "1", "text": "火花，聊聊别的"},
+                {"ts": _now8 - 1, "who": "A", "uid": "1", "text": "小甲，聊聊别的"},
             ]
             with open(_buf8, "w", encoding="utf-8") as _fp8:
                 for _item8 in _chat8:

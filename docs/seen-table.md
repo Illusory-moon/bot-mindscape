@@ -11,8 +11,8 @@
 1. 管理台「去重表」页**恒为空白**，但服务器上的 `seen.json` 有 69 条记录；
 2. 「清理墓碑」按钮若被点到，会**把整张表写成 `[]`** —— 等于清空去重表，
    让 bot 把见过的图全部重判一遍（白烧识图 API）；
-3. 图库里有 **6 组内容逐字节相同**的图，其中一组（`28e6b2a9aa.gif` 与
-   `sparxie_28e6b2a9aa.gif`）**两条条目同时在库**、名字还不一样 ——
+3. 图库里有 **6 组内容逐字节相同**的图，其中一组是**同一张图的两条条目**
+   （一条按内容 md5 命名、一条带分类前缀命名）**同时在库**、名字还不一样 ——
    正是 `mindscape_stickers` 注释里担心的「去重记录一丢，那张图重发就会以原名
    再入一份（造出重复）」。
 
@@ -21,7 +21,7 @@
 | 位置 | 它以为的键 | 后果 |
 |---|---|---|
 | 插件 `mindscape_stickers._load_seen` | `分类:内容md5`，存成 `{"accepted":[…],"rejected":[…]}` | 正确（2026-09 升级后的口径） |
-| 管理台 `web_ui.load_seen/seen_rows` | 「平表」+ **文件名前 10 位** | 遇到 dict 返回空表 ⇒ 页面空白；前缀匹配会把 `sparxie_<md5前10位>.gif` 误判成墓碑 |
+| 管理台 `web_ui.load_seen/seen_rows` | 「平表」+ **文件名前 10 位** | 遇到 dict 返回空表 ⇒ 页面空白；前缀匹配会把 `<分类前缀>_<md5前10位>.gif` 误判成墓碑 |
 | 导入 `import_stickers.py` | 只写索引，**完全不碰 seen** | bot 后来收到同一张图会认为「没见过」→ 重新判定 → 用自己的命名再存一份 ⇒ 重复条目 |
 
 补一句设计事实（容易误会）：插件的**判活依据是内容 md5**，不是「索引里有没有」。
@@ -55,14 +55,14 @@ md5 —— 所以管理台那套前缀匹配**必然**判错（插件注释里�
 ### `scripts/import_stickers.py`（导入）
 
 - 新增 `_seen_path()` / `_register_seen()`，在 `_commit()` **索引锁内**、
-  写完索引之后，把本次新增的图登记为 `accepted` 键 `分类:内容md5`。
-  登记失败只告警（索引已经写入，不退化成事故）。
+  写完索引之后，把本次新增的图写进 `accepted` 键 `分类:内容md5`。
+  写入失败只告警（索引已经写入，不退化成事故）。
 
 ### `plugins/mindscape_stickers.py`（插件，需重建 dist）
 
 - `_load_seen()` 的去重集合由 `seen_ok | seen_no` 改为 **`seen_ok | seen_no | live`**：
   「图库里现有的」也算处理过。去重键带分类，所以**跨分类**收同一张图不受影响
-  （那是设计允许的：同一张图可以同时属于 sparxie 与 shuimeng）。
+  （那是设计允许的：同一张图可以同时属于两个不同分类）。
   这样导入脚本 / 手工放进图库的图不会再被当成「没见过」而重复入库。
 
 ### `scripts/mindscape_sync.py`（同步）
@@ -85,7 +85,7 @@ python scripts/build_plugin.py --market   # 改了 plugins/ 必须按市场口�
 `test_seen_table.py` 里那两条是这次的核心回归守卫：
 
 - `test_live_keys_use_content_md5`：断言 `live` 里**不得**出现
-  `sparxie:sparxie_xxxxxxxx`（前缀匹配的典型错值）；
+  `<分类>:<分类前缀>_xxxxxxxx`（前缀匹配的典型错值）；
 - `test_prune_only_drops_tombstones` / `test_prune_refuses_when_library_unreadable`：
   清理只删真墓碑、图库读不出来时不删。
 

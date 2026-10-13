@@ -135,14 +135,14 @@ docker exec qqbot-astrbot /opt/astrbot/.venv/bin/python -c \
 >
 > ### ✅ 线上那份现在**可被逐字节复现**（2026-10-06 立 ✓）
 >
-> 线上 = **底本 + `waking_sites.json`**（12~14 个「站点」= 底本行区间 → 新内容 ✓ 纯行号拼接 ✓ 不依赖 `patch` 命令 ✓）：
+> 线上 = **底本 + 站点表**（12~14 个「站点」= 底本行区间 → 新内容 ✓ 纯行号拼接 ✓ 不依赖 `patch` 命令 ✓）：
 >
 > ```bash
 > # 取底本（容器内 stage.py.bak-wakefix，md5 6018bd99…；宿主机 .venv 那份同 md5 ✓ 双份保险）
 > docker cp qqbot-astrbot:<容器内路径>.bak-wakefix /tmp/base_stage.py
 > # 取线上（⚠️ 必须 docker cp；sftp 拿到的是宿主机那份 ✗）
 > docker cp qqbot-astrbot:<容器内路径> /tmp/live_stage.py
-> python scripts/wake_stage_apply.py check /tmp/base_stage.py patches/astrbot/waking_sites.json /tmp/live_stage.py
+> python scripts/wake_stage_apply.py check /tmp/base_stage.py patches/astrbot/.private/waking_sites.json /tmp/live_stage.py
 > ```
 >
 > `[一致] 线上 = 底本 + 站点表 ✓✓` = 仓库与线上没有分歧 ✓。**改线上的流程**：改线上文件 → `regen` 重生成站点表 → `build` 验 md5 → 部署 ✓。
@@ -165,11 +165,11 @@ docker exec qqbot-astrbot /opt/astrbot/.venv/bin/python -c \
 
 | 补丁 | 应用器 / 依据 | 说明 |
 |---|---|---|
-| 唤醒策略 | `install.py` + `waking_sites.json` | 就是本文档上半部分 |
+| 唤醒策略 | `install.py`（或 `.private/` 里的站点表） | 就是本文档上半部分 |
 | tool 结果体量 · 缓存前缀指纹 · 用量日志 | `tool_context_limit.py`、`cache_prefix_fingerprint.py`、`cache_usage_log.py` | 见 `2026-10-09-tool-result-size.md` |
-| **cron 节奏 + cron 轮上下文 + 火花号人格路由** | `cron_sites.json`、`persona_sites.json` | 见 `2026-10-12-cron-persona-patches.md`（**补档**：此前只活在容器里）|
+| **cron 节奏 + cron 轮上下文 + 第二个账号的人格路由** | 两张站点表（**在 `.private/`**，见 `PRIVATE.md`） | 见 `.private/2026-10-12-cron-persona-patches.md`（**补档**：此前只活在容器里）|
 
 > ⚠️ 所有框架补丁都打在**容器可写层**（不在任何挂载中）⇒ **删容器重建就丢**。
 > 核验一律走 `docker cp` 取出容器内那份 + 对应脚本的 `check`
 > （`sftp` / 宿主机 `/opt/astrbot/.venv/...` 拿到的是**另一份文件**，不是同一个 ✗）。
-> 自检 **R73** 守着 `cron_sites.json` / `persona_sites.json` 的自洽性。
+> 自检 **R73** 守着那两张站点表的自洽性（表在本地时真验；不在时显式打印「跳过」，见 `PRIVATE.md`）。
