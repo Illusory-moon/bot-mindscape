@@ -13,6 +13,7 @@
 用法：python scripts/run_selfcheck.py
 """
 import ast
+import hashlib
 import importlib.util
 import os
 import re
@@ -326,6 +327,12 @@ def _private_names():
     汇总照样打「未发现敏感信息」，那就是一次**假绿** ✗（2026-10-13 踩过：
     克隆里天生没有词表 ⇒ 红灯不亮 ⇒ 13 处私域名词就这么进了公开仓）。
     调用方必须把「没有词表」显式说成一种结论 ✓
+
+    ⚠️ **纯数字串一律写成 `sha256:<摘要前16位>`**（2026-10-13 起）——
+    这份文件是仓库里唯一会明文存放敏感串的地方 ✗，而号码是最敏感的那一类；
+    换成带盐哈希后，文件本身不再含明文（盐见 `_PRIVACY_SALT`）。
+    其余词条（中文 / 英文 / 含符号）保持明文，继续走**子串**比对 ——
+    别把它们也哈希掉 ✗：那样匹配就退化成「精确」，源码里的全大写变体会再次逃逸 ✓
     """
     words = []
     try:
@@ -338,6 +345,24 @@ def _private_names():
     except Exception:
         return None
     return words
+
+
+# ── 词表的「带盐哈希」口径（纯数字串用）──
+_PRIVACY_SALT = "bot-mindscape/privacy/v1"
+_HASHED_RE = re.compile(r"^sha256:([0-9a-f]{16,64})$", re.I)
+# 哈希条目按**精确**比对：把正文里的「词状串」逐个切出来算摘要 ✓
+# ⚠️ 若把词表里的**英文词**也哈希掉，匹配就退化成精确 ⇒ 全大写变体又会逃逸 ✗
+#    （那是刚修好的老毛病）⇒ 只哈希纯数字串 ✓
+_PRIV_TOKEN_RE = re.compile(r"[A-Za-z0-9_]{6,64}")
+
+
+def _priv_digest(token):
+    """算一条候选串的摘要（前 16 位十六进制）。盐固定，算法公开、原值不可逆 ✓"""
+    return hashlib.sha256((_PRIVACY_SALT + token).encode("utf-8")).hexdigest()[:16]
+
+
+def _priv_is_hashed(entry):
+    return bool(_HASHED_RE.match(entry.strip()))
 
 
 def _gitignored():
@@ -383,7 +408,7 @@ def check_privacy():
         bad("脱敏扫描", "跳过：缺 scripts/private-names.txt（仓库只带 .example 模板）"
                         " ⇒ 本次**没有**做脱敏扫描，别把它当成通过 ✗")
         return
-    SKIP = {"run_selfcheck.py", "private-names.txt", "private-names.example.txt"}
+    SKIP = {"run_selfcheck.py", "private-names.txt"}
     idirs, ifiles, inames, inamed = _gitignored()
     # R78（2026-10-13 加）：忽略表必须**看得懂带路径的目录规则** ✓
     #   踩过：`.gitignore` 里 `patches/astrbot/.private/` 这种规则以前认不出来 ⇒
@@ -392,9 +417,17 @@ def check_privacy():
     (ok if _idirs_ok else bad)(
         "R78 忽略表认带路径的目录规则",
         "例如 `data/` 与 `patches/astrbot/.private/` 都必须识别（否则私有记录会被当成泄漏）")
+    # R79（2026-10-13 加）：词表里**不许再出现纯数字明文** ✓
+    #   号码是最敏感的一类，而词表是仓库里唯一明文存放敏感串的地方 ✗
+    #   ⇒ 一律写 `sha256:<摘要前16位>`（盐见 _PRIVACY_SALT）。
+    _plain_digits = [w for w in pats if re.fullmatch(r"[0-9]{6,}", w)]
+    (ok if not _plain_digits else bad)(
+        "R79 词表无纯数字明文",
+        "纯数字串必须写成 sha256:<摘要前16位>（否则明文又落盘了 ✗）"
+        if _plain_digits else "无明文号码、%d 条哈希词条 ✓"
+        % len([w for w in pats if _priv_is_hashed(w)]))
     leaked = []
     skipped = 0
-    skip_dbg = []
     for root, dirs, names in os.walk(HERE):
         rel_root = os.path.relpath(root, HERE).replace("\\", "/")
         if rel_root == ".":
@@ -402,8 +435,6 @@ def check_privacy():
         dirs[:] = [d for d in dirs
                    if d not in ("__pycache__", ".git")
                    and d not in idirs and d not in inamed]
-        if rel_root and rel_root.split("/")[-1] in inamed:
-            skip_dbg.append(rel_root)
         for n in names:
             if not n.endswith((".py", ".md", ".yaml", ".json", ".txt")):
                 continue
@@ -420,7 +451,13 @@ def check_privacy():
             #    （词表只收小写形态时，大写写法就永远命不中 —— 这条 2026-09 起就在漏）。
             low = txt.lower()
             for pt in pats:
-                if pt.lower() in low:
+                if _priv_is_hashed(pt):
+                    # 哈希条目 ⇒ **精确**比对：把正文里的「词状串」逐个算摘要
+                    _dig = pt.split(":", 1)[1].lower()
+                    if any(_priv_digest(tok) == _dig
+                           for tok in _PRIV_TOKEN_RE.findall(txt)):
+                        leaked.append(os.path.relpath(fp, HERE) + " -> sha256:" + _dig[:8])
+                elif pt.lower() in low:
                     # 致谢章节里出现项目名是合理的（但那些不是上面的词）
                     leaked.append(os.path.relpath(fp, HERE) + " -> " + pt)
             if re.search(r"sk-[A-Za-z0-9]{20,}", txt):
@@ -3379,6 +3416,14 @@ def main():
     check_escapes()
     check_build_fresh()
     check_regressions()
+    # R80：未决台账（工作区级；台账不在时显式「跳过」✓）
+    #   ⚠️ 放在最后：它读的是**工作区**的 canon 文档，与仓库本身无关 ⇒
+    #   公开仓裸克隆跑自检时这一项会打印「跳过」，不影响仓库自身的结论 ✓
+    try:
+        import pending_guard as _pg80
+        _pg80.check(HERE, ok, bad, section)
+    except Exception as e:
+        bad("R80 未决台账", "守卫生效失败（导入或执行出错）：%s" % str(e)[:120])
     print()
     print("=" * 56)
     print("通过 %d 项 / 失败 %d 项" % (len(PASS), len(FAIL)))
