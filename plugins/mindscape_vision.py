@@ -71,6 +71,57 @@ VS_TEXT_HINT = (
     "真要看图，让对方直接把图发过来。）")
 
 
+# ⚠️ B 层兜底（2026-10-14 真事故的第二道保险 ✓）：
+#   格式闸门（A 层）治根，但**万一**还有漏进来的（比如框架自己塞的引用图、
+#   或者 A 层读不动那个引用 ⇒ 剔干净了却仍然 400），就**去掉图重答一次** ✗
+#   —— 宁可这一轮少看一张图，也不能让她**整轮哑掉、群里一个字都不出** ✓
+VS_IMAGE_ERROR_RE = re.compile(
+    r"unsupported image|invalid image|image.*(?:format|invalid_request_error)", re.I)
+VS_RETRY_FLAG = "_mindscape_vision_retried"
+
+
+def vs_is_image_error(text):
+    """这条报错是不是"图不合规"那一类（**只认这个特征**，别的报错不许乱重试 ✗）"""
+    return bool(VS_IMAGE_ERROR_RE.search(str(text or "")))
+
+
+async def vs_retry_without_image(star, event, response):
+    """把"图惹的祸"那一轮**去掉图重答一次** ⇒ 返回新的 completion_text ✓
+
+    失败就原样返回（绝不吞掉她原本该有的输出路径 ✗）
+    """
+    try:
+        umo = ""
+        for getter in ("get_session_id", "unified_msg_origin"):
+            value = getattr(event, getter, None)
+            if callable(value):
+                umo = str(value() or "")
+                break
+        provider = None
+        context = getattr(star, "context", None)
+        if context is not None:
+            provider = context.get_using_provider(umo or None)
+        if provider is None:
+            logger.warning("[mindscape_vision] 想去图重答，但拿不到 provider ⇒ 放弃")
+            return ""
+        prompt = str(getattr(event, "message_str", "") or "")
+        parts = getattr(getattr(event, "request", None), "extra_user_content_parts", None)
+        system_prompt = str(getattr(getattr(event, "request", None), "system_prompt", "") or "")
+        again = await provider.text_chat(prompt=prompt or "[图片]", image_urls=[],
+                                        extra_user_content_parts=list(parts or []) or None,
+                                        system_prompt=system_prompt or None,
+                                        request_max_retries=1)
+        text = str(getattr(again, "completion_text", "") or "")
+        if text:
+            logger.warning("[mindscape_vision] 图不合规 ⇒ 已去掉图重答一次（%d 字）✓", len(text))
+        else:
+            logger.warning("[mindscape_vision] 去图重答没有拿到内容 ✗")
+        return text
+    except Exception as e:                 # noqa: BLE001 —— 兜底失败也不能影响主流程
+        logger.warning("[mindscape_vision] 去图重答失败: %s", str(e)[:120])
+        return ""
+
+
 def vs_load_config():
     c = cfg.section("vision") or {}
     on = bool(c.get("enabled"))
@@ -85,6 +136,77 @@ def vs_has_image(event):
         if isinstance(c, Image):
             return True
     return False
+
+
+# ── 图格式闸门（2026-10-14 真事故 ✗）────────────────────────────────
+# 事故：群里有一轮请求**连续两次**报
+#   `400 .messages[41].image[0]: You have uploaded an unsupported image.
+#    Please make sure your image is valid and has one of the following formats: webp, png, jpeg, and gif`
+# ⇒ 一轮里**所有**模型调用全失败 ⇒ `mindscape_guard` 又把报错拦住（不进群 ✓）
+# ⇒ 从主人那边看就是「**她不回消息、也不报错**」✗
+# 根因：框架把 `request.image_urls` 里的东西**一律按 `image/png` 包成 base64** 发出去
+#   （`MediaResolver(..., media_type="image").to_base64_data()`）——
+#   **它不看真实格式** ✗ ⇒ 只要那个 URL 指向的不是真图（QQ 偶尔给的就是这种），必 400 ✓
+# ⇒ 修：**下发前验魔术字节**，认不出是 jpeg/png/gif/webp 的一律**剔掉**，
+#   并留下日志（这样"她突然不回"以后一眼能查到原因 ✓）。
+VS_OK_MAGIC = (
+    (b"\xff\xd8\xff", "jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "png"),
+    (b"GIF87a", "gif"),
+    (b"GIF89a", "gif"),
+)
+
+
+def vs_sniff_image(raw):
+    """认 magic bytes ⇒ 返回 'jpeg'/'png'/'gif'/'webp'；认不出返回 ''（= 不许下发）✓"""
+    if not raw:
+        return ""
+    for magic, name in VS_OK_MAGIC:
+        if raw.startswith(magic):
+            return name
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "webp"
+    return ""
+
+
+def vs_read_head(ref, limit=64):
+    """读一个图引用的前若干字节（本地路径 / http(s) / data:base64 都认 ✓）。"""
+    text = str(ref or "")
+    if text.startswith("data:"):
+        head, _, payload = text.partition(",")
+        if "base64" not in head:
+            return b""
+        return base64.b64decode(payload[:96] + "=" * (-len(payload[:96]) % 4),
+                                validate=False)[:limit]
+    if text.startswith(("http://", "https://")):
+        with urllib.request.urlopen(urllib.request.Request(
+                text, headers={"User-Agent": "Mozilla/5.0"}), timeout=8) as response:
+            return response.read(limit)
+    if os.path.isfile(text):
+        with open(text, "rb") as handle:
+            return handle.read(limit)
+    return b""
+
+
+def vs_filter_images(urls, event_self=""):
+    """把 `image_urls` 过一遍格式闸门 ⇒ 返回 (留下的, 剔掉的条数) ✓
+
+    ⚠️ 读不动 / 认不出 = **一律剔掉**（宁可这一轮少看一张图，也不能让整轮全灭 ✗）
+    """
+    kept, dropped = [], 0
+    for ref in list(urls or []):
+        try:
+            kind = vs_sniff_image(vs_read_head(ref))
+        except Exception as e:                    # noqa: BLE001 —— 读不动就当它不合规
+            logger.warning("[mindscape_vision] 验图读不动，剔掉: %s", str(e)[:80])
+            kind = ""
+        if kind:
+            kept.append(ref)
+        else:
+            dropped += 1
+            logger.warning("[mindscape_vision] 剔掉一张不合规的图（不是 jpeg/png/gif/webp）"
+                           " | bot=%s | 引用=%s", event_self, str(ref)[:90])
+    return kept, dropped
 
 
 def vs_attach(request, text, mark):
@@ -173,6 +295,14 @@ class VisionMixin:
             if not self._vs_hit(event):
                 return
             urls = getattr(request, "image_urls", None)
+            # ⚠️ 先过**格式闸门**（2026-10-14 那次"她不回消息"的真凶 ✓）：
+            #    不合规的图必须在下发前剔掉，否则整轮请求 400 全灭 ✗
+            if urls:
+                kept, dropped = await asyncio.to_thread(
+                    vs_filter_images, list(urls), event.get_self_id())
+                if dropped:
+                    request.image_urls = kept
+                    urls = kept
             if urls:
                 for index, ref in enumerate(urls):
                     preview = await asyncio.to_thread(vs_compact_image, str(ref))
@@ -192,3 +322,30 @@ class VisionMixin:
                             event.get_self_id(), fake.group(0)[:40])
         except Exception as e:
             logger.warning("[mindscape_vision] 注入失败: %s", str(e)[:120])
+
+    @filter.on_llm_response()
+    async def vs_image_error_retry(self, event, response):
+        """**B 层兜底**：图不合规把整轮打挂了 ⇒ 去掉图重答一次 ✗
+
+        ⚠️ 2026-10-14 真事故：那一轮所有模型调用全 400（`unsupported image`），
+           `guard` 又把报错拦住（不进群 ✓）⇒ 主人只看到「她不回消息、也不报错」✗
+        ⇒ A 层（格式闸门）治根；这一层是**万一漏网时她还能开口**的保险 ✓
+        ⚠️ 每条消息**只重试一次**（`VS_RETRY_FLAG`）—— 绝不允许变成循环请求 ✗
+        """
+        try:
+            if not self.vs_on:
+                return
+            text = str(getattr(response, "completion_text", "") or "")
+            if not vs_is_image_error(text):
+                return
+            if getattr(event, VS_RETRY_FLAG, False):
+                logger.warning("[mindscape_vision] 图不合规，但这条已经重试过 ⇒ 不再重试 ✗")
+                return
+            setattr(event, VS_RETRY_FLAG, True)
+            logger.warning("[mindscape_vision] 图不合规把整轮打挂了 ⇒ 去掉图重答一次 | bot=%s",
+                           event.get_self_id())
+            again = await vs_retry_without_image(self, event, response)
+            if again:
+                response.completion_text = again
+        except Exception as e:
+            logger.warning("[mindscape_vision] 去图重答钩子异常: %s", str(e)[:120])

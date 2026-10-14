@@ -2537,6 +2537,38 @@ def check_regressions():
         hk_see = (not _VS.VisionMixin._vs_hit(_vt, _Ev(B))
                   and _VS.VisionMixin._vs_hit(_vt, _Ev(A)))
 
+        # ⚠️ 2026-10-14 真事故（P0）：一张不合规的图 ⇒ 整轮所有模型调用 400
+        #    ⇒ 她被 guard 静音 ⇒ 主人看到的只是"她不回消息"✗
+        #    A 层：格式闸门必须**只放行真图**；B 层：报错必须能被认出来（好去图重答）✓
+        import base64 as _b64
+        import tempfile as _tf
+        _ok_png = "data:image/png;base64," + _b64.b64encode(
+            b"\x89PNG\r\n\x1a\n" + b"0" * 40).decode()
+        _ok_gif = "data:image/gif;base64," + _b64.b64encode(b"GIF89a" + b"0" * 40).decode()
+        _bad = "data:image/png;base64," + _b64.b64encode(b"NotAnImage!!!!" + b"0" * 20).decode()
+        _dir = _tf.mkdtemp()
+        _f_ok = os.path.join(_dir, "ok.jpg")
+        open(_f_ok, "wb").write(b"\xff\xd8\xff" + b"0" * 40)
+        _f_bad = os.path.join(_dir, "bad.png")          # 扩展名骗人、内容不是图 ✗
+        open(_f_bad, "wb").write(b"<html>nope</html>")
+        _kept, _drop = _VS.vs_filter_images([_ok_png, _ok_gif, _f_ok, _bad, _f_bad], A)
+        gate_ok = (_drop == 2 and _kept == [_ok_png, _ok_gif, _f_ok])
+        if not gate_ok:
+            bad("识图格式闸门", "闸门放行了不合规的图（kept=%d drop=%d）" % (len(_kept), _drop))
+        _sniff_ok = (_VS.vs_sniff_image(b"\xff\xd8\xff") == "jpeg"
+                     and _VS.vs_sniff_image(b"RIFF\x00\x00\x00\x00WEBPVP8 ") == "webp"
+                     and _VS.vs_sniff_image(b"GARBAGE") == "")
+        if not _sniff_ok:
+            bad("识图格式闸门", "魔术字节认错了 ✗")
+        if not (_VS.vs_is_image_error(
+                    "All chat models failed: BadRequestError: Error code: 400 - "
+                    "'error': {'message': '.messages[41].image[0]: You have uploaded an "
+                    "unsupported image.") and
+                not _VS.vs_is_image_error("All chat models failed: RateLimitError")):
+            bad("识图兜底", "图不合规的报错没认出来（或把别的报错也认了）✗")
+        if not gate_ok or not _sniff_ok:
+            return
+
         import asyncio
         _plain = _Ev(A)
         _plain.message_obj = types.SimpleNamespace(message=[])
