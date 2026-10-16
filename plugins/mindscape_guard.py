@@ -244,6 +244,11 @@ MS_LINE_GAP = 0.8          # 连发之间的停顿（秒）—— 真人也是�
 #    存实例会拿到 None，存函数则每次现取 ⇒ 不会陈旧 ✓
 MS_TEXT_FMT = None
 
+# 「句尾去句号」的作用域（= `format.no_period` 原样）—— ⭐ **单一真值** ✓
+# 由 format 模块 setup 时登记；那些**模块级钩子**（没有 self ✗，如 mention 的拆分）
+# 从这里读 ✓ —— 免得三处各读各的配置、口径漂移 ✗
+MS_FORMAT_NP = None
+
 
 def ms_set_text_formatter(provider):
     """登记「出站文本整形」回调：provider() -> (transform 或 None)。"""
@@ -260,23 +265,39 @@ def store_fmt(msgs, context, kwargs):
     带图/语音的走原样 ✓；整形失败一律**原样放行** ✓（宁可多发一个句号，也不能吞话 ✗）
     """
     if MS_TEXT_FMT is None:
+        # 🔍 一次性诊断（msdiag）—— 「没登记整形」时也要留痕，否则分不清
+        #    「没走这条路」和「走了但没登记」✗ 
+        try:
+            logger.warning("[msdiag] store_fmt 被调用但 MS_TEXT_FMT=None（整形未登记）段数=%d", len(msgs))
+        except Exception:
+            pass
         return msgs
     try:
         tf = MS_TEXT_FMT()
     except Exception:
         return msgs
     if tf is None:
+        try:
+            logger.warning("[msdiag] store_fmt 拿到 None transform（实例还没 setup？）")
+        except Exception:
+            pass
         return msgs
     out = []
     for m in msgs:
         if (isinstance(m, dict) and str(m.get("type")) == "plain"
                 and isinstance(m.get("text"), str)):
+            _orig = m["text"]
             try:
                 new = tf(context, m["text"], kwargs)
             except Exception as exc:
                 logger.warning("[mindscape_guard] 出站整形失败（原样放行）: %s", str(exc)[:80])
                 out.append(m)
                 continue
+            # 🔍 一次性诊断（msdiag）—— 整形前后成对记，抓完即撤 ✗
+            try:
+                logger.warning("[msdiag] store_fmt 前=%s 后=%s", _orig[:150], str(new)[:150])
+            except Exception:
+                pass
             if new and new != m["text"]:
                 m = dict(m)
                 m["text"] = new

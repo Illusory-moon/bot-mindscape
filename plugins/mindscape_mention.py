@@ -339,6 +339,28 @@ async def mn_attach_hook(*args, **kwargs):
             logger.info("[mindscape_mention] D 检查: 文本=%d字 含分隔=%s（chain=%s ｜ llm 缓存=%s）",
                         len(_txt), LINE_SEP in _txt, bool(_chain), _src == "llm")
             _parts = mn_split_lines(_txt)
+            # ⭐ 2026-10-16 修：拆出来的**每一段**都要过一遍「句尾去句号」✗
+            #   事故：`_txt = MN_LAST_TEXT`（原始 llm 正文）⇒ **绕过了 flatten_result** ✗，
+            #        而这里 `event.send()` 是**直接发**、不走 respond 管线 ⇒
+            #        群里看到 12/47 条带句尾句号（「…替你打拍子。」✗）。
+            #   ⚠️ 与 say_lines 用**同一套口径**（模块级 flatten/drop_period + self.f_np 作用域）✓
+            #   ⚠️ flatten_result 先跑会把 ||| 抹掉 ⇒ 这里必然走 llm 缓存那份 ⇒ 必须自己补这一步 ✓
+            if _parts:
+                # ⚠️ 这里**没有 self** ✗ —— `mn_attach_hook` 是模块级函数（*args, **kwargs）✓
+                #    （2026-10-16 踩：本鱼第一版写了 `self.f_np` ⇒ NameError ⇒ 被外层 try 吞掉
+                #     ⇒ 整形静默不生效 ✗ 日志毫无痕迹 ✗；是自检 R17「不蹭别人的全局名」抓住的 ✓）
+                #    ⇒ 作用域从 format 登记的**单一真值** `MS_FORMAT_NP` 读 ✓
+                _dp = globals().get("drop_period")
+                _np = globals().get("MS_FORMAT_NP")
+                _no_p = bool(_np) and scope_hit(_np, event.get_self_id())
+                if _dp and _no_p:
+                    _fixed = []
+                    for _p in _parts:
+                        try:
+                            _fixed.append(_dp(_p))
+                        except Exception:
+                            _fixed.append(_p)
+                    _parts = _fixed
             if _parts:
                 # ⚠️ 顺序很关键：**第一条真的发出去之后**才抑制正文 ✓
                 #   否则一旦发送失败，她就一个字都发不出去（本鱼第一版就是这个顺序，已改）。

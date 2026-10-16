@@ -1002,6 +1002,67 @@ MS_SENDTOOL_FLAG = "_ms_sendtool_patched"
 MS_LINE_GAP = 0.8          # 连发之间的停顿（秒）—— 真人也是一句一句敲的
 
 
+MS_TEXT_FMT = None
+
+
+MS_FORMAT_NP = None
+
+
+def ms_set_text_formatter(provider):
+    """登记「出站文本整形」回调：provider() -> (transform 或 None)。"""
+    global MS_TEXT_FMT
+    MS_TEXT_FMT = provider
+
+
+def store_fmt(msgs, context, kwargs):
+    """把这一批 plain 逐个过一遍 format 的整形（压平 + 走 no_period 作用域的去掉句尾句号）。
+
+    为什么必须在这儿补：这个内置工具**直接发消息**，不经过 `on_decorating_result`
+    ⇒ `FormatMixin.flatten_result` 看不到它 ⇒ 句号照发 ✗
+    （2026-10-16 实测：她 13 次 `send_message_to_user` 里有 2 条带了句尾句号 ✓）
+    带图/语音的走原样 ✓；整形失败一律**原样放行** ✓（宁可多发一个句号，也不能吞话 ✗）
+    """
+    if MS_TEXT_FMT is None:
+        # 🔍 一次性诊断（msdiag）—— 「没登记整形」时也要留痕，否则分不清
+        #    「没走这条路」和「走了但没登记」✗ 
+        try:
+            logger.warning("[msdiag] store_fmt 被调用但 MS_TEXT_FMT=None（整形未登记）段数=%d", len(msgs))
+        except Exception:
+            pass
+        return msgs
+    try:
+        tf = MS_TEXT_FMT()
+    except Exception:
+        return msgs
+    if tf is None:
+        try:
+            logger.warning("[msdiag] store_fmt 拿到 None transform（实例还没 setup？）")
+        except Exception:
+            pass
+        return msgs
+    out = []
+    for m in msgs:
+        if (isinstance(m, dict) and str(m.get("type")) == "plain"
+                and isinstance(m.get("text"), str)):
+            _orig = m["text"]
+            try:
+                new = tf(context, m["text"], kwargs)
+            except Exception as exc:
+                logger.warning("[mindscape_guard] 出站整形失败（原样放行）: %s", str(exc)[:80])
+                out.append(m)
+                continue
+            # 🔍 一次性诊断（msdiag）—— 整形前后成对记，抓完即撤 ✗
+            try:
+                logger.warning("[msdiag] store_fmt 前=%s 后=%s", _orig[:150], str(new)[:150])
+            except Exception:
+                pass
+            if new and new != m["text"]:
+                m = dict(m)
+                m["text"] = new
+        out.append(m)
+    return out
+
+
 def ms_patch_send_tool():
     """把内置工具 `send_message_to_user` 改成「每个 plain 各发一条」。
 
@@ -1042,9 +1103,9 @@ def ms_patch_send_tool():
                 for m in plains:
                     try:
                         if tail:
-                            await orig(self, context, [m], *tail, **rest)
+                            await orig(self, context, store_fmt([m], context, kwargs), *tail, **rest)
                         else:
-                            await orig(self, context, messages=[m], **rest)
+                            await orig(self, context, messages=store_fmt([m], context, kwargs), **rest)
                         n += 1
                     except Exception as exc:
                         logger.warning("[mindscape_guard] 逐条发送第 %d 条失败: %s",
@@ -1054,6 +1115,12 @@ def ms_patch_send_tool():
                 logger.info("[mindscape_guard] 内置工具逐条发送 %d 条（原本 %d 段会并成一条）",
                             n, len(plains))
                 return "Already sent %d separate messages." % n
+        if (isinstance(msgs, (list, tuple)) and len(msgs) == 1
+                and isinstance(msgs[0], dict) and str(msgs[0].get("type")) == "plain"):
+            msgs = store_fmt(msgs, context, kwargs)
+            if args:
+                return await orig(self, context, msgs, *args[1:], **kwargs)
+            return await orig(self, context, messages=msgs, **kwargs)
         return await orig(self, context, *args, **kwargs)
 
     SendMessageToUserTool.call = _ms_send_to_user
@@ -3563,6 +3630,28 @@ async def mn_attach_hook(*args, **kwargs):
             logger.info("[mindscape_mention] D 检查: 文本=%d字 含分隔=%s（chain=%s ｜ llm 缓存=%s）",
                         len(_txt), LINE_SEP in _txt, bool(_chain), _src == "llm")
             _parts = mn_split_lines(_txt)
+            # ⭐ 2026-10-16 修：拆出来的**每一段**都要过一遍「句尾去句号」✗
+            #   事故：`_txt = MN_LAST_TEXT`（原始 llm 正文）⇒ **绕过了 flatten_result** ✗，
+            #        而这里 `event.send()` 是**直接发**、不走 respond 管线 ⇒
+            #        群里看到 12/47 条带句尾句号（「…替你打拍子。」✗）。
+            #   ⚠️ 与 say_lines 用**同一套口径**（模块级 flatten/drop_period + self.f_np 作用域）✓
+            #   ⚠️ flatten_result 先跑会把 ||| 抹掉 ⇒ 这里必然走 llm 缓存那份 ⇒ 必须自己补这一步 ✓
+            if _parts:
+                # ⚠️ 这里**没有 self** ✗ —— `mn_attach_hook` 是模块级函数（*args, **kwargs）✓
+                #    （2026-10-16 踩：本鱼第一版写了 `self.f_np` ⇒ NameError ⇒ 被外层 try 吞掉
+                #     ⇒ 整形静默不生效 ✗ 日志毫无痕迹 ✗；是自检 R17「不蹭别人的全局名」抓住的 ✓）
+                #    ⇒ 作用域从 format 登记的**单一真值** `MS_FORMAT_NP` 读 ✓
+                _dp = globals().get("drop_period")
+                _np = globals().get("MS_FORMAT_NP")
+                _no_p = bool(_np) and scope_hit(_np, event.get_self_id())
+                if _dp and _no_p:
+                    _fixed = []
+                    for _p in _parts:
+                        try:
+                            _fixed.append(_dp(_p))
+                        except Exception:
+                            _fixed.append(_p)
+                    _parts = _fixed
             if _parts:
                 # ⚠️ 顺序很关键：**第一条真的发出去之后**才抑制正文 ✓
                 #   否则一旦发送失败，她就一个字都发不出去（本鱼第一版就是这个顺序，已改）。
@@ -4576,12 +4665,94 @@ class FormatMixin:
                     len(self.targets), self.f_np or "关")
         scope_warn(logger, "mindscape_format", self.targets)
 
+        # ⭐ 把出站整形登记给 guard 的内置发送工具补丁 ✓
+        #   为什么必须做：`send_message_to_user` **直接发消息**，不经过 on_decorating_result
+        #   ⇒ 下面那个 flatten_result 看不到它 ⇒ 句号照发 ✗
+        #   （2026-10-16 实测：她 13 次调用里 2 条带句尾句号 ✓）
+        #   ⚠️ 取法是三元兜底（照本仓通用写法 ✓）：**构建产物是单一大文件**，
+        #      跨模块 import 已被 build_plugin 剥掉 ⇒ 合并后它就是个模块级函数，
+        #      直接查 globals() 即可；开发态（源码树里逐模块加载）才走 import ✓
+        #   ⚠️ 登记的是「取实例的函数」，不是 self —— 补丁可能在 setup 之前就装好，
+        #      存 self 会拿到 None；存函数每次现取 ⇒ 不会陈旧 ✓
+        try:
+            _ms_reg = globals().get("ms_set_text_formatter")
+            if _ms_reg is None:
+                import sys as _ms_sys
+                for _mn, _mm in list(_ms_sys.modules.items()):
+                    if _mn.endswith("mindscape_guard"):
+                        _ms_reg = getattr(_mm, "ms_set_text_formatter", None)
+                        if _ms_reg is not None:
+                            break
+            if _ms_reg is not None:
+
+                def _ms_format_provider(_get=(lambda: self)):
+                    cur = _get()
+                    if cur is None:
+                        return None
+                    return cur.ms_format_text
+
+                _ms_reg(_ms_format_provider)
+                logger.info("[mindscape_format] 已登记出站整形（内置发送工具同口径）")
+            else:
+                logger.warning("[mindscape_format] 找不到 ms_set_text_formatter —— 内置发送工具不会去句号")
+        except Exception as e:
+            logger.warning("[mindscape_format] 登记出站整形失败: %s", str(e)[:100])
+
+        # ⭐ 把「句尾去句号」的作用域也登记成模块级**单一真值** ✓
+        #   给那些**没有 self 的模块级钩子**用（mention 的 ||| 拆分 ✓）——
+        #   否则它只能自己再读一遍配置，口径早晚漂移 ✗
+        try:
+            if "MS_FORMAT_NP" in globals():
+                globals()["MS_FORMAT_NP"] = list(self.f_np)
+                logger.info("[mindscape_format] 已登记去句号作用域：%s", self.f_np or "关")
+        except Exception as e:
+            logger.warning("[mindscape_format] 登记去句号作用域失败: %s", str(e)[:100])
+
+    def ms_format_text(self, context, text, kwargs):
+        """给「工具直接发话」那条路用的整形：压平 +（作用域内）去掉句尾句号。
+
+        ⚠️ 与 flatten_result **同源同规矩** ✓ —— 两个通道必须一套口径，
+        否则同一句话走哪条路结果不一样（2026-10-16 就是这么漏的 ✗）。
+        """
+        if not isinstance(text, str) or not text.strip():
+            return text
+        self_id = None
+        try:
+            self_id = context.context.event.get_self_id()
+        except Exception:
+            pass
+        if self_id is None:
+            return text              # 拿不到身份 ⇒ 不猜，原样放行 ✓
+        join_with = self.f_c.get("join_with") or "，"
+        drop = bool(self.f_c.get("drop_last_if_short", False))
+        short_len = int(self.f_c.get("short_len") or 8)
+        new = flatten(text, join_with, drop, short_len)
+        if self.f_np and scope_hit(self.f_np, self_id):
+            new = drop_period(new)
+        return new
+
     @filter.on_decorating_result(priority=900)
     async def flatten_result(self, event: AstrMessageEvent):
         try:
             if not scope_hit(self.targets, event.get_self_id()):
                 return
             result = event.get_result()
+            # 🔍 一次性诊断（2026-10-16 排查「漏句号」）—— 纯日志、零 token，抓完即撤 ✗
+            #    目的：看清【每一轮出站】到底长什么样、走的哪种 result、
+            #          以及整形前后有没有句号（grep 标记：msdiag）
+            try:
+                _before = result.get_plain_text() if result is not None else ""
+                _tail = (result.chain[-1].__class__.__name__ if result is not None
+                         and getattr(result, "chain", None) else "-")
+                logger.warning("[msdiag] flatten_result 出站 self=%s 结果类=%s llm=%s 首类=%s 有句号=%s 原文=%s",
+                               event.get_self_id(),
+                               type(result).__name__ if result is not None else "None",
+                               getattr(result, "is_llm_result", lambda: "?")() if result is not None else "-",
+                               _tail,
+                               any(x in _before for x in ("。", "．")),
+                               _before[:200])
+            except Exception:
+                pass
             if result is None or not result.is_llm_result():
                 return
             chain = getattr(result, "chain", None)
@@ -4715,6 +4886,12 @@ class RescueMixin:
                     parts.append(str(m["text"]))
             if parts:
                 event.set_extra("_ms_sent_text", " ".join(parts)[:300])
+            # 🔍 一次性诊断（2026-10-16 排查「工具发话漏句号」）—— 纯日志、零 token
+            #    抓完即撤 ✗（grep 标记：msdiag）⚠️ 这里记的是**工具参数原文**（未整形）✓
+            logger.warning("[msdiag] tool=send_message_to_user self=%s 群=%s 段=%d 带句号=%s 文本=%s",
+                           event.get_self_id(), event.get_group_id() or "-", len(parts),
+                           any(p.rstrip().endswith(("。", "．")) for p in parts),
+                           (" ||| ".join(parts))[:220])
         except Exception:
             pass
 

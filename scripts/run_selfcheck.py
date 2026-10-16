@@ -3522,6 +3522,44 @@ def main():
     except Exception as e:
         bad("R81 工具发话通道也走去句号", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
+    # R82: 「D 方案拆气泡」那条路也要去句号（2026-10-16 修）
+    #   事故：她一轮里带 `|||` 的正文被 mention 拆成多气泡发 ✗ ——
+    #         而那份文本来自 `MN_LAST_TEXT`（**原始 llm 正文**，不是 flatten_result 改过的那份 ✗）
+    #         ⇒ 绕过了 format 的整形；而 `mn_line_chain()` + `event.send()` 又是**直发**、
+    #           不走 respond 管线 ⇒ 群里看到句尾句号（12/47 条 ✗）。
+    #   ⚠️ 而且 `flatten_result` 先跑会把 `|||` 抹掉 ⇒ mention 必然回退到 llm 缓存那份
+    #      ⇒ 它**必须自己补这一步** ✓（与 say_lines 同一套口径 ✓）
+    #   这里守：拆出来的**每一段**都不带句尾句号 ✓，且**不在作用域时不误伤** ✓
+    try:
+        import importlib as _il82
+        import mindscape_mention as _MN82
+        import mindscape_format as _FM82
+        _il82.reload(_MN82)
+        _il82.reload(_FM82)
+
+        # ⚠️ 只测**纯函数**（mn_split_lines + drop_period）✗ 不去跑整条钩子 ——
+        #    钩子会写 MN_SAID / 清 MN_PENDING ✓，在这里跑会**污染后面的用例** ✗
+        #    （2026-10-16 真踩：R82 跑完 R65 就变成「拆=0」✗）
+        _txt82 = "第一段呀~ 钱到账了。|||第二段呀~ 账本顶着呢。|||最后一段——别太飘哦。"
+        _parts82 = _MN82.mn_split_lines(_txt82)
+        _clean82 = [_FM82.drop_period(p) for p in _parts82]
+        _no_tail = [p for p in _clean82 if p.rstrip().endswith(("。", "．"))]
+
+        # 作用域判定（与线上同一个 scope_hit ✓）：命中才去句号、不命中不动 ✓
+        _f_np = ["100000001"]
+        _scope_ok = _MN82.scope_hit(_f_np, "100000001")
+        _scope_no = _MN82.scope_hit(_f_np, "999999999")
+        _keep82 = _FM82.drop_period("不在作用域就别动。")   # drop_period 本身不分作用域；作用域由调用方判 ✓
+        _keep_ok = (_keep82 == "不在作用域就别动")
+
+        _good82 = (len(_parts82) == 3 and not _no_tail and _scope_ok and not _scope_no and _keep_ok)
+        (ok if _good82 else bad)(
+            "R82 拆气泡的每一段也去句号（||| 多段 / 作用域生效 / 不误伤）",
+            "段数=%d 去后=%s 段尾残留=%s 作用域=%s/%s"
+            % (len(_parts82), _clean82, _no_tail, _scope_ok, _scope_no))
+    except Exception as e:
+        bad("R82 拆气泡的每一段也去句号", "%s: %s" % (type(e).__name__, str(e)[:140]))
+
     print()
     print("=" * 56)
     print("通过 %d 项 / 失败 %d 项" % (len(PASS), len(FAIL)))

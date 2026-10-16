@@ -98,6 +98,16 @@ class FormatMixin:
         except Exception as e:
             logger.warning("[mindscape_format] 登记出站整形失败: %s", str(e)[:100])
 
+        # ⭐ 把「句尾去句号」的作用域也登记成模块级**单一真值** ✓
+        #   给那些**没有 self 的模块级钩子**用（mention 的 ||| 拆分 ✓）——
+        #   否则它只能自己再读一遍配置，口径早晚漂移 ✗
+        try:
+            if "MS_FORMAT_NP" in globals():
+                globals()["MS_FORMAT_NP"] = list(self.f_np)
+                logger.info("[mindscape_format] 已登记去句号作用域：%s", self.f_np or "关")
+        except Exception as e:
+            logger.warning("[mindscape_format] 登记去句号作用域失败: %s", str(e)[:100])
+
     def ms_format_text(self, context, text, kwargs):
         """给「工具直接发话」那条路用的整形：压平 +（作用域内）去掉句尾句号。
 
@@ -127,6 +137,22 @@ class FormatMixin:
             if not scope_hit(self.targets, event.get_self_id()):
                 return
             result = event.get_result()
+            # 🔍 一次性诊断（2026-10-16 排查「漏句号」）—— 纯日志、零 token，抓完即撤 ✗
+            #    目的：看清【每一轮出站】到底长什么样、走的哪种 result、
+            #          以及整形前后有没有句号（grep 标记：msdiag）
+            try:
+                _before = result.get_plain_text() if result is not None else ""
+                _tail = (result.chain[-1].__class__.__name__ if result is not None
+                         and getattr(result, "chain", None) else "-")
+                logger.warning("[msdiag] flatten_result 出站 self=%s 结果类=%s llm=%s 首类=%s 有句号=%s 原文=%s",
+                               event.get_self_id(),
+                               type(result).__name__ if result is not None else "None",
+                               getattr(result, "is_llm_result", lambda: "?")() if result is not None else "-",
+                               _tail,
+                               any(x in _before for x in ("。", "．")),
+                               _before[:200])
+            except Exception:
+                pass
             if result is None or not result.is_llm_result():
                 return
             chain = getattr(result, "chain", None)
