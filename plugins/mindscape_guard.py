@@ -64,6 +64,111 @@ def has_tool_leak(text):
         return False
 
 
+# ── 私有标签 / 思考原文 的总兜底（2026-10-17 立 · 主人点名要的规矩 ✓）────────
+# 主人原话：「任何新功能都要保证对**思考和 json 原文**的拦截」（提示词不改 ✓）
+#
+# **为什么要放在 guard**：各插件（impression / wishonomy / …）**各自**清自己的标签 ✓，
+# 但**新插件一旦漏了，没有任何兜底** ✗ ——
+# 2026-10-16 那两起真事故就是这么漏的：
+#   · impression：她连标签带 JSON **一起截断** ⇒ 插件只吃「标签+完整 {}」⇒ 残片漏进群 ✗
+#   · wishonomy：只剩**闭合**标签 + `payload is None` 时**直接早退** ⇒ 标签漏进群 ✗
+# ⇒ 所以这里做一道**与插件无关**的兜底：**认得出私有标签形态就扒掉** ✓
+#   （宁可多扒一个标签，也不能让 `<impression_update>{"impression":…` 进群 ✗）
+#
+# ⚠️ 两条纪律：
+#   ① **只扒「标签 + 紧跟其后的 JSON」**，绝不「截断到标签为止」✗
+#      —— 那会把她真正要说的话一起吃掉（`_11` 里记着那次教训 ✓）
+#   ② 只认**明确的私有标签名**（白名单 ✓），不搞「看到尖括号就扒」✗（会误伤正常文本 ✓）
+
+# 已登记的本仓私有标签名（新插件加标签 ⇒ **往这里加一个名字** ✓ 这就是那条约定的落地点）
+_MS_TAG_NAMES = ("impression_update", "wish_mood", "wish_grant", "wish_check",
+                 "mood", "impression", "mindscape_meta")
+
+_BT = chr(96)          # 反引号
+
+# ⚠️ **每个正则必须写成一个字面量、一行写完** ✗ —— 别换行、别用相邻字面量拼 ✓
+#   原因（本仓真坑 ✓ 2026-10-17 被自检当场抓住）：`build_plugin.py` 把相邻字面量折成
+#   **一个**常量 ⇒ 产物里那个字符串与源码里的**逐字不同** ⇒ 自检「**转义保真**」报 `转义丢失` ✗
+#   ⇒ 判据很简单：**这段正则字符串必须逐字出现在产物里** ✓（拆成两段就必然找不到 ✓）
+
+# ① 完整标签（含中间 JSON 且**闭合**）⇒ 整段扒掉 ✓
+PRIV_TAG_FULL = re.compile(r"(?:\[\[|\[|<)(?:impression_update|wish_mood|wish_grant|wish_check|mood|impression|mindscape_meta)(?:\]\]|\]|>)[ \t]*`*[ \t]*\{[^{}]*\}[ \t]*`*[ \t]*(?:\[\[/|\[/|</)(?:impression_update|wish_mood|wish_grant|wish_check|mood|impression|mindscape_meta)(?:\]\]|\]|>)")
+# ② 只剩闭合标签 ⇒ 扒掉 ✓（真事故：`…进谁兜了~[[/wish_mood]]`）
+PRIV_TAG_CLOSE = re.compile(r"(?:\[\[|\[|<)/(?:impression_update|wish_mood|wish_grant|wish_check|mood|impression|mindscape_meta)(?:\]\]|\]|>)")
+# ③ 开标签 + **没闭合的 JSON**（截断）⇒ 从 `{` 起到末尾全扒 ✓
+#    （漏出形态必然在末尾 —— 因为那是被截断出来的 ✓）
+PRIV_TAG_TRUNC = re.compile(r"(?:\[\[|\[|<)(?:impression_update|wish_mood|wish_grant|wish_check|mood|impression|mindscape_meta)(?:\]\]|\]|>)[ \t]*`*[ \t]*\{[^{}]*$")
+# ④ 开标签 + **完整** JSON（没闭合标签）⇒ 一起扒 ✓
+PRIV_TAG_OPENJSON = re.compile(r"(?:\[\[|\[|<)(?:impression_update|wish_mood|wish_grant|wish_check|mood|impression|mindscape_meta)(?:\]\]|\]|>)[ \t]*`*[ \t]*\{[^{}]*\}[ \t]*`*")
+
+
+def put_plain_text(result, text):
+    """把 result.chain 里的**可见文本**整体换成 `text` ✓ 返回改动数。
+
+    做法（照本仓惯例 `comp.text = new` ✓）：把 `text` 写进**第一个可写的文本组件**，
+    其余文本组件清空 ⇒ **图/语音等非文本组件的顺序不受影响** ✓
+    """
+    chain = getattr(result, "chain", None)
+    if not chain:
+        return 0
+    n = 0
+    done = False
+    for comp in chain:
+        cur = getattr(comp, "text", None)
+        if not isinstance(cur, str):
+            continue
+        if not done:
+            if cur != text:
+                comp.text = text
+                n += 1
+            done = True
+        elif cur:
+            comp.text = ""
+            n += 1
+    return n
+
+# ⑤ 思考原文泄漏：模型把「自述式思考」写进正文 ✗
+#    真事故（2026-10-16 17:20）：`…一天换三回~，嗯，标签要放对位置，让我把 wish_mood 写完整`
+#    ⚠️ 窄口径：只在**提到标签名 / format / 格式**时才判 ✗
+#       —— 她平时本来就爱说「让我」「嗯」，一律砍会误伤 ✓
+# ⚠️ 窄口径（**宁可不扒，也不误伤** ✗）：只在出现**明显的自述口吻标记**时才判 ✓
+#   判据 = 边界符 + 自述语（嗯/哦/欸…，）+ 紧随其后的**短句** + 提到标签/格式/JSON
+#   ⚠️ 两条都必须有：① 「嗯，」这种自述语开头 ② 提到标签名或 format 字样
+#   ⇒ 她平时说「嗯」「让我」都不带这两条 ⇒ 不会误伤 ✓
+#   ⚠️ 不可贪：本鱼第一版写成「…（任意 ≤24 字）…让我…format…」⇒ 把
+#      「——花粉你这口径，一天换三回~」也吃掉了 ✗（实测抓到 ⇒ 收紧 ✓）
+THINK_LEAK = re.compile(
+    r"(?:(?:^|[，,。；;！!？?\n])[ \t]*(?:嗯|哦|欸|哎)[ \t]*，[ \t]*[^\n。！？]{0,30}?(?:标签|格式|format|need format|wish_mood|impression|JSON|json|写完整|写全)|(?:^|[，,。；;！!？?\n])[ \t]*(?:Wait|wait|Need|need|Hmm|hmm)\b[^\n。！？]{0,40}?(?:format|formatting|JSON|json))[^\n。！？]{0,40}$")
+# ⚠️ 长度保护：扒完必须还剩点话（≥2 字）—— 否则说明它把整句都吃了 ✗ 那就别扒 ✓
+#    （她正常说话里也可能出现「让我…格式」⇒ 宁可留一句，也不能把整句吞掉 ✗）
+
+
+def strip_private_tags(text):
+    """扒掉**私有标签（含紧跟的 JSON）**与**自述式思考残句** ✓ 返回 (新文本, 改了几处)。
+
+    ⚠️ 只删「标签 + 它自己的 JSON」；**绝不截断她真正要说的话** ✗
+    """
+    if not isinstance(text, str) or not text:
+        return text, 0
+    n = 0
+    out = text
+    for _ in range(6):                      # 多来几轮，防嵌套/残留 ✓
+        before = out
+        out = PRIV_TAG_FULL.sub("", out)
+        out = PRIV_TAG_TRUNC.sub("", out)
+        out = PRIV_TAG_OPENJSON.sub("", out)
+        out = PRIV_TAG_CLOSE.sub("", out)
+        # 思考残句：**只在扒完还剩 ≥2 字时才扒** ✓（否则它把整句吃了 ⇒ 不扒 ✗）
+        _hit = THINK_LEAK.search(out)
+        if _hit and len(out[:_hit.start()].strip()) >= 2:
+            out = out[:_hit.start()]
+        if out == before:
+            break
+    if out != text:
+        n = 1
+    return out.rstrip(), n
+
+
 # 兜底正则：形如 "xxxError: ..." / "xxxException: ..." / "Timeout: ..."
 DEFAULT_REGEX = r"(?:[A-Za-z_]*Error|[A-Za-z_]*Exception|Timeout|Failed)\s*[:：]"
 
@@ -257,53 +362,42 @@ def ms_set_text_formatter(provider):
 
 
 def store_fmt(msgs, context, kwargs):
-    """把这一批 plain 逐个过一遍 format 的整形（压平 + 走 no_period 作用域的去掉句尾句号）。
+    """把这一批 plain 逐个过一遍：**先扒私有标签/思考残句** ✓，再走 format 的整形 ✓。
 
-    为什么必须在这儿补：这个内置工具**直接发消息**，不经过 `on_decorating_result`
-    ⇒ `FormatMixin.flatten_result` 看不到它 ⇒ 句号照发 ✗
-    （2026-10-16 实测：她 13 次 `send_message_to_user` 里有 2 条带了句尾句号 ✓）
-    带图/语音的走原样 ✓；整形失败一律**原样放行** ✓（宁可多发一个句号，也不能吞话 ✗）
+    ⚠️ 顺序：**先扒标签，再压平/去句号** —— 反过来的话，压平会把标签和正文的边界糊掉 ✗
+    （2026-10-17 主人定的规矩：任何新功能都要保证对**思考和 JSON 原文**的拦截 ✓）
+    带图/语音的走原样 ✓；任一步失败一律**原样放行** ✓（宁可多发一个标签，也不能吞话 ✗）
     """
-    if MS_TEXT_FMT is None:
-        # 🔍 一次性诊断（msdiag）—— 「没登记整形」时也要留痕，否则分不清
-        #    「没走这条路」和「走了但没登记」✗ 
-        try:
-            logger.warning("[msdiag] store_fmt 被调用但 MS_TEXT_FMT=None（整形未登记）段数=%d", len(msgs))
-        except Exception:
-            pass
-        return msgs
-    try:
-        tf = MS_TEXT_FMT()
-    except Exception:
-        return msgs
-    if tf is None:
-        try:
-            logger.warning("[msdiag] store_fmt 拿到 None transform（实例还没 setup？）")
-        except Exception:
-            pass
-        return msgs
     out = []
     for m in msgs:
-        if (isinstance(m, dict) and str(m.get("type")) == "plain"
+        if not (isinstance(m, dict) and str(m.get("type")) == "plain"
                 and isinstance(m.get("text"), str)):
-            _orig = m["text"]
+            out.append(m)
+            continue
+        _orig = m["text"]
+        # ① 私有标签 / 思考残句 的总兜底（与插件无关 ✓）
+        _stripped, _n = strip_private_tags(_orig)
+        if _n:
+            logger.warning("[mindscape_guard] 出站扒掉私有标签/思考残句（%d 处）: %s",
+                           _n, _orig[:90])
+            m = dict(m)
+            m["text"] = _stripped
+        # ② format 的整形（压平 / 去句号）
+        if MS_TEXT_FMT is not None:
             try:
-                new = tf(context, m["text"], kwargs)
-            except Exception as exc:
-                logger.warning("[mindscape_guard] 出站整形失败（原样放行）: %s", str(exc)[:80])
-                out.append(m)
-                continue
-            # 🔍 一次性诊断（msdiag）—— 整形前后成对记，抓完即撤 ✗
-            try:
-                logger.warning("[msdiag] store_fmt 前=%s 后=%s", _orig[:150], str(new)[:150])
+                tf = MS_TEXT_FMT()
             except Exception:
-                pass
-            if new and new != m["text"]:
-                m = dict(m)
-                m["text"] = new
+                tf = None
+            if tf is not None:
+                try:
+                    new = tf(context, m["text"], kwargs)
+                    if new and new != m["text"]:
+                        m = dict(m)
+                        m["text"] = new
+                except Exception as exc:
+                    logger.warning("[mindscape_guard] 出站整形失败（原样放行）: %s", str(exc)[:80])
         out.append(m)
     return out
-
 
 def ms_patch_send_tool():
     """把内置工具 `send_message_to_user` 改成「每个 plain 各发一条」。
@@ -436,6 +530,24 @@ class GuardMixin:
             txt = result.get_plain_text() or ""
             if not txt.strip():
                 return
+            # ⭐ 先扒「私有标签 / 思考残句」—— 2026-10-17 主人定的规矩 ✓
+            #   「任何新功能都要保证对**思考和 json 原文**的拦截」（提示词不改 ✓）
+            #   为什么放这儿：本钩子 priority=**999**（仅次于 silence 的 1000）⇒
+            #   **所有插件的最终出站都要从它下面过** ⇒ 是唯一能兜住"新插件忘了清标签"的位置 ✓
+            #   ⚠️ 策略：**扒掉标签、留下她真正要说的话** ✓ 不是整条丢掉 ✗
+            #      （真事故都是「正常正文 + 末尾残标签」⇒ 整条丢会让她白说一句 ✓）
+            _cleaned, _hits = strip_private_tags(txt)
+            if _hits:
+                logger.warning("[mindscape_guard] 出站扒掉私有标签/思考残句: %s", redact(txt))
+                put_plain_text(result, _cleaned)
+                txt = _cleaned
+                if not txt.strip():
+                    # 整条只剩标签（没有说话）⇒ 那就不该发 ✓
+                    self.blocked += 1
+                    logger.warning("[mindscape_guard] 扒完只剩标签 ⇒ 整条不发")
+                    event.clear_result()
+                    event.stop_event()
+                    return
             leak = has_tool_leak(txt)
             if leak or is_error_text(txt, self.patterns, self.regex):
                 self.blocked += 1

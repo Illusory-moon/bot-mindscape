@@ -3560,6 +3560,58 @@ def main():
     except Exception as e:
         bad("R82 拆气泡的每一段也去句号", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
+    # R83: **私有标签 / 思考残句的总兜底**（2026-10-17 主人定的规矩 ✓）
+    #   主人原话：「把这条记进重点注意事项里，任何新功能都要保证对**思考和 json 原文**的拦截，
+    #              提示词就别改了」
+    #   背景：2026-10-16 两起真事故 ——
+    #     · impression：她连标签带 JSON **一起截断** ⇒ 插件只吃「标签 + 完整 {}」⇒ 残片漏进群 ✗
+    #     · wishonomy：只剩**闭合**标签 + `payload is None` 时直接早退 ⇒ 标签漏进群 ✗
+    #   ⇒ 各插件各清各的**不够** ✗（新插件一旦漏了就没有兜底 ✓）
+    #   ⇒ guard 加 `strip_private_tags`，装在 `on_decorating_result(priority=999)`
+    #      —— 所有插件的最终出站都要从它下面过 ✓
+    #   判据：**真事故原文必须扒干净** + **她的正常话一个字都不许动** ✓
+    try:
+        import importlib as _il83
+        import mindscape_guard as _G83
+        _il83.reload(_G83)
+
+        _leaks83 = [
+            ('申请书批了，就冲「单纯好色」这条，真诚得没法驳回呀~<impression_update>{"impression',
+             '申请书批了，就冲「单纯好色」这条，真诚得没法驳回呀~'),
+            ('危？我这不是正好好在直播间挂着呢嘛，<impression_update>{"impression":null,"r',
+             '危？我这不是正好好在直播间挂着呢嘛，'),
+            ('正主可从来不用报幕~[[impression_update]]{"impression":null,"reason":null}，Wait — need format:',
+             '正主可从来不用报幕~'),
+            ('「火花大会」？前几期？门票钱进谁兜了~[[/wish_mood]]',
+             '「火花大会」？前几期？门票钱进谁兜了~'),
+            ('上午还念叨着火爻真虚，下午就喊我菜~[[wish_mood]]{"delta":0,"reason":"x"}，嗯，标签要放对位置，让我把 wish_mood 写完整',
+             '上午还念叨着火爻真虚，下午就喊我菜~'),
+        ]
+        _keep83 = [
+            '嘻，今天天气不错呀~',
+            '让我想想这道题怎么算呀~',
+            '配队是 {双暴} 优先哦~',
+            '排版格式你自己看着办哦~',
+            '这台 <机器> 不错呀~',
+        ]
+        _bad83 = []
+        for _t83, _want83 in _leaks83:
+            _got83, _n83 = _G83.strip_private_tags(_t83)
+            if _got83.strip() != _want83.strip():
+                _bad83.append("漏扒→%r" % (_got83[-24:],))
+        for _t83 in _keep83:
+            _got83, _n83 = _G83.strip_private_tags(_t83)
+            if _got83.strip() != _t83.strip():
+                _bad83.append("误伤→%r" % (_got83,))
+        _names83 = list(getattr(_G83, "_MS_TAG_NAMES", ()) or ())
+        _good83 = (not _bad83) and len(_names83) >= 5
+        (ok if _good83 else bad)(
+            "R83 私有标签/思考残句的总兜底（真事故要扒干净 · 正常话不许动）",
+            "已登记标签 %d 个 ｜ 泄漏 %d 例 / 不误伤 %d 例 ｜ %s"
+            % (len(_names83), len(_leaks83), len(_keep83), "; ".join(_bad83)[:110] or "全部通过 ✓"))
+    except Exception as e:
+        bad("R83 私有标签/思考残句的总兜底", "%s: %s" % (type(e).__name__, str(e)[:140]))
+
     # ── CF：耦合冲突检测（跨模块的隐式耦合 —— 单模块看都正常 ✗）
     #   主人 2026-10-16 点名要的：「以后这种 bug 反正我自己是找不到根因」
     #   本仓真事故：flatten_result(900) 抹掉 ||| ⇒ mention 的低优先级钩子拿不到分隔符
