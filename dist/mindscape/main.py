@@ -978,7 +978,12 @@ def normalize_outbound(text):
     out, _n1 = strip_private_tags(text)
     hits += _n1
     if _SEP3 in out:
-        out = out.replace(_SEP3, "")        # ⭐ 替换成**空字符**（主人指定 ✓）
+        # ⚠️ 口径（2026-10-17 第二次修正 ✓）：`|||` 是**句间分隔** ⇒
+        #    替换成**空字符**会让两句话**糊在一起** ✗
+        #    真事故：`…别端那些重口味的来凑热闹|||吃饱了赶紧睡…` ⇒ 去空后读成
+        #    「…来凑热闹吃饱了赶紧睡…」✗（主人报「两句之间有点精分」的一部分 ✓）
+        #    ⇒ 改成**换成「，」** ✓：即使拆气泡那条路没走成，群里读到的仍是**通顺的两句** ✓
+        out = out.replace(_SEP3, "，")
         hits += 1
     out, _n2 = strip_md_marks(out)
     hits += _n2
@@ -3435,6 +3440,32 @@ RC_SENT = {}          # key = "self_id|group_id" → 时间戳 ✓ 跨钩子用�
 RC_SENT_TTL = 180
 
 
+RC_TEXT_SENT = {}     # key = "self_id|group_id" → 时间戳（由 guard 的 block_error 登记 ✓）
+
+
+RC_TEXT_TTL = 180
+
+
+def rc_mark_text_sent(self_id, group_id, now=None):
+    """guard 在**真的有正文要发**时登记一笔 ✓（只在那一刻登记 ⇒ 零误报 ✓）。"""
+    try:
+        import time as _t
+        RC_TEXT_SENT["%s|%s" % (self_id, group_id)] = float(now if now is not None else _t.time())
+    except Exception:
+        pass
+
+
+def rc_text_sent_recent(event, now=None):
+    """本轮（近 RC_TEXT_TTL 秒）是不是**已经发出过正文** ✓。"""
+    try:
+        key = "%s|%s" % (event.get_self_id(), event.get_group_id())
+    except Exception:
+        return False
+    ts = RC_TEXT_SENT.get(key) or 0
+    import time as _t
+    return (float(now if now is not None else _t.time()) - float(ts)) < RC_TEXT_TTL
+
+
 def rc_sent_recent(event, now=None):
     """本轮（近 RC_SENT_TTL 秒）有没有出站类工具发过话。"""
     import time as _t
@@ -3986,6 +4017,24 @@ class GuardMixin:
                     event.stop_event()
                     return
             leak = has_tool_leak(txt)
+            # ⭐ 登记「本轮已经把正文发出去了」—— 给救援模块用 ✓
+            #   为什么在这儿：本钩子 **priority=999** ⇒ 真有字要发时一定会走到这一步 ✓
+            #   （`receive` 那边靠它判断「她其实说过了」，免得**再补一句**造成"精分" ✗
+            #     —— 2026-10-17 真事故：她调了个不存在的工具 ⇒ 那步返回空 ⇒ 救援另生成一句 ✗）
+            if txt.strip():
+                try:
+                    _rs = globals().get("rc_mark_text_sent")
+                    if _rs is None:
+                        import sys as _gsys
+                        for _gn, _gm in list(_gsys.modules.items()):
+                            if _gn.endswith("mindscape_rescue"):
+                                _rs = getattr(_gm, "rc_mark_text_sent", None)
+                                if _rs is not None:
+                                    break
+                    if _rs is not None:
+                        _rs(event.get_self_id(), event.get_group_id())
+                except Exception:
+                    pass
             if leak or is_error_text(txt, self.patterns, self.regex):
                 self.blocked += 1
                 # S03: 只记录脱敏摘要，避免上游报错里夹带的密钥进日志
@@ -4983,6 +5032,13 @@ class RescueMixin:
             # 规矩：**本轮只要已经用「出站类工具」说过话，就不许补** ✓（跨钩子状态存模块级 ✓）。
             if rc_sent_recent(event):
                 logger.info("[mindscape_rescue] 本轮已用工具说过话 → 不补 ✓")
+                return
+            # ⭐ 2026-10-17 新增：**本轮已经发出过正文** ⇒ 更不许补 ✗
+            #   真事故（主人报「精分」）：她调了个**不存在的工具**（把标签当工具 ✗）
+            #   ⇒ 那一步返回空 ⇒ 这里以为她没说话、另问一次模型 ⇒ 群里**两句不同来源** ✗
+            #   （第 1 条是她的真实回答，第 2 条是救援产物 ✓）
+            if rc_text_sent_recent(event):
+                logger.info("[mindscape_rescue] 本轮已发出过正文 → 不补（否则会精分 ✗）")
                 return
             text = await self._ask_once(event)
             if not text:

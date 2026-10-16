@@ -50,6 +50,37 @@ RC_OUTBOUND_TOOLS = {"send_message_to_user", "say_lines", "at_user"}
 RC_SENT = {}          # key = "self_id|group_id" → 时间戳 ✓ 跨钩子用模块级（event 存储不可靠 ✓）
 RC_SENT_TTL = 180
 
+# ── 「本轮已经**发出过正文**」的哨兵（2026-10-17 加 ✓ 修「精分」真事故）──────────
+# 事故（主人报「总感觉她两句之间有点精分」✓ 2026-10-17 凌晨）：
+#   她那一轮除了正常工具，还**把一个「标签」当工具调**了 ✗ ⇒ 框架「未找到指定的工具，将跳过」
+#   ⇒ 那一步返回空 ⇒ 救援**以为她没说话**、**另问一次模型**生成一句 ✗
+#   ⇒ 群里出现**两个来源**的话（第 1 条 = 她的真实回答·温柔 ✓；第 2 条 = 救援产物·生硬 ✗）
+#   ⇒ 读起来就是「精分」✓
+# ⇒ 修：**本轮已经发出过正文 ⇒ 绝不再补** ✓（与既有那条「出站类工具说过话就不补」同一思路 ✓）
+# ⚠️ 注释里**不许写具体群号/bot 号** ✗（铁律 §1：号码永远进 config ✓ 本鱼为此被脱敏扫描当场抓住 ✓）
+RC_TEXT_SENT = {}     # key = "self_id|group_id" → 时间戳（由 guard 的 block_error 登记 ✓）
+RC_TEXT_TTL = 180
+
+
+def rc_mark_text_sent(self_id, group_id, now=None):
+    """guard 在**真的有正文要发**时登记一笔 ✓（只在那一刻登记 ⇒ 零误报 ✓）。"""
+    try:
+        import time as _t
+        RC_TEXT_SENT["%s|%s" % (self_id, group_id)] = float(now if now is not None else _t.time())
+    except Exception:
+        pass
+
+
+def rc_text_sent_recent(event, now=None):
+    """本轮（近 RC_TEXT_TTL 秒）是不是**已经发出过正文** ✓。"""
+    try:
+        key = "%s|%s" % (event.get_self_id(), event.get_group_id())
+    except Exception:
+        return False
+    ts = RC_TEXT_SENT.get(key) or 0
+    import time as _t
+    return (float(now if now is not None else _t.time()) - float(ts)) < RC_TEXT_TTL
+
 
 def rc_sent_recent(event, now=None):
     """本轮（近 RC_SENT_TTL 秒）有没有出站类工具发过话。"""
@@ -104,6 +135,13 @@ class RescueMixin:
             # 规矩：**本轮只要已经用「出站类工具」说过话，就不许补** ✓（跨钩子状态存模块级 ✓）。
             if rc_sent_recent(event):
                 logger.info("[mindscape_rescue] 本轮已用工具说过话 → 不补 ✓")
+                return
+            # ⭐ 2026-10-17 新增：**本轮已经发出过正文** ⇒ 更不许补 ✗
+            #   真事故（主人报「精分」）：她调了个**不存在的工具**（把标签当工具 ✗）
+            #   ⇒ 那一步返回空 ⇒ 这里以为她没说话、另问一次模型 ⇒ 群里**两句不同来源** ✗
+            #   （第 1 条是她的真实回答，第 2 条是救援产物 ✓）
+            if rc_text_sent_recent(event):
+                logger.info("[mindscape_rescue] 本轮已发出过正文 → 不补（否则会精分 ✗）")
                 return
             text = await self._ask_once(event)
             if not text:

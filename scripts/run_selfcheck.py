@@ -3644,18 +3644,20 @@ def main():
 
         _r84 = _Res84(["无聊就来找火花花呀~ 我陪你三个小时|||谁先扛不住谁输，火花花赌你中途睡着~"])
         _before84 = _r84.get_plain_text()
-        # ⭐ 主人 2026-10-17 指定：分隔符**替换成空字符**（不是换行 ✓）
+        # ⭐ 口径（2026-10-17 二次修正）：`|||` 是**句间分隔** ⇒ 换成「，」✓
+        #    ⚠️ 换空字符会让两句**糊在一起**（真事故：`…来凑热闹|||吃饱了赶紧睡…`
+        #       ⇒ 去空后读成「…来凑热闹吃饱了赶紧睡…」✗）
         _fixed84 = _G84.normalize_outbound(_before84)[0]
         _n84 = _G84.put_plain_text(_r84, _fixed84)
         _after84 = _r84.get_plain_text()
         _ok84 = (_n84 >= 1 and "|||" not in _after84 and chr(10) not in _after84
-                 and "我陪你三个小时谁先扛不住" in _after84.replace(" ", ""))
+                 and "三个小时，谁先扛不住" in _after84.replace(" ", ""))
         # 幂等：再整理一次不该变 ✓
         _again84 = _G84.put_plain_text(_r84, _G84.normalize_outbound(_after84)[0])
         _idem84 = _r84.get_plain_text() == _after84
         _good84 = _ok84 and _idem84
         (ok if _good84 else bad)(
-            "R84 气泡分隔符 ||| 替换成空字符（幂等 · 不阻断）",
+            "R84 气泡分隔符 ||| 换成「，」（幂等 · 不阻断）",
             "改写=%d 换后=%r 幂等=%s" % (_n84, _after84[:64], _idem84))
     except Exception as e:
         bad("R84 气泡分隔符 ||| 的总兜底", "%s: %s" % (type(e).__name__, str(e)[:140]))
