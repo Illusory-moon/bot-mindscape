@@ -169,6 +169,69 @@ def strip_private_tags(text):
     return out.rstrip(), n
 
 
+# ── 出站「标记清理」：气泡分隔符 + markdown（2026-10-17 主人点名 ✓）──────────
+# 主人原话：「能不能用类似的方式把 **|||** 替换成空字符，她在被模型惯性带着想输出 markdown」
+#
+# **气泡分隔符 `|||`**：那是本仓"分几条发"的**内部标记** ✗ 绝不能进群 ✓
+#   ⚠️ 修法从「换成换行」改成「**替换成空字符**」✓（主人 2026-10-17 指定 ✓）——
+#      因为拆气泡那条路会照旧把话分成几条发 ✓ 留着换行反而是多余的空行 ✓
+#   ⚠️ 事故形态（2026-10-17 烩面群 ✓）：某次出站时 `chain` 里**还没有文本**
+#      ⇒ mention 读到 0 字、既没拆也没兜底 ⇒ `|||` 原样进群 ✗（拆开的 2 条晚了 6 秒 ✗）
+#
+# **markdown**：模型惯性会带 ✗ 而她在群里说话**从不该用格式** ✓
+#   实测（全库 6588 条她发出的消息）：`**粗体**` **5 次**、反引号 **0 次**、
+#   且那 5 次**全是"想强调"**（`**摄影机后面**` / `**做了**` / `**今**晚`）✓
+#   ⇒ **扒掉标记、留下文字**是**零误伤**的 ✓（`**今**晚` → `今晚` ✓ 正是她本来要说的 ✓）
+_SEP3 = chr(124) * 3
+# ⚠️ 每个正则**一行、一个字面量** ✗ 别换行拼接（产物与源码会逐字不同 ⇒ 转义保真报红 ✓）
+MD_BOLD = re.compile(r"\*\*([^*\n]+)\*\*")
+MD_ITAL = re.compile(r"(?<![*\w])\*([^*\n]+)\*(?![*\w])")
+MD_UNDER = re.compile(r"__([^_\n]+)__")
+MD_CODE = re.compile(r"`([^`\n]+)`")
+MD_FENCE = re.compile(r"```[a-zA-Z0-9_+\-]*\n?")
+MD_HEAD = re.compile(r"^[ \t]*#{1,6}[ \t]*", re.M)
+MD_QUOTE = re.compile(r"^[ \t]*>[ \t]?", re.M)
+MD_HYPHEN = re.compile(r"^[ \t]*[-*+][ \t]+", re.M)
+MD_NUM = re.compile(r"^[ \t]*\d+[.)][ \t]+", re.M)
+
+
+def strip_md_marks(text):
+    """扒掉 markdown **标记**、留下文字 ✓（返回 (新文本, 改了几处)）。
+
+    ⚠️ 只动标记，不动内容 ✓ —— `**今**晚` → `今晚` ✓（她自己要说的就是"今晚"✓）
+    """
+    if not isinstance(text, str) or not text:
+        return text, 0
+    n = 0
+    out = text
+    for pat, rep in ((MD_BOLD, r"\1"), (MD_UNDER, r"\1"), (MD_CODE, r"\1"),
+                     (MD_ITAL, r"\1"), (MD_FENCE, ""), (MD_HEAD, ""),
+                     (MD_QUOTE, ""), (MD_HYPHEN, ""), (MD_NUM, "")):
+        new = pat.sub(rep, out)
+        if new != out:
+            n += 1
+            out = new
+    return out, n
+
+
+def normalize_outbound(text):
+    """出站总整理：**私有标签/思考** → **`|||` 去掉** → **markdown 标记扒掉** ✓
+
+    返回 (新文本, 改了几处)。做成一个函数是为了**两条出站管线口径一致** ✓
+    """
+    if not isinstance(text, str) or not text:
+        return text, 0
+    hits = 0
+    out, _n1 = strip_private_tags(text)
+    hits += _n1
+    if _SEP3 in out:
+        out = out.replace(_SEP3, "")        # ⭐ 替换成**空字符**（主人指定 ✓）
+        hits += 1
+    out, _n2 = strip_md_marks(out)
+    hits += _n2
+    return out, hits
+
+
 # 兜底正则：形如 "xxxError: ..." / "xxxException: ..." / "Timeout: ..."
 DEFAULT_REGEX = r"(?:[A-Za-z_]*Error|[A-Za-z_]*Exception|Timeout|Failed)\s*[:：]"
 
@@ -375,11 +438,10 @@ def store_fmt(msgs, context, kwargs):
             out.append(m)
             continue
         _orig = m["text"]
-        # ① 私有标签 / 思考残句 的总兜底（与插件无关 ✓）
-        _stripped, _n = strip_private_tags(_orig)
+        # ① 出站总整理：私有标签/思考 → `|||` 去掉 → markdown 标记扒掉 ✓
+        _stripped, _n = normalize_outbound(_orig)
         if _n:
-            logger.warning("[mindscape_guard] 出站扒掉私有标签/思考残句（%d 处）: %s",
-                           _n, _orig[:90])
+            logger.warning("[mindscape_guard] 出站整理（工具直发路）: %s", _orig[:90])
             m = dict(m)
             m["text"] = _stripped
         # ② format 的整形（压平 / 去句号）
@@ -539,42 +601,24 @@ class GuardMixin:
                 pass
             if not txt.strip():
                 return
-            # ⭐ 先扒「私有标签 / 思考残句」—— 2026-10-17 主人定的规矩 ✓
-            #   「任何新功能都要保证对**思考和 json 原文**的拦截」（提示词不改 ✓）
+            # ⭐ 出站总整理：私有标签/思考 → `|||` 去掉 → markdown 标记扒掉 ✓
+            #   2026-10-17 主人定的规矩 + 两条真事故驱动的（详见 normalize_outbound 的注释 ✓）
             #   为什么放这儿：本钩子 priority=**999**（仅次于 silence 的 1000）⇒
-            #   **所有插件的最终出站都要从它下面过** ⇒ 是唯一能兜住"新插件忘了清标签"的位置 ✓
-            #   ⚠️ 策略：**扒掉标签、留下她真正要说的话** ✓ 不是整条丢掉 ✗
-            #      （真事故都是「正常正文 + 末尾残标签」⇒ 整条丢会让她白说一句 ✓）
-            _cleaned, _hits = strip_private_tags(txt)
+            #   **所有插件的最终出站都要从它下面过** ⇒ 是唯一能兜住"新插件忘了清"的位置 ✓
+            #   ⚠️ 策略：**扒掉标记、留下她真正要说的话** ✓ 不是整条丢掉 ✗
+            _cleaned, _hits = normalize_outbound(txt)
             if _hits:
-                logger.warning("[mindscape_guard] 出站扒掉私有标签/思考残句: %s", redact(txt))
+                logger.warning("[mindscape_guard] 出站整理: %s", redact(txt))
                 put_plain_text(result, _cleaned)
                 txt = _cleaned
                 if not txt.strip():
-                    # 整条只剩标签（没有说话）⇒ 那就不该发 ✓
+                    # 整理完啥也不剩（她本来就只想发个标记）⇒ 那就不该发 ✓
                     self.blocked += 1
-                    logger.warning("[mindscape_guard] 扒完只剩标签 ⇒ 整条不发")
+                    logger.warning("[mindscape_guard] 整理完只剩标记 ⇒ 整条不发")
                     event.clear_result()
                     event.stop_event()
                     return
             leak = has_tool_leak(txt)
-            # ⭐ 气泡分隔符 `|||` 的**总兜底**（2026-10-17 真事故 ✓）
-            #   它绝不能进群（那是"分几条发"的内部标记 ✗）
-            #   事故形态：某次出站时 `chain` 里**还没有文本**（mention 读到 0 字 ✗）
-            #   ⇒ `|||` 原样发出 ✗；而拆开的那两条**晚了 6 秒**才发 ✓
-            #   ⚠️ 为什么这里**只换成换行、不阻断** ✗：
-            #      若这轮**不会**再来一次带文本的出站，阻断就等于**吞掉她整句话** ✗；
-            #      换成换行后，群友看到的是**两条独立文本**（自然 ✓ 不会被当成乱码 ✓），
-            #      而后面的拆气泡路若照常跑，也**不受影响**（幂等 ✓）——
-            #      这正是 mention 的 `mn_sep_fallback` 早就想干的事 ✓ 只是它**跑得太晚** ✗
-            #   ⚠️ 顺序：**在扒私有标签之后**（标签里也可能夹分隔符 ✓）✓
-            _sep = chr(124) * 3
-            if _sep in txt:
-                _fixed_sep = txt.replace(_sep, chr(10))
-                logger.warning("[msdiag] guard 兜底：分隔符换成换行 前=%r 后=%r",
-                               txt[:80], _fixed_sep[:80])
-                if put_plain_text(result, _fixed_sep):
-                    txt = _fixed_sep
             if leak or is_error_text(txt, self.patterns, self.regex):
                 self.blocked += 1
                 # S03: 只记录脱敏摘要，避免上游报错里夹带的密钥进日志

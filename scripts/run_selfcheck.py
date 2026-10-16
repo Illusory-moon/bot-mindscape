@@ -3586,6 +3586,10 @@ def main():
              '「火花大会」？前几期？门票钱进谁兜了~'),
             ('上午还念叨着火爻真虚，下午就喊我菜~[[wish_mood]]{"delta":0,"reason":"x"}，嗯，标签要放对位置，让我把 wish_mood 写完整',
              '上午还念叨着火爻真虚，下午就喊我菜~'),
+            # ⭐ markdown 标记也扒（2026-10-17 主人点名 ✓ 那 5 条真事故 ✓）
+            ('火花花验了——**做了**，结了，信誉分加五分', '火花花验了——做了，结了，信誉分加五分'),
+            ('是**今**晚刚发生的事', '是今晚刚发生的事'),
+            ('火花花当然站**摄影机后面**那个位置呀', '火花花当然站摄影机后面那个位置呀'),
         ]
         _keep83 = [
             '嘻，今天天气不错呀~',
@@ -3593,21 +3597,24 @@ def main():
             '配队是 {双暴} 优先哦~',
             '排版格式你自己看着办哦~',
             '这台 <机器> 不错呀~',
+            # ⚠️ 不误伤：她正常用星号（乘法）/ 下划线昵称 ✓
+            '2*3 等于 6 呀~',
+            '芳芳_2026 也在榜上呀',
         ]
         _bad83 = []
         for _t83, _want83 in _leaks83:
-            _got83, _n83 = _G83.strip_private_tags(_t83)
+            _got83, _n83 = _G83.normalize_outbound(_t83)
             if _got83.strip() != _want83.strip():
                 _bad83.append("漏扒→%r" % (_got83[-24:],))
         for _t83 in _keep83:
-            _got83, _n83 = _G83.strip_private_tags(_t83)
+            _got83, _n83 = _G83.normalize_outbound(_t83)
             if _got83.strip() != _t83.strip():
                 _bad83.append("误伤→%r" % (_got83,))
         _names83 = list(getattr(_G83, "_MS_TAG_NAMES", ()) or ())
         _good83 = (not _bad83) and len(_names83) >= 5
         (ok if _good83 else bad)(
-            "R83 私有标签/思考残句的总兜底（真事故要扒干净 · 正常话不许动）",
-            "已登记标签 %d 个 ｜ 泄漏 %d 例 / 不误伤 %d 例 ｜ %s"
+            "R83 出站整理：私有标签/思考/markdown（真要扒干净 · 正常话不许动）",
+            "已登记标签 %d 个 ｜ 该扒 %d 例 / 不误伤 %d 例 ｜ %s"
             % (len(_names83), len(_leaks83), len(_keep83), "; ".join(_bad83)[:110] or "全部通过 ✓"))
     except Exception as e:
         bad("R83 私有标签/思考残句的总兜底", "%s: %s" % (type(e).__name__, str(e)[:140]))
@@ -3637,16 +3644,19 @@ def main():
 
         _r84 = _Res84(["无聊就来找火花花呀~ 我陪你三个小时|||谁先扛不住谁输，火花花赌你中途睡着~"])
         _before84 = _r84.get_plain_text()
-        _n84 = _G84.put_plain_text(_r84, _before84.replace("|||", chr(10)))
+        # ⭐ 主人 2026-10-17 指定：分隔符**替换成空字符**（不是换行 ✓）
+        _fixed84 = _G84.normalize_outbound(_before84)[0]
+        _n84 = _G84.put_plain_text(_r84, _fixed84)
         _after84 = _r84.get_plain_text()
-        _ok84 = (_n84 >= 1 and "|||" not in _after84 and chr(10) in _after84)
-        # 幂等：再换一次不该变 ✓
-        _again84 = _G84.put_plain_text(_r84, _after84.replace("|||", chr(10)))
+        _ok84 = (_n84 >= 1 and "|||" not in _after84 and chr(10) not in _after84
+                 and "我陪你三个小时谁先扛不住" in _after84.replace(" ", ""))
+        # 幂等：再整理一次不该变 ✓
+        _again84 = _G84.put_plain_text(_r84, _G84.normalize_outbound(_after84)[0])
         _idem84 = _r84.get_plain_text() == _after84
         _good84 = _ok84 and _idem84
         (ok if _good84 else bad)(
-            "R84 气泡分隔符 ||| 的总兜底（换成换行 · 幂等 · 不阻断）",
-            "改写=%d 换后=%r 幂等=%s" % (_n84, _after84[:60].replace(chr(10), "⏎"), _idem84))
+            "R84 气泡分隔符 ||| 替换成空字符（幂等 · 不阻断）",
+            "改写=%d 换后=%r 幂等=%s" % (_n84, _after84[:64], _idem84))
     except Exception as e:
         bad("R84 气泡分隔符 ||| 的总兜底", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
