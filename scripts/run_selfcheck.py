@@ -3560,6 +3560,24 @@ def main():
     except Exception as e:
         bad("R82 拆气泡的每一段也去句号", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
+    # ── CF：耦合冲突检测（跨模块的隐式耦合 —— 单模块看都正常 ✗）
+    #   主人 2026-10-16 点名要的：「以后这种 bug 反正我自己是找不到根因」
+    #   本仓真事故：flatten_result(900) 抹掉 ||| ⇒ mention 的低优先级钩子拿不到分隔符
+    #   ⇒ 回退到旧副本 ⇒ 整形被绕过 ⇒ 群里带句尾句号 ✗（而且日志搜不到 ✗）
+    try:
+        import conflict_guard as _CG
+        _extra = []
+        # wishonomy 的源码不在本仓（独立仓库）⇒ 线上那份在服务器；
+        # 本地若放了副本（_t/wishonomy.online.py ✓）就顺手一起查 ✓ 没有则跳过 ✓
+        for _p in (os.path.join(HERE, "..", "_t", "wishonomy.online.py"),
+                   os.path.join(os.path.expanduser("~"), "sparxie", "_t", "wishonomy.online.py")):
+            if os.path.isfile(_p):
+                _extra.append(os.path.abspath(_p))
+                break
+        _CG.check(os.path.dirname(os.path.abspath(HERE)), ok, bad, section, extra_paths=_extra)
+    except Exception as e:
+        bad("CF 耦合冲突检测", "%s: %s" % (type(e).__name__, str(e)[:140]))
+
     print()
     print("=" * 56)
     print("通过 %d 项 / 失败 %d 项" % (len(PASS), len(FAIL)))
