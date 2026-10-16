@@ -3612,6 +3612,44 @@ def main():
     except Exception as e:
         bad("R83 私有标签/思考残句的总兜底", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
+    # R84: **气泡分隔符 `|||` 的总兜底**（2026-10-17 真事故 ✓）
+    #   事故：烩面群里收到 `…我陪你三个小时|||谁先扛不住谁输…` ✗
+    #   形态：某次出站时 `chain` 里**还没有文本** ⇒ mention 读到 0 字 ⇒ 既没拆、也没兜底
+    #        ⇒ `|||` 原样发出 ✗；而拆开的两条**晚了 6 秒**才发 ✓
+    #   ⇒ guard（priority=999，最早能碰结果的位置）把 `|||` **换成换行** ✓
+    #   ⚠️ **只换、不阻断** ✗ —— 阻断会在「这轮不再出站」时**吞掉她整句话** ✗
+    #   判据：链里出现分隔符 ⇒ 换成换行（幂等 ✓ 再跑一次不变）+ 换完不许再有 `|||` ✓
+    try:
+        import importlib as _il84
+        import mindscape_guard as _G84
+        _il84.reload(_G84)
+
+        class _Comp84:
+            def __init__(self, t):
+                self.text = t
+
+        class _Res84:
+            def __init__(self, items):
+                self.chain = [_Comp84(x) for x in items]
+
+            def get_plain_text(self):
+                return " ".join(c.text for c in self.chain if isinstance(c.text, str))
+
+        _r84 = _Res84(["无聊就来找火花花呀~ 我陪你三个小时|||谁先扛不住谁输，火花花赌你中途睡着~"])
+        _before84 = _r84.get_plain_text()
+        _n84 = _G84.put_plain_text(_r84, _before84.replace("|||", chr(10)))
+        _after84 = _r84.get_plain_text()
+        _ok84 = (_n84 >= 1 and "|||" not in _after84 and chr(10) in _after84)
+        # 幂等：再换一次不该变 ✓
+        _again84 = _G84.put_plain_text(_r84, _after84.replace("|||", chr(10)))
+        _idem84 = _r84.get_plain_text() == _after84
+        _good84 = _ok84 and _idem84
+        (ok if _good84 else bad)(
+            "R84 气泡分隔符 ||| 的总兜底（换成换行 · 幂等 · 不阻断）",
+            "改写=%d 换后=%r 幂等=%s" % (_n84, _after84[:60].replace(chr(10), "⏎"), _idem84))
+    except Exception as e:
+        bad("R84 气泡分隔符 ||| 的总兜底", "%s: %s" % (type(e).__name__, str(e)[:140]))
+
     # ── CF：耦合冲突检测（跨模块的隐式耦合 —— 单模块看都正常 ✗）
     #   主人 2026-10-16 点名要的：「以后这种 bug 反正我自己是找不到根因」
     #   本仓真事故：flatten_result(900) 抹掉 ||| ⇒ mention 的低优先级钩子拿不到分隔符

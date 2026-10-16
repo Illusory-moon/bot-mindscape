@@ -528,6 +528,15 @@ class GuardMixin:
             if result is None:
                 return
             txt = result.get_plain_text() or ""
+            # 🔍 一次性诊断（msdiag · 排查「||| 未被拆就发出」）—— 抓完即撤 ✗
+            try:
+                if "|||" in txt:
+                    _ch = getattr(result, "chain", None)
+                    logger.warning("[msdiag] guard.block_error 看到 =%r ｜ chain=%d 段 ｜ 各段=%r",
+                                   txt[:90], len(_ch or []),
+                                   [getattr(c, "text", None) for c in (_ch or [])][:4])
+            except Exception:
+                pass
             if not txt.strip():
                 return
             # ⭐ 先扒「私有标签 / 思考残句」—— 2026-10-17 主人定的规矩 ✓
@@ -549,6 +558,23 @@ class GuardMixin:
                     event.stop_event()
                     return
             leak = has_tool_leak(txt)
+            # ⭐ 气泡分隔符 `|||` 的**总兜底**（2026-10-17 真事故 ✓）
+            #   它绝不能进群（那是"分几条发"的内部标记 ✗）
+            #   事故形态：某次出站时 `chain` 里**还没有文本**（mention 读到 0 字 ✗）
+            #   ⇒ `|||` 原样发出 ✗；而拆开的那两条**晚了 6 秒**才发 ✓
+            #   ⚠️ 为什么这里**只换成换行、不阻断** ✗：
+            #      若这轮**不会**再来一次带文本的出站，阻断就等于**吞掉她整句话** ✗；
+            #      换成换行后，群友看到的是**两条独立文本**（自然 ✓ 不会被当成乱码 ✓），
+            #      而后面的拆气泡路若照常跑，也**不受影响**（幂等 ✓）——
+            #      这正是 mention 的 `mn_sep_fallback` 早就想干的事 ✓ 只是它**跑得太晚** ✗
+            #   ⚠️ 顺序：**在扒私有标签之后**（标签里也可能夹分隔符 ✓）✓
+            _sep = chr(124) * 3
+            if _sep in txt:
+                _fixed_sep = txt.replace(_sep, chr(10))
+                logger.warning("[msdiag] guard 兜底：分隔符换成换行 前=%r 后=%r",
+                               txt[:80], _fixed_sep[:80])
+                if put_plain_text(result, _fixed_sep):
+                    txt = _fixed_sep
             if leak or is_error_text(txt, self.patterns, self.regex):
                 self.blocked += 1
                 # S03: 只记录脱敏摘要，避免上游报错里夹带的密钥进日志

@@ -169,6 +169,12 @@ class FormatMixin:
                 new = flatten(txt, join_with, drop, short_len)
                 if no_period:
                     new = drop_period(new)
+                # 🔍 一次性诊断（msdiag · 排查「||| 未被拆就发出」）—— 抓完即撤 ✗
+                try:
+                    if "|||" in txt or new != txt:
+                        logger.warning("[msdiag] flatten_result 改写 前=%r 后=%r", txt[:70], str(new)[:70])
+                except Exception:
+                    pass
                 if new != txt:
                     comp.text = new
         except Exception as e:
