@@ -65,6 +65,62 @@ class FormatMixin:
                     len(self.targets), self.f_np or "关")
         scope_warn(logger, "mindscape_format", self.targets)
 
+        # ⭐ 把出站整形登记给 guard 的内置发送工具补丁 ✓
+        #   为什么必须做：`send_message_to_user` **直接发消息**，不经过 on_decorating_result
+        #   ⇒ 下面那个 flatten_result 看不到它 ⇒ 句号照发 ✗
+        #   （2026-10-16 实测：她 13 次调用里 2 条带句尾句号 ✓）
+        #   ⚠️ 取法是三元兜底（照本仓通用写法 ✓）：**构建产物是单一大文件**，
+        #      跨模块 import 已被 build_plugin 剥掉 ⇒ 合并后它就是个模块级函数，
+        #      直接查 globals() 即可；开发态（源码树里逐模块加载）才走 import ✓
+        #   ⚠️ 登记的是「取实例的函数」，不是 self —— 补丁可能在 setup 之前就装好，
+        #      存 self 会拿到 None；存函数每次现取 ⇒ 不会陈旧 ✓
+        try:
+            _ms_reg = globals().get("ms_set_text_formatter")
+            if _ms_reg is None:
+                import sys as _ms_sys
+                for _mn, _mm in list(_ms_sys.modules.items()):
+                    if _mn.endswith("mindscape_guard"):
+                        _ms_reg = getattr(_mm, "ms_set_text_formatter", None)
+                        if _ms_reg is not None:
+                            break
+            if _ms_reg is not None:
+
+                def _ms_format_provider(_get=(lambda: self)):
+                    cur = _get()
+                    if cur is None:
+                        return None
+                    return cur.ms_format_text
+
+                _ms_reg(_ms_format_provider)
+                logger.info("[mindscape_format] 已登记出站整形（内置发送工具同口径）")
+            else:
+                logger.warning("[mindscape_format] 找不到 ms_set_text_formatter —— 内置发送工具不会去句号")
+        except Exception as e:
+            logger.warning("[mindscape_format] 登记出站整形失败: %s", str(e)[:100])
+
+    def ms_format_text(self, context, text, kwargs):
+        """给「工具直接发话」那条路用的整形：压平 +（作用域内）去掉句尾句号。
+
+        ⚠️ 与 flatten_result **同源同规矩** ✓ —— 两个通道必须一套口径，
+        否则同一句话走哪条路结果不一样（2026-10-16 就是这么漏的 ✗）。
+        """
+        if not isinstance(text, str) or not text.strip():
+            return text
+        self_id = None
+        try:
+            self_id = context.context.event.get_self_id()
+        except Exception:
+            pass
+        if self_id is None:
+            return text              # 拿不到身份 ⇒ 不猜，原样放行 ✓
+        join_with = self.f_c.get("join_with") or "，"
+        drop = bool(self.f_c.get("drop_last_if_short", False))
+        short_len = int(self.f_c.get("short_len") or 8)
+        new = flatten(text, join_with, drop, short_len)
+        if self.f_np and scope_hit(self.f_np, self_id):
+            new = drop_period(new)
+        return new
+
     @filter.on_decorating_result(priority=900)
     async def flatten_result(self, event: AstrMessageEvent):
         try:

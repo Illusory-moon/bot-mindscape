@@ -3456,6 +3456,72 @@ def main():
         _pg80.check(HERE, ok, bad, section)
     except Exception as e:
         bad("R80 未决台账", "守卫生效失败（导入或执行出错）：%s" % str(e)[:120])
+
+    # R81: 「工具直接发话」的通道也要走去句号（2026-10-16 修）
+    #   事故：她 13 次 `send_message_to_user` 里 **2 条带句尾句号** ✗
+    #   病根：这个内置工具**直接发消息**，不经过 `on_decorating_result`
+    #         ⇒ `FormatMixin.flatten_result` 结构性看不到它 ✗
+    #         而另一个发话工具 `say_lines` 自己手动调了 flatten+drop_period ⇒ 一条没漏 ✓
+    #   修法：format 模块把自己的整形**登记**给 guard 的发送工具补丁（迟绑定取实例 ✓）
+    #   这里守两件事：① 登记确实发生 ② 整形与 flatten_result **同口径** ✓
+    try:
+        import importlib as _il81
+        import mindscape_guard as _GD81
+        import mindscape_format as _FM81
+        _il81.reload(_GD81)
+        _il81.reload(_FM81)
+
+        _GD81.MS_TEXT_FMT = None
+        _inst81 = _FM81.FormatMixin()
+        _real_section81 = _FM81.cfg.section
+        _FM81.cfg.section = lambda n, d=None: (
+            {"format_targets_placeholder": True, "no_period": ["100000001"],
+             "join_with": "，", "targets": ["100000001"]}
+            if n == "format" else {})
+        try:
+            _inst81.setup(None)
+        finally:
+            _FM81.cfg.section = _real_section81
+        _registered = _GD81.MS_TEXT_FMT is not None
+
+        class _Ev81:
+            def get_self_id(self):
+                return "100000001"
+
+        class _Ctx81:
+            class context:
+                event = _Ev81()
+
+        _got = _inst81.ms_format_text(_Ctx81(), "第一段。\n\n第二段。", {})
+        _want = "第一段，第二段"
+        _same = (_got == _want)
+
+        # 不在 no_period 作用域 ⇒ **必须保留句号**（不许误伤 ✓）
+        class _Ev81b:
+            def get_self_id(self):
+                return "999999999"
+
+        class _Ctx81b:
+            class context:
+                event = _Ev81b()
+
+        _got_b = _inst81.ms_format_text(_Ctx81b(), "留着句号。", {})
+        _keep = (_got_b == "留着句号。")
+
+        # guard 侧：单条 plain 也要过整形（不是只有连发才过 ✓）
+        class _M81:
+            name = "send_message_to_user"
+        _msgs81 = [{"type": "plain", "text": "一句。\n\n两句。"}]
+        _out81 = _GD81.store_fmt(_msgs81, _Ctx81(), {})
+
+        _good81 = _registered and _same and _keep and _out81[0]["text"] == "一句，两句"
+        (ok if _good81 else bad)(
+            "R81 工具发话通道也走去句号（登记 / 同口径 / 不误伤 / 单条也过）",
+            "登记=%s 同口径=%s(%r) 不误伤=%s(%r) 单条=%r"
+            % (_registered, _same, _got, _keep, _got_b, _out81[0]["text"]))
+    except Exception as e:
+        bad("R81 工具发话通道也走去句号", "%s: %s" % (type(e).__name__, str(e)[:140]))
+
     print()
     print("=" * 56)
     print("通过 %d 项 / 失败 %d 项" % (len(PASS), len(FAIL)))

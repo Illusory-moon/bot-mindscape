@@ -239,6 +239,50 @@ def is_error_text(text, patterns=None, regex=None):
 MS_SENDTOOL_FLAG = "_ms_sendtool_patched"
 MS_LINE_GAP = 0.8          # 连发之间的停顿（秒）—— 真人也是一句一句敲的
 
+# 出站文本整形钩子：由 format 模块注册（`format.targets` 的压平 / 去句号）。
+# ⚠️ 存的是「取实例的函数」而不是实例本身 —— 插件可能在补丁之后才 setup，
+#    存实例会拿到 None，存函数则每次现取 ⇒ 不会陈旧 ✓
+MS_TEXT_FMT = None
+
+
+def ms_set_text_formatter(provider):
+    """登记「出站文本整形」回调：provider() -> (transform 或 None)。"""
+    global MS_TEXT_FMT
+    MS_TEXT_FMT = provider
+
+
+def store_fmt(msgs, context, kwargs):
+    """把这一批 plain 逐个过一遍 format 的整形（压平 + 走 no_period 作用域的去掉句尾句号）。
+
+    为什么必须在这儿补：这个内置工具**直接发消息**，不经过 `on_decorating_result`
+    ⇒ `FormatMixin.flatten_result` 看不到它 ⇒ 句号照发 ✗
+    （2026-10-16 实测：她 13 次 `send_message_to_user` 里有 2 条带了句尾句号 ✓）
+    带图/语音的走原样 ✓；整形失败一律**原样放行** ✓（宁可多发一个句号，也不能吞话 ✗）
+    """
+    if MS_TEXT_FMT is None:
+        return msgs
+    try:
+        tf = MS_TEXT_FMT()
+    except Exception:
+        return msgs
+    if tf is None:
+        return msgs
+    out = []
+    for m in msgs:
+        if (isinstance(m, dict) and str(m.get("type")) == "plain"
+                and isinstance(m.get("text"), str)):
+            try:
+                new = tf(context, m["text"], kwargs)
+            except Exception as exc:
+                logger.warning("[mindscape_guard] 出站整形失败（原样放行）: %s", str(exc)[:80])
+                out.append(m)
+                continue
+            if new and new != m["text"]:
+                m = dict(m)
+                m["text"] = new
+        out.append(m)
+    return out
+
 
 def ms_patch_send_tool():
     """把内置工具 `send_message_to_user` 改成「每个 plain 各发一条」。
@@ -280,9 +324,9 @@ def ms_patch_send_tool():
                 for m in plains:
                     try:
                         if tail:
-                            await orig(self, context, [m], *tail, **rest)
+                            await orig(self, context, store_fmt([m], context, kwargs), *tail, **rest)
                         else:
-                            await orig(self, context, messages=[m], **rest)
+                            await orig(self, context, messages=store_fmt([m], context, kwargs), **rest)
                         n += 1
                     except Exception as exc:
                         logger.warning("[mindscape_guard] 逐条发送第 %d 条失败: %s",
@@ -292,6 +336,12 @@ def ms_patch_send_tool():
                 logger.info("[mindscape_guard] 内置工具逐条发送 %d 条（原本 %d 段会并成一条）",
                             n, len(plains))
                 return "Already sent %d separate messages." % n
+        if (isinstance(msgs, (list, tuple)) and len(msgs) == 1
+                and isinstance(msgs[0], dict) and str(msgs[0].get("type")) == "plain"):
+            msgs = store_fmt(msgs, context, kwargs)
+            if args:
+                return await orig(self, context, msgs, *args[1:], **kwargs)
+            return await orig(self, context, messages=msgs, **kwargs)
         return await orig(self, context, *args, **kwargs)
 
     SendMessageToUserTool.call = _ms_send_to_user
