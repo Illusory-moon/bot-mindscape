@@ -3296,7 +3296,7 @@ async def save_sticker(*args, **kwargs):
     return await inst.save_sticker_impl(ev, kwargs)
 
 
-PUNCT = "。！？~…，、；："
+PUNCT = "。！？…，、；："
 
 
 PERIODS = ("。", "．")

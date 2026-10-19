@@ -305,6 +305,29 @@ def check_functions():
     except Exception as e:
         bad("format 加载", str(e)[:100])
 
+    # R85: 合并段落时**前段以 `~` 结尾 ⇒ 必须补连接符**（2026-10-19 真事故）
+    #   主人报「像在说 3 句不同的话」✓ 原句形态：
+    #     「…够给你塞半句夸奖的~」+\n\n+「真不够，今晚 0 点这一栏也要清」
+    #   老代码把 `~` 当句末 ⇒ 拼成「…的~真不够…」**零分隔** ✗
+    #   ⇒ `~` 是**语气尾**不是句末 ⇒ 补 `，` ✓
+    #   ⚠️ 而 `…`（停顿）/ `。` / `，` 之后**不许**再补（否则变双标点 ✗）
+    #   ⚠️ 用例里不许出现真实人设名/昵称 ✗（本仓通用 ⇒ 铁律 §1）
+    try:
+        fm85 = load("mindscape_format")
+        _glued = fm85.flatten("够给你塞半句夸奖的~\n\n真不够，今晚 0 点这一栏也要清",
+                              "，", False, 8)
+        _no_glue = ("~真" not in _glued) and ("~，" in _glued)
+        # 反向：`…` / `。` / `，` 之后不许被补成双标点
+        _dots = fm85.flatten("这价……\n\n勉强够闪个灯哦", "，", False, 8)
+        _full = fm85.flatten("说完了。\n\n下一段", "，", False, 8)
+        _comma = fm85.flatten("他说，\n\n真不够", "，", False, 8)
+        _no_double = ("……，" not in _dots and "。，" not in _full and "，，" not in _comma)
+        (ok if (_no_glue and _no_double) else bad)(
+            "R85 合并段落：`~` 后要补连接符（`…`/`。`/`，` 不补）",
+            "~后=%r ｜ …后=%r ｜ 。后=%r ｜ ，后=%r" % (_glued[:40], _dots[:20], _full[:20], _comma[:20]))
+    except Exception as e:
+        bad("R85 合并段落：~ 后要补连接符", "%s: %s" % (type(e).__name__, str(e)[:120]))
+
     # stickers/use 只验证可加载
     for nm in ["mindscape_stickers", "mindscape_sticker_use", "mindscape_diary"]:
         try:
