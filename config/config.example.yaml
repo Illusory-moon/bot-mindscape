@@ -32,17 +32,19 @@ memory:
       # style_recent: "./data/bot-name.style-recent.md"  # 近期层（最近几天的原始条目）
       # style_recent_chars: 400                  # 近期层注入上限
       # knowledge: 查阅型文档 —— 平时【不注入 prompt】，只有问到相关问题时
-      #            才用 lookup_knowledge 工具去查。适合「战斗数据」「人物关系」
-      #            「产品手册」这类又长、又只有偶尔用得上的资料。
-      #            为什么不直接注入：一份战斗档案动辄 8~9KB，塞进去会直接
+      #            才用 lookup_knowledge 工具去查。适合「资料手册」「名词表」
+      #            「人物关系」这类又长、又只有偶尔用得上的资料。
+      #            为什么不直接注入：一份手册动辄 8~9KB，塞进去会直接
       #            吃光整个记忆预算（2500 字），而 99% 的对话根本用不到。
-      #            检索按【二级标题分段】—— 问「配队」直接给整段，不是散落的几行。
+      #            检索按【二级标题分段】—— 问到某个主题直接给整段，不是散落的几行。
       #            写这类文档时，**一个角色 / 一个主题就占一个二级标题**：
       #            分段越细，命中越准，也不会一整块糊进上下文。
+      #            ⚠️ 工具说明里**不写死任何资料名**：有哪些资料由这里的 name/desc 决定，
+      #               bot 不带关键词调用一次就会拿到「可用资料」清单（不占 prompt 前缀 ✓）。
       # knowledge:
-      #   - name: "战斗数据"
-      #     path: "./data/bot-name.combat.md"
-      #     desc: "配队 / 光锥 / 遗器 / 星魂 / 机制 / 玩法"
+      #   - name: "资料手册"
+      #     path: "./data/bot-name.handbook.md"
+      #     desc: "这块资料管什么、什么时候该来查"
       #   - name: "人物关系"
       #     path: "./data/bot-name.relations.md"
       #     desc: "认识的每个角色：外号 / 称呼 / 具体关系"
@@ -85,6 +87,13 @@ privacy_gate:
 #    并记下唤醒原因（@ / 引用 / 提到名字 / 都不是）。没打补丁就打开，
 #    定向性会退化成「这句不是对你说的」—— **比不注入更糟**，所以默认关。
 #    装法见 docs/deploy.md「可选的框架集成」。
+# ── 认知层：资料库查询开关（lookup_knowledge）──
+#   默认**开启**；只有显式写 false 才关。关掉后 bot 不会再查任何 knowledge 文档
+#   （工具还在，但会直接回「这条通道没开」，省掉一轮空查）。
+#   ⚠️ 只有配了 knowledge 的 bot 才用得上；没配的 bot 调用它会拿到同样的提示。
+knowledge_tool:
+  enabled: true
+
 groupctx:
   enabled: false
   buffer: ""            # 留空 = 补丁的落盘路径 /opt/astrbot/data/group_ctx_buffer.jsonl

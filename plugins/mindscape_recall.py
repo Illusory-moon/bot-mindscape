@@ -339,7 +339,7 @@ def rc_archives(self_id):
 
 
 def rc_knowledge_for(self_id):
-    """取这个 bot 配置的「查阅型文档」（战斗数据这类：平时不注入，问到才查）。"""
+    """取这个 bot 配置的「查阅型文档」（平时不注入，问到才查）。"""
     for b in _bot_entries():
         if str(b.get("self_id", "")) != str(self_id):
             continue
@@ -375,7 +375,7 @@ def rc_sections(text):
 
 
 def rc_search_sections(path, keyword, limit=3, max_chars=2000):
-    """在结构化文档里按【段落】检索 —— 问「配队」就给整段，不是散落的几行。"""
+    """在结构化文档里按【段落】检索 —— 问到某个主题就给整段，不是散落的几行。"""
     if not path or not os.path.exists(path):
         return [], 0
     try:
@@ -406,38 +406,21 @@ def rc_search_sections(path, keyword, limit=3, max_chars=2000):
 
 @llm_tool(name="lookup_knowledge")
 async def lookup_knowledge(*args, **kwargs):
-    """查资料库：**战斗数据** + **人物关系** + **版本时事** + **官方剧情梗概**。
+    """查资料库：部署方配置的「查阅型资料」（平时不注入，问到才查）。
 
-    【战斗类】只要对方问的是战斗问题，就必须先查这里再开口，**不要凭印象编**：
-    能不能和谁组队、带什么光锥、遗器怎么配、主词条选什么、星魂提升大不大、
-    某个模式的玩法、某个机制是怎么回事。
-
-    【人物类】同样先查再开口：某个名字是谁、你跟他/她是什么关系、
-    你管他/她叫什么、某个外号指的是谁、你跟他/她之间发生过什么。
-
-    【时事类】被问到**版本更新 / 最近外面出了什么事 / 新地区、新人物、新组织**时，
-    也先查这里再开口：哪个版本发生了什么、某个刚登场的人是谁、某个新地方是怎么回事。
-    这一类是"外面现在什么样"，跟上面两类不是一回事，问到就查，别凭印象聊。
-
-    【官方口径类】「版本时事」是常识层，**先查它**；如果那里**查不到、或只有结论没有来龙去脉、
-    或两边说法对不上**，再查**「官方剧情梗概」** —— 那是游戏内「前情提要」的原文（每版开头回顾上一版，
-    另外收了 4.4 联动那一段），**口径最硬，以它为准**。别为了显得自己知道就跳过这一步。
-
-    【战斗即时类】被问到**卡池 / 深渊 / 周常 / 异相仲裁 / 当期强度**这类"现在什么环境"的问题时，
-    先查资料库（「战斗常识」＋已有的当期资料）再开口；查不到就说不知道，别凭印象编。
+    什么时候查：**具体数值 / 谁是谁 / 外面发生过什么 / 某个说法的原始出处** ——
+    凡是「答错会被当场抓住」的事实题，都先查再开口，**不要凭印象编**。
+    具体有哪几份资料、各管什么，由部署方在配置里决定；**不带关键词调用会返回可用清单**
+    （之后用 which 指定更准，不填就全查）。
 
     返回的是资料原文 —— 用你自己的口吻讲出来，别照本宣科念。
     资料里没有的，就直说不知道，**绝不要编**。
 
     Args:
         keyword(string): 查询关键词，可以给一组（空格或逗号分开）。
-            例：配队 银狼 / 光锥 遗器 主词条 / 星魂 / 机制 笑点 / 开拓者 关系 / 旧型号 /
-                某个版本 剧情 / 新登场的人 / 新地区 / 保底 体力 / 深渊 / 差分宇宙 / 异相仲裁
-        which(string): 指定查哪一份资料的名字（「战斗数据」「人物关系」「版本时事」「战斗常识」「当期」「官方剧情梗概」），不填就全查
+            例：某个名字 是谁 / 某个数值 是多少 / 某件事 的经过 / 某个说法 出处
+        which(string): 只看某一份时填它的名字（见返回的「可用资料」清单），不填就全查
     """
-    kw = str(kwargs.get("keyword") or _first_str(args)).strip()
-    if not kw:
-        return "你想查哪方面的？给个关键词（配队 / 光锥 / 遗器 / 星魂 / 机制，或者某个人是谁）。"
     ev = None
     for a in args:
         if hasattr(a, "get_self_id"):
@@ -447,9 +430,26 @@ async def lookup_knowledge(*args, **kwargs):
         sid = str(ev.get_self_id()) if ev is not None else ""
     except Exception:
         sid = ""
-    docs = rc_knowledge_for(sid)
+
+    # 开关（2026-10-23）：**默认开启** —— 只有显式写 `knowledge_tool.enabled: false` 才关。
+    #   通用框架不该假设每个 bot 都有资料库；关掉/没配时明说「不可用」，别让她反复来查 ✗
+    off = (cfg.section("knowledge_tool") or {}).get("enabled") is False
+    docs = [] if off else rc_knowledge_for(sid)
     if not docs:
-        return "我这边没有配置任何资料库。"
+        try:
+            logger.info("[mindscape_recall] lookup_knowledge 不可用 | bot=%s | 开关=%s | 资料=0",
+                        sid or "?", "off" if off else "on")
+        except Exception:
+            pass
+        return ("我这边没有可查的资料库（这条通道没开）。别反复调用它 —— "
+                "知道多少就说多少，不清楚就说不清楚。")
+
+    catalog = "｜".join("%s（%s）" % (d["name"], d["desc"] or "无说明") for d in docs)
+    kw = str(kwargs.get("keyword") or _first_str(args)).strip()
+    if not kw:
+        # 不带关键词 ⇒ 回清单（这是「有哪些资料」唯一的暴露点，不占 prompt 前缀 ✓）
+        return "资料库里有这些，用哪份就填哪个名字（或直接给关键词我去搜）：\n" + catalog
+
     want = str(kwargs.get("which") or "").strip()
     blocks, names = [], []
     for d in docs:
@@ -459,10 +459,15 @@ async def lookup_knowledge(*args, **kwargs):
         if hits:
             names.append(d["name"])
             blocks.extend(hits)
+    try:
+        logger.info("[mindscape_recall] lookup_knowledge | bot=%s | kw=%s | which=%s | 资料=%d | 命中份=%d | 段=%d",
+                    sid or "?", kw[:40], want[:20] or "-", len(docs), len(names), len(blocks))
+    except Exception:
+        pass
     if not blocks:
-        return ("查了资料库，没有跟「%s」直接相关的内容。"
+        return ("查了资料库（可用：%s），没有跟「%s」直接相关的内容。"
                 "换个更贴的说法再查一次；如果还是没有，就老实说这块你不清楚，"
-                "不要凭印象编数值。") % kw
+                "不要凭印象编。" % ("、".join(d["name"] for d in docs), kw))
     head = "【资料原文 · %s】用你自己的口吻讲，别照念：\n\n" % "、".join(names)
     tail = "\n\n（以上是资料，讲的时候不要提「资料」「文档」这些词。）"
     return head + "\n\n".join(blocks) + tail

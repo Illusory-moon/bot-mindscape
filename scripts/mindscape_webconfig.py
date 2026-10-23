@@ -33,6 +33,8 @@ FIELDS = [
     ("记忆", "每日摘要字数", "config", "memory.digest_chars", "int", "global", "所有 bot 共用的上限"),
     ("记忆", "账本字数", "config", "memory.notes_chars", "int", "global", "所有 bot 共用的上限"),
     ("记忆", "生成每日摘要", "config", "digest.enabled", "bool", "global", "后台任务还须正常运行"),
+    ("认知", "资料库查询（lookup_knowledge）", "config", "knowledge_tool.enabled", "bool", "global",
+     "关掉后 bot 不再查任何资料库；默认开。改完需重启生效"),
     ("认知", "补充群聊上下文", "config", "groupctx.enabled", "bool", "global", "只在已配置的目标 bot 生效"),
     ("认知", "群聊记录条数", "config", "groupctx.count", "int", "global", "每次回复读取最近多少条"),
     ("认知", "群聊回看时间（秒）", "config", "groupctx.window_sec", "int", "global", "过期消息不会进入上下文"),

@@ -493,6 +493,60 @@ def check_privacy():
            % (len(pats), skipped))
 
 
+# ── 4b. 领域词（2026-10-23 · 主人指出） ──
+def check_domain_words():
+    """R88 · 通用仓里不许出现**某个部署方**的领域词。
+
+    **事故**：`lookup_knowledge` 的工具说明里曾写着
+    「战斗数据 / 版本时事 / 当期 / 卡池 / 深渊 / 异相仲裁……」——
+    那是某个人设的资料名与领域词，却要发给所有使用这个框架的人 ✗
+    （违铁律 1「大众化通用插件全面脱敏」+ 铁律 4「通用框架不硬编码某个人设的东西」）。
+
+    **修法与口径**：
+      · 领域词住 `config` 的 `knowledge[].name/desc`（部署方那一侧）✓ 框架里只留通用说法 ✓
+      · 词表在 `scripts/domain-words.txt` —— 它是**数据文件、不是代码** ⇒ 只有它自己跳过 ✓
+        （⚠️ 别把这条做成「扫描器跳过自己」那种假绿 ✗ —— 见 AGENTS §4 那条坑）
+      · 扫 `plugins/` 与 `dist/`（= 真正发出去的代码）；**不扫 `config/`**：那正是放领域词的地方 ✓
+      · 缺词表 ⇒ **显式红**（不许静默通过 ✗）
+    """
+    section("4b. 领域词（通用仓不该带某个人设的语义）")
+    wl = os.path.join(HERE, "scripts", "domain-words.txt")
+    if not os.path.exists(wl):
+        bad("R88 领域词扫描", "缺 scripts/domain-words.txt ⇒ 这次**没有**做领域词扫描，"
+                               "别把它算成通过 ✗")
+        return
+    with open(wl, encoding="utf-8", errors="replace") as f:
+        words = [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
+    if len(words) < 10:
+        bad("R88 领域词扫描", "词表只剩 %d 条（少于 10）⇒ 词表被删空了？" % len(words))
+        return
+    leaked, scanned = [], 0
+    for base in ("plugins", "dist"):
+        root0 = os.path.join(HERE, base)
+        if not os.path.isdir(root0):
+            continue
+        for root, dirs, files in os.walk(root0):
+            dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git")]
+            for fn in sorted(files):
+                if not fn.endswith(".py"):
+                    continue
+                p = os.path.join(root, fn)
+                rel = os.path.relpath(p, HERE).replace("\\", "/")
+                scanned += 1
+                txt = open(p, encoding="utf-8", errors="replace").read()
+                for w in words:
+                    if w in txt:
+                        ln = next((i for i, line in enumerate(txt.splitlines(), 1)
+                                   if w in line), 0)
+                        leaked.append("%s:%d 出现「%s」" % (rel, ln, w))
+    if leaked:
+        bad("R88 通用仓不含领域词", "领域词要搬进 config 的 knowledge[].name/desc ✗：\n        "
+                                   + "\n        ".join(leaked[:8]))
+    else:
+        ok("R88 通用仓不含领域词（%d 条词表 / 扫 %d 个文件）" % (len(words), scanned),
+           "plugins/ 与 dist/ 都干净 ✓（config/ 不算 —— 那里正是部署方写领域词的地方）")
+
+
 # ── 5. 结构 ──
 def check_structure():
     section("5. 仓库结构")
@@ -1706,14 +1760,17 @@ def check_regressions():
     except Exception as e:
         bad("R65 @ 与 ||| 同轮也要拆", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
-    # R68: 资料库的工具说明必须提到**当期**这一层（2026-10-11 主人批的 L3）——
+    # R68（2026-10-23 **改口径**）：资料库开关 `knowledge_tool.enabled` —— **默认开启**，
+    #      只有显式写 `false` 才关 ✓（主人原话：「别一不小心把她的查询设成关闭」✗）
     try:
         _r68 = open(os.path.join(PLUGINS, "mindscape_recall.py"), encoding="utf-8").read()
-        _tail68 = _r68.split("which(string)")[-1][:200] if "which(string)" in _r68 else ""
-        _ok68 = "当期" in _tail68
-        (ok if _ok68 else bad)("R68 资料库说明含当期", "which 里写了当期=%s" % _ok68)
+        _a68 = 'cfg.section("knowledge_tool")' in _r68
+        _b68 = "is False" in _r68
+        (ok if (_a68 and _b68) else bad)(
+            "R68 资料库开关默认开启（显式 false 才关）",
+            "读 knowledge_tool 段=%s / 用 `is False` 判关（默认开）=%s" % (_a68, _b68))
     except Exception as e:
-        bad("R68 资料库说明含当期", str(e)[:140])
+        bad("R68 资料库开关默认开启（显式 false 才关）", str(e)[:140])
 
     # R69: 管理台的去重表必须按「插件的 dict 格式 + 内容 md5」判活 ✓（2026-10-12 修）——
     #      旧版只认平表：遇到 dict 就返回空表 ⇒ 去重表页**恒为空白**，而「清理墓碑」
@@ -1912,32 +1969,35 @@ def check_regressions():
     except Exception as e:
         bad("R77 janitor 标识符要净化", str(e)[:140])
 
-    # R67: 资料库的工具说明必须提到**战斗常识**这一层（2026-10-11 主人批的块 4）——
-    #      同 R66 的道理：**不写进说明书，她就想不到来查** ✓。
+    # R67（2026-10-23 **改口径**）：说明要指向**运行时清单**（不带关键词就回清单），
+    #      而不是在说明里枚举资料名 —— 枚举既泄漏领域词、每加一份还得改代码 ✗
+    #      （清单放在工具**返回值**里 ⇒ 零缓存代价 ✓）
     try:
         _r67 = open(os.path.join(PLUGINS, "mindscape_recall.py"), encoding="utf-8").read()
-        _a67 = "【战斗即时类】" in _r67
-        _b67 = "战斗常识" in _r67
-        _c67 = "战斗常识" in _r67.split("which(string)")[-1][:160] if "which(string)" in _r67 else False
+        _a67 = "清单" in _r67
+        _b67 = "which" in _r67
+        _c67 = "可用资料" in _r67
         (ok if (_a67 and _b67 and _c67) else bad)(
-            "R67 资料库说明含战斗常识",
-            "单列一节=%s 提到战斗常识=%s which 里也写了=%s" % (_a67, _b67, _c67))
+            "R67 说明指向运行时清单（不枚举资料名）",
+            "提到清单=%s / which=%s / 「可用资料」字面=%s" % (_a67, _b67, _c67))
     except Exception as e:
-        bad("R67 资料库说明含战斗常识", str(e)[:140])
+        bad("R67 说明指向运行时清单（不枚举资料名）", str(e)[:140])
 
-    # R66: 资料库的工具说明必须提到**版本时事**（2026-10-11 主人批的上线第 3 步）——
-    #      知识库挂上去还不够：`lookup_knowledge` 的说明里不提这一层，她**根本想不到来查**
-    #      （同 canon 那句老话：能用代码保证的，别指望提示词；**工具的说明书就是她的入口**）。
+    # R66（2026-10-23 **改口径**）：资料库的工具说明**不许写死任何部署方的资料名** ——
+    #      旧断言恰好相反（要求说明里出现某个资料名 ✗），那正是把某个人设的语义焊进
+    #      通用框架的病根（主人 2026-10-23 指出）。新契约：说明只说「由部署方配置」✓
     try:
         _r66 = open(os.path.join(PLUGINS, "mindscape_recall.py"), encoding="utf-8").read()
-        _a66 = "版本时事" in _r66
-        _b66 = "【时事类】" in _r66
-        _c66 = "版本时事" in _r66.split("which(string)")[-1][:120] if "which(string)" in _r66 else False
-        (ok if (_a66 and _b66 and _c66) else bad)(
-            "R66 资料库说明含版本时事",
-            "提到=%s 单列一节=%s which 里也写了=%s" % (_a66, _b66, _c66))
+        _doc66 = _r66.split("查资料库", 1)[-1].split('"""', 1)[0]
+        _names66 = [w for w in ("版本时事", "官方剧情梗概", "当期", "战斗常识",
+                                "战斗数据", "剧情名词", "前情提要") if w in _doc66]
+        _has66 = "部署方" in _doc66
+        (ok if (_has66 and not _names66) else bad)(
+            "R66 资料库说明不写死资料名（改为「部署方配置」）",
+            ("说明里写死了 %s ✗" % _names66) if _names66
+            else "只说「部署方配置」=%s，未出现任何具体资料名 ✓" % _has66)
     except Exception as e:
-        bad("R66 资料库说明含版本时事", str(e)[:140])
+        bad("R66 资料库说明不写死资料名（改为「部署方配置」）", str(e)[:140])
 
     # R54: **不用调工具也能连发** ✓（2026-10-09 主人批 D 方案 ✓）——
     #      正文里每句一行、用 ||| 隔开 ✓ 由插件拆成多个气泡 ✓ 省掉那一整轮空请求 ✗
@@ -3467,6 +3527,7 @@ def main():
     check_config()
     check_functions()
     check_privacy()
+    check_domain_words()
     check_structure()
     check_escapes()
     check_build_fresh()
