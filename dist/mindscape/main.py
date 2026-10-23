@@ -31,6 +31,7 @@ from astrbot.api.event import filter
 from astrbot.core.message.components import At
 from astrbot.core.message.components import Image
 from astrbot.core.message.components import Image, Plain
+from astrbot.core.message.components import Record
 from astrbot.core.message.message_event_result import MessageChain, MessageEventResult
 from astrbot.core.message.message_event_result import MessageEventResult
 from astrbot.core.provider.entities import ProviderRequest
@@ -3905,52 +3906,9 @@ def ts_removed_for(allow, self_id):
 SECTION = "voice"
 
 
-VOICE_PRIORITY = 840
-
-
 def vcfg(config=None):
-    """语音配置段（缺项一律给安全默认：关着 ✓）。"""
     c = config if isinstance(config, dict) else (cfg.section(SECTION) or {})
     return c or {}
-
-
-def _msg_text(event):
-    """取这一轮用户说的话（不同版本字段位置不同 ⇒ 逐个兜底）。"""
-    try:
-        t = getattr(event, "message_str", None)
-        if isinstance(t, str) and t.strip():
-            return t
-    except Exception:
-        pass
-    try:
-        t = event.get_message_str()
-        if isinstance(t, str):
-            return t
-    except Exception:
-        pass
-    return ""
-
-
-def vc_should(conf, event):
-    """这一轮该不该发语音（灰度门）。"""
-    if not conf or not conf.get("enabled"):
-        return False
-    try:
-        if not scope_hit(conf.get("targets"), event.get_self_id()):
-            return False
-    except Exception:
-        return False
-    if conf.get("private_only", True):
-        try:
-            if event.get_group_id():
-                return False
-        except Exception:
-            pass
-    kws = [str(k) for k in (conf.get("keywords") or []) if str(k).strip()]
-    if not kws:
-        return False
-    msg = _msg_text(event)
-    return any(k in msg for k in kws)
 
 
 def vc_cache_path(conf, text):
@@ -3962,7 +3920,7 @@ def vc_cache_path(conf, text):
 
 
 def vc_synth(conf, text):
-    """调阿里云 CosyVoice 合成 → 存 mp3 → 返回路径（失败返回 None）。
+    """调云端 TTS 合成 → 存 mp3 → 返回路径（失败返回 None）。
 
     ⚠️ 请求体里**只有 `input.text` 这一句** ✓ 没有任何人格/记忆 ✓
     """
@@ -3981,13 +3939,8 @@ def vc_synth(conf, text):
     if os.path.exists(out) and os.path.getsize(out) > 1024:
         return out
     body = {
-        "model": str(conf.get("model") or "cosyvoice-v3.5-flash"),
-        "input": {
-            "text": text,
-            "voice": vid,
-            "format": "mp3",
-            "sample_rate": 24000,
-        },
+        "model": str(conf.get("model") or ""),
+        "input": {"text": text, "voice": vid, "format": "mp3", "sample_rate": 24000},
     }
     req = urllib.request.Request(
         base + "/services/audio/tts/SpeechSynthesizer",
@@ -6031,51 +5984,82 @@ class ToolscopeMixin:
 class VoiceMixin:
     def setup(self, context):
         try:
-            self.v_cfg = vcfg(self.config if hasattr(self, "config") else None)
-            if not self.v_cfg:
-                self.v_cfg = cfg.section(SECTION) or {}
-            logger.info("[mindscape_voice] loaded | enabled=%s targets=%s 关键词=%s",
+            self.v_cfg = vcfg()
+            logger.info("[mindscape_voice] loaded | enabled=%s targets=%s 只私聊=%s 上限=%s字",
                         bool(self.v_cfg.get("enabled")),
                         self.v_cfg.get("targets") or [],
-                        self.v_cfg.get("keywords") or [])
+                        bool(self.v_cfg.get("private_only", True)),
+                        int(self.v_cfg.get("max_chars") or 120))
         except Exception as e:
             logger.warning("[mindscape_voice] setup 失败: %s", str(e)[:100])
             self.v_cfg = {}
 
-    @filter.on_decorating_result(priority=VOICE_PRIORITY)
-    async def vc_speak(self, event: AstrMessageEvent):
-        """把这一轮的正文换成语音（灰测：私聊 + 含「语音」+ 只在白名单 bot）。"""
+    def _v_gate(self, ev, conf):
+        """能不能说语音 ⇒ (ok, 拒绝理由)。**群聊一律拒**（主人 2026-10-23：先只私聊）✓"""
+        if not conf.get("enabled"):
+            return False, "语音现在没开"
+        if ev is None:
+            return False, "拿不到会话，说不了语音"
         try:
-            conf = getattr(self, "v_cfg", None) or {}
-            if not vc_should(conf, event):
-                return
-            result = event.get_result()
-            if result is None:
-                return
-            txt = (result.get_plain_text() or "").strip()
-            if not txt:
-                return
-            max_chars = int(conf.get("max_chars") or 120)
-            if len(txt) > max_chars:
-                # QQ 语音有上限（约 60 秒）⇒ 太长就老实发文字 ✓ 绝不截断她的话 ✗
-                logger.info("[mindscape_voice] 正文 %d 字 > %d，走文字 ✓ | 正文: %s",
-                            len(txt), max_chars, txt[:80])
-                return
+            if not scope_hit(conf.get("targets"), ev.get_self_id()):
+                return False, "这个号不能说语音"
+            gid = str(ev.get_group_id() or "")
+            if conf.get("private_only", True) and gid:
+                return False, "只在私聊能说语音，群里用文字"
+            # ⚠️ 群白名单（显式 ✓ 空表**不等于**全开）：只在这些群才允许说语音
+            gl = [str(x) for x in (conf.get("groups") or []) if str(x).strip()]
+            if gid and gl and gid not in gl:
+                return False, "这个群不开语音，用文字"
+        except Exception:
+            return False, "判断不了当前会话"
+        return True, ""
+
+    @llm_tool(name="say_voice")
+    async def say_voice(self, *args, **kwargs):
+        """用**语音**把这句话说出来（纯语音，不带文字）。
+
+        什么时候用：你想用**声音**说的时刻 —— 撒娇、逗人、笑出声、突然正经地关心他、
+        压低声音说重话，或者对方明确让你说句话 / 发条语音。
+
+        什么时候**不要**用：纯信息、解释、长句、要点多的内容（那些用文字别人才看得清）；
+        也别连着用 —— 偶尔来一下才有意思。
+
+        Args:
+            text(string): 要念出来的那句话。只写你要说出口的话，不要写括号里的动作或心理描写。
+        """
+        text = str(kwargs.get("text") or "").strip()
+        ev = None
+        for a in args:
+            if hasattr(a, "get_self_id"):
+                ev = a
+                break
+        conf = getattr(self, "v_cfg", None) or {}
+        ok, why = self._v_gate(ev, conf)
+        if not ok:
+            return why + " —— 用文字说吧"
+        if not text:
+            return "要念的话是空的 —— 把想说的话写进 text"
+        max_chars = int(conf.get("max_chars") or 120)
+        if len(text) > max_chars:
+            return "这句 %d 字，超过 %d 就念不动了 —— 用文字说，或者缩短了再说" % (len(text), max_chars)
+        try:
             loop = asyncio.get_event_loop()
-            path = await loop.run_in_executor(None, vc_synth, conf, txt)
-            if not path:
-                logger.warning("[mindscape_voice] 合成失败 ⇒ 退回文字 ✓（不静默）| 正文: %s", txt[:80])
-                return
-            # ⚠️ **用到时才 import** —— 顶层 import 会让自检的假 astrbot 桩直接炸 ✗
-            #    （而且组件模块在部分环境里未必在 api 包下 ⇒ 运行时兜底更稳 ✓）
-            from astrbot.api.message_components import Record
-            result.chain = [Record(file=path)]
-            # ⚠️ 2026-10-23 主人要求：正文**不发群里**，但**日志里必须看得到** ⇒ 否则不可观测 ✗
-            logger.info("[mindscape_voice] 语音已就绪 | %d 字 → %s | 正文: %s",
-                        len(txt), os.path.basename(path), txt[:80])
+            path = await loop.run_in_executor(None, vc_synth, conf, text)
         except Exception as e:
-            # ⚠️ 任何异常都必须**保留原文**（不 clear）⇒ 退回文字 ✓
-            logger.warning("[mindscape_voice] 语音链路出错（已保留文字）: %s", str(e)[:140])
+            logger.warning("[mindscape_voice] 合成异常: %s", str(e)[:120])
+            path = None
+        if not path:
+            return "语音没合成出来 —— 还是用文字说吧"
+        # ⚠️ 2026-10-23 主人要求：正文**不发群里**，但**日志里必须看得到** ⇒ 否则不可观测 ✗
+        logger.info("[mindscape_voice] 语音已发出 | %d 字 → %s | 正文: %s",
+                    len(text), os.path.basename(path), text[:80])
+        try:
+            r = MessageEventResult()
+            r.chain = [Record(file=path)]
+            return r
+        except Exception as e:
+            logger.warning("[mindscape_voice] 构造结果失败: %s", str(e)[:120])
+            return "发语音失败 —— 还是用文字说吧"
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
 # ==================================================================
