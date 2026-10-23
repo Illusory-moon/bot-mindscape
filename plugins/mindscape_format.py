@@ -26,6 +26,32 @@ PUNCT = "。！？…，、；："
 # 碰了就是事故 —— 这一条是硬底线。
 PERIODS = ("。", "．")
 
+# 收尾用的右括号（含引号）：句号如果在**这些符号前面**，它其实是句尾 ⇒ 该删，不该换逗号 ✓
+# ⚠️ 2026-10-23 真机：她说「（另外，…，明晚照常开播。）」
+#    ⇒ 最后一个字符是「）」，于是那个「。」被判成"句中" ⇒ 换成「，」⇒ 群里看到「开播，）」✗
+#    ⇒ 先把它"提"到括号外面来，再按句尾处理 ✓（纯代码，不动提示词 ✓）
+CLOSERS = "」』）)】》〉”’" + chr(34) + chr(39)
+
+
+def _hoist_trailing_period(text):
+    """把「…XX。）」末尾的句号提到括号外、并按句尾删掉 ✓
+
+    返回 True 表示改过。只在"末尾是一串右括号/右引号、且紧挨着句号"时才动 ——
+    范围极窄，不会误伤正文 ✗
+    """
+    i = len(text) - 1
+    tail = ""
+    while i >= 0 and text[i] in CLOSERS:
+        tail = text[i] + tail
+        i -= 1
+    if not tail:
+        return text, False
+    head = text[:i + 1]
+    for ch in PERIODS:
+        if head.endswith(ch):
+            return head[:-1] + tail, True
+    return text, False
+
 
 def drop_period(text):
     """句尾不点标点：末尾的「。」去掉（留空），句中的「。」换成「，」。
@@ -36,6 +62,8 @@ def drop_period(text):
     """
     if not text:
         return text
+    # ⚠️ 先处理"句号 + 收尾括号"这种（见 _hoist_trailing_period 的注释）✓
+    text, _moved = _hoist_trailing_period(text)
     for ch in PERIODS:
         if ch in text:
             text = "，".join(p for p in (x.strip() for x in text.split(ch)) if p)
