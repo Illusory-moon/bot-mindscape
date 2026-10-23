@@ -20,6 +20,7 @@ import shutil
 import sqlite3
 import struct
 import time
+import urllib.error
 import urllib.request
 from astrbot.api import llm_tool, logger
 from astrbot.api import llm_tool, logger, star
@@ -1671,6 +1672,22 @@ PEOPLE_PRIORITY = -6        # 人物画像：按说话者挑 → **每换一个�
 
 
 PEOPLE_TITLE = "## 你认识的人"
+
+
+TODAY_MARK = "今天是 20"        # 去重用的稳定前缀（不含具体数字 ✓）
+
+
+def today_line(now=None):
+    """「今天是 2026-10-22（周四）」—— **只给日期、北京时间** ✓
+
+    ⚠️ 用 `UTC + 8h` 硬算，**不依赖 zoneinfo、也不依赖服务器本地时区** ✓
+       （容器/宿主机时区不保证是 CST；依赖它 = 静默错一天 ✗）
+    """
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    if now is None:
+        now = _dt.now(_tz.utc) + _td(hours=8)
+    return "今天是 %d-%02d-%02d（周%s）" % (
+        now.year, now.month, now.day, "一二三四五六日"[now.weekday()])
 
 
 MEM_SIZES = {}
@@ -3883,6 +3900,122 @@ def ts_removed_for(allow, self_id):
         if ids and sid not in ids:
             out.append(str(name))
     return out
+
+
+SECTION = "voice"
+
+
+VOICE_PRIORITY = 840
+
+
+def vcfg(config=None):
+    """语音配置段（缺项一律给安全默认：关着 ✓）。"""
+    c = config if isinstance(config, dict) else (cfg.section(SECTION) or {})
+    return c or {}
+
+
+def _msg_text(event):
+    """取这一轮用户说的话（不同版本字段位置不同 ⇒ 逐个兜底）。"""
+    try:
+        t = getattr(event, "message_str", None)
+        if isinstance(t, str) and t.strip():
+            return t
+    except Exception:
+        pass
+    try:
+        t = event.get_message_str()
+        if isinstance(t, str):
+            return t
+    except Exception:
+        pass
+    return ""
+
+
+def vc_should(conf, event):
+    """这一轮该不该发语音（灰度门）。"""
+    if not conf or not conf.get("enabled"):
+        return False
+    try:
+        if not scope_hit(conf.get("targets"), event.get_self_id()):
+            return False
+    except Exception:
+        return False
+    if conf.get("private_only", True):
+        try:
+            if event.get_group_id():
+                return False
+        except Exception:
+            pass
+    kws = [str(k) for k in (conf.get("keywords") or []) if str(k).strip()]
+    if not kws:
+        return False
+    msg = _msg_text(event)
+    return any(k in msg for k in kws)
+
+
+def vc_cache_path(conf, text):
+    """按「音色 + 正文」哈希命名 ⇒ 同一句只合成一次 ✓（天然的语音缓存）。"""
+    d = str(conf.get("cache_dir") or "/opt/astrbot/data/voice_cache")
+    os.makedirs(d, exist_ok=True)
+    h = hashlib.sha1(("%s|%s" % (conf.get("voice_id") or "", text)).encode("utf-8")).hexdigest()[:20]
+    return os.path.join(d, h + ".mp3")
+
+
+def vc_synth(conf, text):
+    """调阿里云 CosyVoice 合成 → 存 mp3 → 返回路径（失败返回 None）。
+
+    ⚠️ 请求体里**只有 `input.text` 这一句** ✓ 没有任何人格/记忆 ✓
+    """
+    base = str(conf.get("api_base") or "").rstrip("/")
+    vid = str(conf.get("voice_id") or "").strip()
+    kf = str(conf.get("key_file") or "/opt/astrbot/data/.dashscope_key")
+    if not base or not vid:
+        logger.warning("[mindscape_voice] 缺 api_base / voice_id，跳过")
+        return None
+    try:
+        key = open(kf, encoding="utf-8").read().strip()
+    except Exception as e:
+        logger.warning("[mindscape_voice] 读不到 key 文件: %s", str(e)[:80])
+        return None
+    out = vc_cache_path(conf, text)
+    if os.path.exists(out) and os.path.getsize(out) > 1024:
+        return out
+    body = {
+        "model": str(conf.get("model") or "cosyvoice-v3.5-flash"),
+        "input": {
+            "text": text,
+            "voice": vid,
+            "format": "mp3",
+            "sample_rate": 24000,
+        },
+    }
+    req = urllib.request.Request(
+        base + "/services/audio/tts/SpeechSynthesizer",
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            d = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        logger.warning("[mindscape_voice] 合成 HTTP %s: %s", e.code, e.read().decode()[:200])
+        return None
+    except Exception as e:
+        logger.warning("[mindscape_voice] 合成异常: %s", str(e)[:120])
+        return None
+    url = (((d.get("output") or {}).get("audio") or {}).get("url"))
+    if not url:
+        logger.warning("[mindscape_voice] 没有音频 URL: %s", json.dumps(d, ensure_ascii=False)[:200])
+        return None
+    try:
+        with urllib.request.urlopen(url, timeout=90) as rr, open(out, "wb") as f:
+            f.write(rr.read())
+    except Exception as e:
+        logger.warning("[mindscape_voice] 下载音频失败: %s", str(e)[:120])
+        return None
+    if os.path.getsize(out) < 1024:
+        return None
+    return out
 # ==================================================================
 # 命名空间：让 cfg.xxx() / core.xxx() 这类调用在合并后依然可用
 # ==================================================================
@@ -4271,6 +4404,23 @@ class MemoryMixin:
                         logger.warning("[mindscape_memory] 挂 extra_user_content_parts 失败"
                                        "（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
                         request.system_prompt = (request.system_prompt or old) + block
+            # ⭐ 时间锚点 —— **放在整个注入的最末尾** ✓（主人 2026-10-22 定）
+            #   为什么必须最后：日期一天一变 ✗ 放前面 ⇒ 每天第一次请求就把前面全部重算
+            #   ⇒ 缓存整个击穿（那是最贵的一笔）✗
+            #   ⚠️ 只给日期、只认北京时间（见 today_line 的注释 ✓）
+            try:
+                _line = today_line()
+                _tp2 = getattr(request, "extra_user_content_parts", None)
+                _have = (TODAY_MARK in (getattr(request, "system_prompt", "") or "")
+                         or any(TODAY_MARK in str(getattr(p, "text", "")) for p in (_tp2 or [])))
+                if not _have:
+                    from astrbot.core.agent.message import TextPart
+                    if _tp2 is None:
+                        _tp2 = []
+                        request.extra_user_content_parts = _tp2
+                    _tp2.append(TextPart(text=sys_tag(_line)))
+            except Exception as e:
+                logger.warning("[mindscape_memory] 注入日期失败: %s", str(e)[:90])
             logger.info("[mindscape_memory] %s 注入 %d 字记忆 / %d 字摘要 / %d 字账本"
                         " / %d 字风格 / %d 字人物",
                         bot.get("name") or "你", sizes[0], sizes[1], sizes[2], sizes[3],
@@ -4563,7 +4713,20 @@ class StickersMixin:
             if resp.status_code != 200:
                 logger.warning("[mindscape_stickers] 判断 API %s", resp.status_code)
                 return None
-            msg = resp.json()["choices"][0]["message"]
+            _d = resp.json()
+            # ⚠️ 2026-10-22 主人查账：**这三处直连 provider 的调用原本一行账都不打** ✗
+            #    实测（探针）：30 秒内 3 次请求，① 护栏只记到 2 条 ⇒ 漏的正是这条路 ✓
+            #    ⇒ 只补**用量日志**（不改逻辑）；文案跟宿主那一套对齐，方便一起汇总 ✓
+            try:
+                _u = (_d.get("usage") or {})
+                logger.info("[msusage] %s 未命中 %s ｜ 命中缓存 %s ｜ 输出 %s",
+                            "judge(识图判断)",
+                            _u.get("prompt_cache_miss_tokens"),
+                            _u.get("prompt_cache_hit_tokens"),
+                            _u.get("completion_tokens"))
+            except Exception:
+                pass
+            msg = _d["choices"][0]["message"]
             txt = (msg.get("content") or "").strip()
             if not txt:
                 txt = (msg.get("reasoning_content") or "").strip()
@@ -4817,7 +4980,20 @@ class StickerUseMixin:
                 )
             if resp.status_code != 200:
                 return None
-            msg = resp.json()["choices"][0]["message"]
+            _d = resp.json()
+            # ⚠️ 2026-10-22 主人查账：**这三处直连 provider 的调用原本一行账都不打** ✗
+            #    实测（探针）：30 秒内 3 次请求，① 护栏只记到 2 条 ⇒ 漏的正是这条路 ✓
+            #    ⇒ 只补**用量日志**（不改逻辑）；文案跟宿主那一套对齐，方便一起汇总 ✓
+            try:
+                _u = (_d.get("usage") or {})
+                logger.info("[msusage] %s 未命中 %s ｜ 命中缓存 %s ｜ 输出 %s",
+                            "pick(表情挑选)",
+                            _u.get("prompt_cache_miss_tokens"),
+                            _u.get("prompt_cache_hit_tokens"),
+                            _u.get("completion_tokens"))
+            except Exception:
+                pass
+            msg = _d["choices"][0]["message"]
             txt = (msg.get("content") or "").strip() or (msg.get("reasoning_content") or "").strip()
         except Exception as e:
             logger.warning("[mindscape_sticker_use] 选图异常: %s", str(e)[:120])
@@ -5195,7 +5371,20 @@ class RescueMixin:
                 )
             if resp.status_code != 200:
                 return ""
-            msg = resp.json()["choices"][0]["message"]
+            _d = resp.json()
+            # ⚠️ 2026-10-22 主人查账：**这三处直连 provider 的调用原本一行账都不打** ✗
+            #    实测（探针）：30 秒内 3 次请求，① 护栏只记到 2 条 ⇒ 漏的正是这条路 ✓
+            #    ⇒ 只补**用量日志**（不改逻辑）；文案跟宿主那一套对齐，方便一起汇总 ✓
+            try:
+                _u = (_d.get("usage") or {})
+                logger.info("[msusage] %s 未命中 %s ｜ 命中缓存 %s ｜ 输出 %s",
+                            "ask_once(救援补话)",
+                            _u.get("prompt_cache_miss_tokens"),
+                            _u.get("prompt_cache_hit_tokens"),
+                            _u.get("completion_tokens"))
+            except Exception:
+                pass
+            msg = _d["choices"][0]["message"]
             txt = (msg.get("content") or "").strip()
             if not txt:
                 txt = (msg.get("reasoning_content") or "").strip()
@@ -5837,10 +6026,60 @@ class ToolscopeMixin:
                             event.get_self_id(), gone)
         except Exception as e:
             logger.warning("[mindscape_toolscope] 过滤失败: %s", str(e)[:120])
+
+
+class VoiceMixin:
+    def setup(self, context):
+        try:
+            self.v_cfg = vcfg(self.config if hasattr(self, "config") else None)
+            if not self.v_cfg:
+                self.v_cfg = cfg.section(SECTION) or {}
+            logger.info("[mindscape_voice] loaded | enabled=%s targets=%s 关键词=%s",
+                        bool(self.v_cfg.get("enabled")),
+                        self.v_cfg.get("targets") or [],
+                        self.v_cfg.get("keywords") or [])
+        except Exception as e:
+            logger.warning("[mindscape_voice] setup 失败: %s", str(e)[:100])
+            self.v_cfg = {}
+
+    @filter.on_decorating_result(priority=VOICE_PRIORITY)
+    async def vc_speak(self, event: AstrMessageEvent):
+        """把这一轮的正文换成语音（灰测：私聊 + 含「语音」+ 只在白名单 bot）。"""
+        try:
+            conf = getattr(self, "v_cfg", None) or {}
+            if not vc_should(conf, event):
+                return
+            result = event.get_result()
+            if result is None:
+                return
+            txt = (result.get_plain_text() or "").strip()
+            if not txt:
+                return
+            max_chars = int(conf.get("max_chars") or 120)
+            if len(txt) > max_chars:
+                # QQ 语音有上限（约 60 秒）⇒ 太长就老实发文字 ✓ 绝不截断她的话 ✗
+                logger.info("[mindscape_voice] 正文 %d 字 > %d，走文字 ✓ | 正文: %s",
+                            len(txt), max_chars, txt[:80])
+                return
+            loop = asyncio.get_event_loop()
+            path = await loop.run_in_executor(None, vc_synth, conf, txt)
+            if not path:
+                logger.warning("[mindscape_voice] 合成失败 ⇒ 退回文字 ✓（不静默）| 正文: %s", txt[:80])
+                return
+            # ⚠️ **用到时才 import** —— 顶层 import 会让自检的假 astrbot 桩直接炸 ✗
+            #    （而且组件模块在部分环境里未必在 api 包下 ⇒ 运行时兜底更稳 ✓）
+            from astrbot.api.message_components import Record
+            result.chain = [Record(file=path)]
+            # ⚠️ 2026-10-23 主人要求：正文**不发群里**，但**日志里必须看得到** ⇒ 否则不可观测 ✗
+            logger.info("[mindscape_voice] 语音已就绪 | %d 字 → %s | 正文: %s",
+                        len(txt), os.path.basename(path), txt[:80])
+        except Exception as e:
+            # ⚠️ 任何异常都必须**保留原文**（不 clear）⇒ 退回文字 ✓
+            logger.warning("[mindscape_voice] 语音链路出错（已保留文字）: %s", str(e)[:140])
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
 # ==================================================================
-class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, PrivacyMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, SilenceMixin, VisionMixin, GroupctxMixin, TraceMixin, MentionMixin, ToolscopeMixin, star.Star):
+class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, PrivacyMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, SilenceMixin, VisionMixin, GroupctxMixin, TraceMixin, MentionMixin, ToolscopeMixin, VoiceMixin, star.Star):
     def __init__(self, context):
         self.context = context
         self.name = "mindscape"
@@ -5859,4 +6098,5 @@ class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, PrivacyMixin, Sticker
         TraceMixin.setup(self, context)
         MentionMixin.setup(self, context)
         ToolscopeMixin.setup(self, context)
-        logger.info("[mindscape] 插件已加载（14 个模块）")
+        VoiceMixin.setup(self, context)
+        logger.info("[mindscape] 插件已加载（15 个模块）")

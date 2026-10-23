@@ -55,6 +55,29 @@ HEADER_MARK = "## "
 MEM_PRIORITY = 10           # 记忆块：风格(每天) → 摘要(每天) → 账本(偶发) → 记忆(约 10 分钟)
 PEOPLE_PRIORITY = -6        # 人物画像：按说话者挑 → **每换一个人就变** → 排在最后一个 part ✓
 PEOPLE_TITLE = "## 你认识的人"
+
+# ── 「今天是」：给模型一个**时间锚点**（2026-10-22 主人定）─────────────────────
+# ⚠️ 真机事故：她把 5 天前（10-17）的「39.5 那次」说成「**昨天**」✗
+#    线索里明明写着 `[10-17]`，但**没有任何东西告诉她今天是 10-22**
+#    ⇒ 她算不出「几天前」，只能给一个听起来合理的相对时间 ✗
+# 三条硬约束（主人当场划的 ✓）：
+#   ① **只注入日期** —— 不要时分秒 ✗
+#   ② **必须是北京时间 UTC+8** —— 容器可能是 UTC，绝不跟着服务器时区走 ✗
+#   ③ **必须放在最后** ✗ —— 日期一天一变，放前面会让每天第一次请求把整个前缀重算（缓存全废）
+TODAY_MARK = "今天是 20"        # 去重用的稳定前缀（不含具体数字 ✓）
+
+
+def today_line(now=None):
+    """「今天是 2026-10-22（周四）」—— **只给日期、北京时间** ✓
+
+    ⚠️ 用 `UTC + 8h` 硬算，**不依赖 zoneinfo、也不依赖服务器本地时区** ✓
+       （容器/宿主机时区不保证是 CST；依赖它 = 静默错一天 ✗）
+    """
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    if now is None:
+        now = _dt.now(_tz.utc) + _td(hours=8)
+    return "今天是 %d-%02d-%02d（周%s）" % (
+        now.year, now.month, now.day, "一二三四五六日"[now.weekday()])
 # 尺寸靠模块级字典在两个 handler 之间传（日志仍是同一行同一格式 ✓）。
 # 不用 event.set_extra：自检的桩 event 没有那个 API ✓（会被 try 吞掉、静默不注入 ✗）。
 MEM_SIZES = {}
@@ -508,6 +531,23 @@ class MemoryMixin:
                         logger.warning("[mindscape_memory] 挂 extra_user_content_parts 失败"
                                        "（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
                         request.system_prompt = (request.system_prompt or old) + block
+            # ⭐ 时间锚点 —— **放在整个注入的最末尾** ✓（主人 2026-10-22 定）
+            #   为什么必须最后：日期一天一变 ✗ 放前面 ⇒ 每天第一次请求就把前面全部重算
+            #   ⇒ 缓存整个击穿（那是最贵的一笔）✗
+            #   ⚠️ 只给日期、只认北京时间（见 today_line 的注释 ✓）
+            try:
+                _line = today_line()
+                _tp2 = getattr(request, "extra_user_content_parts", None)
+                _have = (TODAY_MARK in (getattr(request, "system_prompt", "") or "")
+                         or any(TODAY_MARK in str(getattr(p, "text", "")) for p in (_tp2 or [])))
+                if not _have:
+                    from astrbot.core.agent.message import TextPart
+                    if _tp2 is None:
+                        _tp2 = []
+                        request.extra_user_content_parts = _tp2
+                    _tp2.append(TextPart(text=sys_tag(_line)))
+            except Exception as e:
+                logger.warning("[mindscape_memory] 注入日期失败: %s", str(e)[:90])
             logger.info("[mindscape_memory] %s 注入 %d 字记忆 / %d 字摘要 / %d 字账本"
                         " / %d 字风格 / %d 字人物",
                         bot.get("name") or "你", sizes[0], sizes[1], sizes[2], sizes[3],

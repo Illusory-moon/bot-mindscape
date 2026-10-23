@@ -3685,6 +3685,27 @@ def main():
     except Exception as e:
         bad("R84 气泡分隔符 ||| 的总兜底", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
+    # R86: 时间锚点「今天是 …」—— **只给日期 / 北京时间 / 必须放最后**（2026-10-22 主人定）
+    #   真机事故：她把 5 天前的「39.5 那次」说成「昨天」✗（线索里有 [10-17]，但她不知道今天几号）
+    #   ① 只注入日期（不许时分秒）② 必须 UTC+8 ③ 必须放注入末尾（放前面会天天击穿缓存）
+    try:
+        mm86 = load("mindscape_memory")
+        from datetime import datetime as _dt86
+        _r1 = mm86.today_line(_dt86(2026, 10, 22, 23, 30))
+        _ok_fmt = (_r1 == "今天是 2026-10-22（周四）")
+        _ok_notime = (":" not in _r1)
+        _src86 = open(os.path.join(HERE, "plugins", "mindscape_memory.py"), encoding="utf-8").read()
+        _ok_utc = ("hours=8" in _src86 and ".utc" in _src86)
+        _i_people = _src86.find("PEOPLE_TITLE in old")
+        _i_today = _src86.find("today_line()")
+        _ok_order = (0 <= _i_people < _i_today)
+        _good86 = _ok_fmt and _ok_notime and _ok_utc and _ok_order
+        (ok if _good86 else bad)(
+            "R86 时间锚点：只给日期 · UTC+8 · 放在注入末尾",
+            "%r ｜ 无时分秒=%s UTC+8=%s 在人物块之后=%s" % (_r1, _ok_notime, _ok_utc, _ok_order))
+    except Exception as e:
+        bad("R86 时间锚点", "%s: %s" % (type(e).__name__, str(e)[:120]))
+
     # ── CF：耦合冲突检测（跨模块的隐式耦合 —— 单模块看都正常 ✗）
     #   主人 2026-10-16 点名要的：「以后这种 bug 反正我自己是找不到根因」
     #   本仓真事故：flatten_result(900) 抹掉 ||| ⇒ mention 的低优先级钩子拿不到分隔符

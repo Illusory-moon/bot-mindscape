@@ -384,7 +384,20 @@ class StickersMixin:
             if resp.status_code != 200:
                 logger.warning("[mindscape_stickers] 判断 API %s", resp.status_code)
                 return None
-            msg = resp.json()["choices"][0]["message"]
+            _d = resp.json()
+            # ⚠️ 2026-10-22 主人查账：**这三处直连 provider 的调用原本一行账都不打** ✗
+            #    实测（探针）：30 秒内 3 次请求，① 护栏只记到 2 条 ⇒ 漏的正是这条路 ✓
+            #    ⇒ 只补**用量日志**（不改逻辑）；文案跟宿主那一套对齐，方便一起汇总 ✓
+            try:
+                _u = (_d.get("usage") or {})
+                logger.info("[msusage] %s 未命中 %s ｜ 命中缓存 %s ｜ 输出 %s",
+                            "judge(识图判断)",
+                            _u.get("prompt_cache_miss_tokens"),
+                            _u.get("prompt_cache_hit_tokens"),
+                            _u.get("completion_tokens"))
+            except Exception:
+                pass
+            msg = _d["choices"][0]["message"]
             txt = (msg.get("content") or "").strip()
             if not txt:
                 txt = (msg.get("reasoning_content") or "").strip()
