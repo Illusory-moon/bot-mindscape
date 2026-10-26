@@ -31,7 +31,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.core.provider.entities import ProviderRequest
 
 import mindscape_config as cfg
-from mindscape_core import (is_platform_command, scope_hit, scope_warn, strip_invisible, sys_tag)
+from mindscape_core import (fmt_cst, is_platform_command, scope_hit, scope_warn, strip_invisible, sys_tag)
 
 # 与 patches/astrbot 里补丁的落盘路径一致（补丁硬编码了这个绝对路径）
 DEFAULT_BUFFER = "/opt/astrbot/data/group_ctx_buffer.jsonl"
@@ -368,7 +368,7 @@ class GroupctxMixin:
                 for r in recs:
                     tag = " ".join("［附件%d］" % img_no[ref2path[str(x)]]
                                    for x in (r.get("imgs") or []) if str(x) in ref2path)
-                    lines.append("[" + time.strftime("%H:%M:%S", time.localtime(float(r.get("ts") or now)))
+                    lines.append("[" + fmt_cst(float(r.get("ts") or now), "%H:%M:%S")
                                  + "] " + strip_invisible(str(r.get("who", "?")))[:16] + ": "
                                  + strip_invisible(str(r.get("text", "")))[:200]
                                  + (("  " + tag) if tag else ""))

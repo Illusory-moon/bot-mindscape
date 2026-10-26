@@ -1,0 +1,34 @@
+name: selfcheck
+
+# 2026-10-27 加（review P2-10）：仓库之前**没有任何 CI** ✗ ——
+#   `dist/main.py` 是提交进仓库的产物，而"产物新鲜度"完全靠人记得跑自检 ⇒ 迟早漂。
+#   这里三件事，够用且便宜：
+#     ① 自检（含 R83/R84 出站整理、R88 领域词、产物字节一致）
+#     ② unittest（11 个测试文件，含需要参数的那三个 —— 无参时它们自己打印用法并退出 ✓）
+#     ③ 顺手验一遍"干净克隆也能过"（缺私有词表时不该红，见 check_privacy 的降级分支 ✓）
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  selfcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 自检（失败必须为 0）
+        run: python scripts/run_selfcheck.py
+
+      - name: 单元测试
+        run: python -m unittest discover -s scripts -p "test_*.py" -v

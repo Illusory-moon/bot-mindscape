@@ -25,6 +25,7 @@ import re
 import urllib.request
 
 import mindscape_config as cfg
+from mindscape_core import today_cst
 
 HEADER_RE = re.compile(r"^##\s*(\d{4}-\d{2}-\d{2})")
 
@@ -203,7 +204,7 @@ def run_digest_target(d, common):
     done = load_digests(out)
     state_path = out + ".state.json"
     state = dg_load_state(state_path)
-    today = datetime.date.today().strftime("%Y-%m-%d")
+    today = today_cst().strftime("%Y-%m-%d")
     fps = {x: dg_fp(chr(10).join(days[x])) for x in days}
     # 待补 = 从没有过摘要的，**或者**那天的日记内容变过了的。
     # 以前只看「有没有摘要」，所以事后补录旧日记时，旧摘要永远不会更新。

@@ -23,7 +23,7 @@ import re
 _GFX_JUNK = re.compile(r"<[^<>]{0,24}>")
 
 
-from mindscape_core import is_platform_command
+from mindscape_core import fmt_cst, is_platform_command
 
 
 def dy_gname(raw, gid=""):
@@ -175,7 +175,7 @@ def fetch(src, target, since_ts, since_seq, only_user=None):
                 "gid": gid,
                 "gname": dy_gname(d.get("group_name"), gid),
                 "who": str(sender)[:16], "uid": uid,
-                "time": datetime.datetime.fromtimestamp(ts).strftime("%m-%d %H:%M"),
+                "time": fmt_cst(ts, "%m-%d %H:%M"),
                 "txt": txt[:200],
             })
     finally:

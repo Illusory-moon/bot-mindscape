@@ -28,6 +28,33 @@ PLACEHOLDERS = {
 IMG_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 
 
+# ── 时区：全项目只认一个「现在」（2026-10-27 加 · P2-7）────────────────────
+# 事故形态：`memory.today_line()` 用 **UTC+8 硬算**写进提示词，而 `groupctx` 渲染聊天时间戳、
+#   `diary` 给记录打时间、`digest` 判「哪天算过」都走 `time.localtime()` / `date.today()`
+#   —— 那是**跟服务器时区走**的 ✗。UTC 容器里：提示词说「今天是 10-22」，
+#   而聊天记录时间戳比它早 8 小时 ⇒ 她判断「刚才 / 昨天」必然错位 ✗
+# ⇒ 统一成这一个函数：**不依赖服务器时区、不依赖 tzdata** ✓
+CST_OFFSET_HOURS = 8
+
+
+def now_cst():
+    """北京时间「现在」（naive datetime，UTC+8 硬算）。"""
+    import datetime
+    return datetime.datetime.utcnow() + datetime.timedelta(hours=CST_OFFSET_HOURS)
+
+
+def today_cst():
+    """北京时间「今天」（date）。"""
+    return now_cst().date()
+
+
+def fmt_cst(ts, fmt="%m-%d %H:%M"):
+    """把**绝对时间戳**按北京时间格式化（给日记/群缓冲渲染用）。"""
+    import datetime
+    return (datetime.datetime.utcfromtimestamp(float(ts))
+            + datetime.timedelta(hours=CST_OFFSET_HOURS)).strftime(fmt)
+
+
 # ── 作用域：哪些 bot 生效 ──
 # 「空列表 = 全部 bot」是历史语义，也是最容易造成**意外全开**的地方
 # （一个 bot 的配置悄悄作用到另一个 bot 上）。所以：

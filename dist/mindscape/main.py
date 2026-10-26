@@ -175,6 +175,27 @@ PLACEHOLDERS = {
 IMG_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 
 
+CST_OFFSET_HOURS = 8
+
+
+def now_cst():
+    """北京时间「现在」（naive datetime，UTC+8 硬算）。"""
+    import datetime
+    return datetime.datetime.utcnow() + datetime.timedelta(hours=CST_OFFSET_HOURS)
+
+
+def today_cst():
+    """北京时间「今天」（date）。"""
+    return now_cst().date()
+
+
+def fmt_cst(ts, fmt="%m-%d %H:%M"):
+    """把**绝对时间戳**按北京时间格式化（给日记/群缓冲渲染用）。"""
+    import datetime
+    return (datetime.datetime.utcfromtimestamp(float(ts))
+            + datetime.timedelta(hours=CST_OFFSET_HOURS)).strftime(fmt)
+
+
 ALL_TOKENS = ("all", "*", "全部", "所有")
 
 
@@ -2877,7 +2898,7 @@ def fetch(src, target, since_ts, since_seq, only_user=None):
                 "gid": gid,
                 "gname": dy_gname(d.get("group_name"), gid),
                 "who": str(sender)[:16], "uid": uid,
-                "time": datetime.datetime.fromtimestamp(ts).strftime("%m-%d %H:%M"),
+                "time": fmt_cst(ts, "%m-%d %H:%M"),
                 "txt": txt[:200],
             })
     finally:
@@ -5880,7 +5901,7 @@ class GroupctxMixin:
                 for r in recs:
                     tag = " ".join("［附件%d］" % img_no[ref2path[str(x)]]
                                    for x in (r.get("imgs") or []) if str(x) in ref2path)
-                    lines.append("[" + time.strftime("%H:%M:%S", time.localtime(float(r.get("ts") or now)))
+                    lines.append("[" + fmt_cst(float(r.get("ts") or now), "%H:%M:%S")
                                  + "] " + strip_invisible(str(r.get("who", "?")))[:16] + ": "
                                  + strip_invisible(str(r.get("text", "")))[:200]
                                  + (("  " + tag) if tag else ""))
