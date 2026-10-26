@@ -3198,6 +3198,7 @@ def check_regressions():
         import importlib as _il8
         import tempfile as _tf8
         import time as _tm8
+        from mindscape_core import fmt_cst as _fmt_cst   # 2026-10-27：期望值必须用同一个时区函数算 ✓
         import mindscape_groupctx as GC8
         _il8.reload(GC8)
         _fd, _live = _tf8.mkstemp(suffix=".jpg")
@@ -3274,7 +3275,7 @@ def check_regressions():
             _run8(_inst8.gc_inject(_Event8(), _req8))
             _inj8 = chr(10).join(str(getattr(p, "text", ""))
                                  for p in _req8.extra_user_content_parts)
-            _stamp8 = "[%s] A: [图片]" % _tm8.strftime("%H:%M:%S", _tm8.localtime(_now8 - 25))
+            _stamp8 = "[%s] A: [图片]" % _fmt_cst(_now8 - 25, "%H:%M:%S")
             prompt_ok = (_req8.image_urls == [_live]
                          and _stamp8 in _inj8
                          and "本条消息时间：" in _inj8
