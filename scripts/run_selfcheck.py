@@ -462,15 +462,19 @@ def check_privacy():
                     txt = open(fp, encoding="utf-8", errors="replace").read()
                 except Exception:
                     continue
-                for m in re.finditer(r"(?<!\d)\d{7,10}(?!\d)", txt):
-                    hits.append("%s -> 疑似号码 %s****" % (rel, m.group()[:3]))
+                # ⚠️ 2026-10-27 当场踩：本鱼第一版这里加了「7–10 位长数字 = 疑似号码」的规则
+                #   ⇒ 立刻把 README / config.example 里的**尺寸、上限、示例数值**全判成泄漏
+                #   （干净克隆上 **42 个假红** ✗，CI 21 秒就挂）。
+                #   ⇒ 那条规则**撤掉**：纯数字在文档/配置里合法得很，靠它抓号码只会误伤一片 ✗。
+                #   保留 `sk-` 密钥这一条（它几乎没有误报面）✓
+                #   真号码靠 scripts/private-names.txt 的 **sha256 词条**抓（R79 守着不落明文）✓
                 if re.search(r"sk-[A-Za-z0-9]{20,}", txt):
                     hits.append(rel + " -> APIKEY")
         if hits:
             for x in hits:
                 bad("泄漏（内置基线）", x)
             return
-        ok("脱敏基线", "未发现长数字串/API key ✓（⚠️ 私有词表未提供 ⇒ **私有名字**这一类"
+        ok("脱敏基线", "未发现 API key ✓（⚠️ 私有词表未提供 ⇒ **私有名字**这一类"
                       "本次没有查；把 scripts/private-names.txt 放进来才算完整 ✓）")
         return
     SKIP = {"run_selfcheck.py", "private-names.txt"}
