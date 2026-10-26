@@ -19,6 +19,7 @@ import secrets
 import shutil
 import sqlite3
 import struct
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -1921,6 +1922,30 @@ def read_many(paths, max_chars):
     return "\n".join(parts)
 
 
+def _gate_fns():
+    """拿到 gate 里的 pg_current / pg_notes，**不写任何 import 语句**。
+
+    为什么这么绕（2026-10-27 修 · 真事故）：
+      原来这里是函数体内的 `from mindscape_gate import …`。但构建器只剥**顶层** import，
+      函数体内的那行会原样留在合并产物里 ⇒ 产物里根本没有 `mindscape_gate` 这个模块
+      ⇒ 运行时 `ModuleNotFoundError` ⇒ 被下面 try 吞掉 ⇒ **整个功能静默失效** ✗
+      （线上日志坐实过：`读口令失败: No module named 'mindscape_gate'`）
+    解法：
+      · 合并产物里，各模块的顶层符号**就在本模块的命名空间** ⇒ 先查 globals() ✓
+      · 开发态（逐模块 import）才需要回退到 sys.modules ✓
+      · **全程不出现 import 语句** ⇒ 构建器不会再把它带进产物 ✓
+    """
+    for name in ("pg_current", "pg_notes"):
+        if name not in globals():
+            break
+    else:
+        return globals()["pg_current"], globals()["pg_notes"]
+    mod = sys.modules.get("mindscape_gate")
+    if mod is not None and hasattr(mod, "pg_current"):
+        return mod.pg_current, mod.pg_notes
+    raise RuntimeError("找不到 pg_current/pg_notes（合并产物里应已在命名空间；开发态需先 import mindscape_gate）")
+
+
 def pg_live_code(self_id):
     """该通道账本里**当前有效**的口令 ⇒ (code, 到期时间) 或 ("", None)。
 
@@ -1931,7 +1956,7 @@ def pg_live_code(self_id):
     ⚠️ 仍然**不替她决定**：给了真码也照旧写着"给不给由你"，她可以选择糊弄/拒绝 ✓
     """
     try:
-        from mindscape_gate import pg_current, pg_notes
+        pg_current, pg_notes = _gate_fns()
         path = pg_notes(str(self_id))
         if not path or not os.path.isfile(path):
             return "", None
@@ -3803,7 +3828,7 @@ async def mn_attach_hook(*args, **kwargs):
         #    只对「同一轮 ✓」或「40 秒内 ✓」生效，免得误伤同一群里**下一轮**的正文 ✗。
         #    已知上限：同一群 40 秒内开新轮，其正文可能被误抑制 ✓（升级路：换成真正的 turn id ✓）。
         # ⚠️ 2026-10-08 **二次踩坑** ✗：**绝不能用时间窗口** ✗ ——
-        #    20:00:42 她刚用 say_lines 说完 ✓ 20:00:57 群里来了**新问题**（「朋克洛德是哪里」✓）
+        #    20:00:42 她刚用 say_lines 说完 ✓ 20:00:57 群里来了**新问题**（「某某地名是哪里」✓）
         #    只隔 **15 秒** ✓ → 上一轮的残留状态把**新一轮的正文**当成"重复"抑制掉了 ✗✗
         #    → 她那条回答**一个字都没发出去** ✗ 而会话历史里记着"已发出" ✗ → 她还以为讲过了 ✗
         #    （主人 20:02 报的「她说解释完了但我没看到」就是这个 ✓）。

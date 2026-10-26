@@ -2,12 +2,37 @@
 """Tell a bot where its code is when its developer asks."""
 import datetime
 import os
+import sys
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.core.provider.entities import ProviderRequest
 
 import mindscape_config as cfg
+
+
+def _gate_fns():
+    """拿到 gate 里的 pg_current / pg_notes，**不写任何 import 语句**。
+
+    为什么这么绕（2026-10-27 修 · 真事故）：
+      原来这里是函数体内的 `from mindscape_gate import …`。但构建器只剥**顶层** import，
+      函数体内的那行会原样留在合并产物里 ⇒ 产物里根本没有 `mindscape_gate` 这个模块
+      ⇒ 运行时 `ModuleNotFoundError` ⇒ 被下面 try 吞掉 ⇒ **整个功能静默失效** ✗
+      （线上日志坐实过：`读口令失败: No module named 'mindscape_gate'`）
+    解法：
+      · 合并产物里，各模块的顶层符号**就在本模块的命名空间** ⇒ 先查 globals() ✓
+      · 开发态（逐模块 import）才需要回退到 sys.modules ✓
+      · **全程不出现 import 语句** ⇒ 构建器不会再把它带进产物 ✓
+    """
+    for name in ("pg_current", "pg_notes"):
+        if name not in globals():
+            break
+    else:
+        return globals()["pg_current"], globals()["pg_notes"]
+    mod = sys.modules.get("mindscape_gate")
+    if mod is not None and hasattr(mod, "pg_current"):
+        return mod.pg_current, mod.pg_notes
+    raise RuntimeError("找不到 pg_current/pg_notes（合并产物里应已在命名空间；开发态需先 import mindscape_gate）")
 
 
 def pg_live_code(self_id):
@@ -20,7 +45,7 @@ def pg_live_code(self_id):
     ⚠️ 仍然**不替她决定**：给了真码也照旧写着"给不给由你"，她可以选择糊弄/拒绝 ✓
     """
     try:
-        from mindscape_gate import pg_current, pg_notes
+        pg_current, pg_notes = _gate_fns()
         path = pg_notes(str(self_id))
         if not path or not os.path.isfile(path):
             return "", None

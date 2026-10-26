@@ -58,6 +58,7 @@ def split_module(path):
     tree = ast.parse(src)
     src_lines = src.splitlines()
     imports, classes, others = [], [], []
+    top_skipped = set()
     for node in tree.body:
         seg = _seg(src_lines, node)
         if seg is None:
@@ -67,6 +68,7 @@ def split_module(path):
             mod = getattr(node, "module", None) or ""
             if mod.startswith("mindscape_") or any(
                     a.name.startswith("mindscape_") for a in node.names):
+                top_skipped.add(id(node))
                 continue
             imports.append(seg)
         elif isinstance(node, ast.ClassDef):
@@ -79,6 +81,27 @@ def split_module(path):
             continue      # 模块 docstring
         else:
             others.append(seg)
+
+    # 🔴 函数体 / 类体里的 mindscape_* import 一律硬错（2026-10-27 真事故）：
+    #    只剥顶层 ⇒ 嵌套的那行会原样进产物 ⇒ 合并产物里没有这些模块 ⇒ ModuleNotFoundError
+    #    ⇒ 被 try 吞掉 ⇒ **功能静默失效**，而自检、开发态全绿（真事：口令注入线上从未生效）
+    deep = []
+    for node in ast.walk(tree):
+        if id(node) in top_skipped:
+            continue
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("mindscape_"):
+            deep.append((node.lineno, "from %s import …" % node.module))
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name.startswith("mindscape_"):
+                    deep.append((node.lineno, "import %s" % a.name))
+    if deep:
+        first = sorted(deep)[0]
+        raise SystemExit(
+            "[FAIL] %s 第 %d 行有**非顶层**的 mindscape_* import：%s\n"
+            "       合并后这些模块不存在 ⇒ 该 import 会 ModuleNotFoundError ⇒ 功能静默失效 ✗\n"
+            "       改法：合并产物里模块符号就在同一命名空间 ⇒ 用 globals()/sys.modules 取，别写 import。"
+            % (os.path.basename(path), first[0], first[1]))
     return imports, classes, others
 
 
