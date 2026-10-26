@@ -3,9 +3,15 @@ setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
 
-if exist ".venv\Scripts\python.exe" (
-    set "PY=.venv\Scripts\python.exe"
-) else (
+rem 2026-10-26 修：项目 venv 常在**兄弟目录**（本机 ..\..\smm-tempsparxie\.venv）。
+rem 原来只找 .venv，找不到就退回系统 python（缺 PyYAML）⇒ 一开就报"缺依赖" ✗
+rem 写法：按优先级自上而下赋值、后面的覆盖前面的 ⇒ 不用复合条件、不用子程序 ✓
+set "PY="
+if exist "..\..\smm-tempsparxie\.venv\Scripts\python.exe" set "PY=..\..\smm-tempsparxie\.venv\Scripts\python.exe"
+if exist "..\smm-tempsparxie\.venv\Scripts\python.exe" set "PY=..\smm-tempsparxie\.venv\Scripts\python.exe"
+if exist "..\.venv\Scripts\python.exe" set "PY=..\.venv\Scripts\python.exe"
+if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
+if not defined PY (
     python --version >nul 2>nul
     if not errorlevel 1 (
         set "PY=python"
@@ -66,6 +72,7 @@ exit /b
 echo 未找到 Python 3，请先安装 Python，再双击此文件。
 pause
 exit /b 1
+
 
 :missing_deps
 echo 缺少 PyYAML，请先运行：%PY% -m pip install -r requirements.txt

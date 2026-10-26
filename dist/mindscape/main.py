@@ -1921,6 +1921,28 @@ def read_many(paths, max_chars):
     return "\n".join(parts)
 
 
+def pg_live_code(self_id):
+    """该通道账本里**当前有效**的口令 ⇒ (code, 到期时间) 或 ("", None)。
+
+    为什么要它（2026-10-26）：提示词原来只说「你账本里记着一条，可以用 recall 搜『口令』找到」，
+    实测她会**跳过检索、随口编一个** ✗（真事：账本里是 8H4F3G，她给了 QHAB6X，开发者进不去）
+    ⇒ 与其指望她记得去查，不如**把真码直接放进她看到的提示里** ✓
+      「能用代码硬保证的，别指望提示词」—— 这条正是那种情况 ✗
+    ⚠️ 仍然**不替她决定**：给了真码也照旧写着"给不给由你"，她可以选择糊弄/拒绝 ✓
+    """
+    try:
+        from mindscape_gate import pg_current, pg_notes
+        path = pg_notes(str(self_id))
+        if not path or not os.path.isfile(path):
+            return "", None
+        with open(path, encoding="utf-8", errors="replace") as stream:
+            code, expiry = pg_current(stream.read())
+        return str(code or ""), expiry
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[mindscape_privacy] 读口令失败: %s", str(exc)[:80])
+        return "", None
+
+
 DEFAULT_LIMIT = 15
 
 
@@ -3945,6 +3967,61 @@ def vcfg(config=None):
     return c or {}
 
 
+def va_archive_target(ev):
+    """这条会话该写哪个发言档案 ⇒ (path, label)；找不到就 (None, None)。
+
+    ⚠️ **全从 config 的 `archive.targets` 读**（铁律 §1：路径 / 群号 / 人设名一律不进代码 ✗）
+    """
+    try:
+        arch = cfg.section("archive") or {}
+        targets = arch.get("targets") or []
+        sid = str(ev.get_self_id())
+        umo = str(getattr(ev, "unified_msg_origin", "") or "")
+        for t in targets:
+            if not isinstance(t, dict):
+                continue
+            if str(t.get("self_id")) != sid:
+                continue
+            prefix = str(t.get("prefix") or "")
+            if not prefix or not umo.startswith(prefix):
+                continue
+            path = str(t.get("file") or "")
+            if not path:
+                continue
+            gid = umo.split(":")[-1]
+            labels = t.get("labels") or {}
+            return path, str(labels.get(gid) or gid)
+    except Exception:
+        pass
+    return None, None
+
+
+def va_archive_voice(ev, text):
+    """把**语音的正文**追加进发言档案（2026-10-25 主人定）。
+
+    为什么需要：语音是 `Record` 部件、**没有 `text`** ⇒ janitor 的 `_arch_text()` 看不见它 ✗
+              ⇒ 那条回复不进档案 ⇒ `recall_memory` 取不回她"说过"的语音 ✗
+    ⚠️ 纯文件追加、零 token、异常全吞；行格式与 janitor **逐字一致**（只把 label 标上「·语音」）✓
+    ⚠️ 档案是**查阅型**（recall 按需读）⇒ 写它**不影响 prompt 缓存** ✓
+    """
+    try:
+        txt = " ".join(str(text or "").split())
+        if not txt:
+            return
+        path, label = va_archive_target(ev)
+        if not path:
+            return
+        line = "- [%s][%s·语音] %s" % (
+            datetime.datetime.now().strftime("%m-%d %H:%M"), label, txt)
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception as e:
+        logger.warning("[mindscape_voice] 语音档案写入失败: %s", str(e)[:80])
+
+
 def vc_cache_path(conf, text):
     """按「音色 + 正文」哈希命名 ⇒ 同一句只合成一次 ✓（天然的语音缓存）。"""
     d = str(conf.get("cache_dir") or "/opt/astrbot/data/voice_cache")
@@ -4432,9 +4509,32 @@ class PrivacyMixin:
         message = str(getattr(event.message_obj, "message_str", "") or "")
         if not any(str(word) in message for word in gate.get("ask_words") or []):
             return
+        parts = []
         hint = str(gate.get("ask_hint") or "").strip()
         if hint:
-            request.system_prompt = (request.system_prompt or "") + "\n\n" + hint
+            parts.append(hint)
+
+        # ⭐ 把**真码**放进提示里（她要不要给仍然自己决定 ✓）
+        code, expiry = pg_live_code(event.get_self_id())
+        if code:
+            try:
+                when = datetime.datetime.fromtimestamp(expiry.timestamp()).strftime("%H:%M") if expiry else ""
+            except Exception:  # noqa: BLE001
+                when = ""
+            parts.append(
+                "【系统给的原文，仅供你照抄】**记忆 / 印象闸门**的口令是：%s%s。"
+                "**要给他就原样抄这一串**（别改字母、别自己编）。"
+                "⚠️ 你账本里可能还记着**别的用途**的口令（比如面板 / 后台 / 心情理由那种），"
+                "**那些开不了记忆和印象，别拿错**。"
+                "**不想给就照旧糊弄/拒绝，也给完全没问题** ✓"
+                % (code, ("（%s 到期）" % when) if when else "")
+            )
+        else:
+            parts.append("【系统给的原文】你现在账本里**没有有效口令**（未生成或已过期）。"
+                         "你可以直说没有，**不要自己编一串** ✗")
+
+        if parts:
+            request.system_prompt = (request.system_prompt or "") + "\n\n" + "\n".join(parts)
 
 
 class StickersMixin:
@@ -6085,8 +6185,12 @@ class VoiceMixin:
         if not path:
             return "语音没合成出来 —— 还是用文字说吧"
         # ⚠️ 2026-10-23 主人要求：正文**不发群里**，但**日志里必须看得到** ⇒ 否则不可观测 ✗
+        #    2026-10-25 改：**不截断**（原来 text[:80] ⇒ 超 80 字的语音在日志里只剩半句 ✗，
+        #    补档时 46 条里有 11 条因此是残句 ✓）；上限由 max_chars 管（默认 120）✓
         logger.info("[mindscape_voice] 语音已发出 | %d 字 → %s | 正文: %s",
-                    len(text), os.path.basename(path), text[:80])
+                    len(text), os.path.basename(path), text)
+        # ⚠️ 2026-10-25 主人定：语音也要进发言档案 —— 否则 recall 取不回她"说过"的话 ✗
+        va_archive_voice(ev, text)
         try:
             r = MessageEventResult()
             r.chain = [Record(file=path)]
