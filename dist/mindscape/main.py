@@ -153,6 +153,9 @@ class _PrivacyLogFilter(logging.Filter):
             record.msg = clean
             record.args = ()
         return True
+# ==== from plugins/mindscape_core.py ====
+
+
 DEFAULT_PROMPT = (
     "看这张图，判断它适不适合当一个「{persona}」用的表情包。\n\n"
     "判断标准：\n"
@@ -417,6 +420,9 @@ def save_index(path, idx):
     os.replace(tmp, path)
 
 
+# ==== from plugins/mindscape_config.py ====
+
+
 try:                                   # 插件内：日志必须从框架走（插件市场规范）
     from astrbot.api import logger
 except Exception:                      # 命令行脚本：没有框架，跳过日志
@@ -479,6 +485,9 @@ def bot_entries():
     mem = section("memory")
     bots = mem.get("bots")
     return bots if isinstance(bots, list) else []
+
+
+# ==== from plugins/mindscape_gate.py ====
 
 
 PG_LINE = re.compile(r"^- 口令：([A-Za-z0-9]+) —— 24 小时内有效（至 ([0-9-]+ [0-9:]+)）")
@@ -645,6 +654,9 @@ def pg_audit(action, self_id, session="", detail=""):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(fd, "a", encoding="utf-8") as stream:
         stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+# ==== from plugins/mindscape_groupctx.py ====
 
 
 DEFAULT_BUFFER = "/opt/astrbot/data/group_ctx_buffer.jsonl"
@@ -926,6 +938,9 @@ async def gc_resolve_ref(ref):
     return ""
 
 
+# ==== from plugins/mindscape_block.py ====
+
+
 BL_PRIORITY = 999
 
 
@@ -939,6 +954,9 @@ def bl_load_config():
         if sid and users:
             table[sid] = users
     return on, table
+
+
+# ==== from plugins/mindscape_guard.py ====
 
 
 DEFAULT_PATTERNS = [
@@ -1419,6 +1437,9 @@ async def pg_block_group_result(*args, **kwargs):
         event.clear_result()
 
 
+# ==== from plugins/mindscape_silence.py ====
+
+
 SI_DEFAULT_TOKEN = "[[silence]]"
 
 
@@ -1524,6 +1545,9 @@ def si_attach(request, text, mark):
                        "（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
         request.system_prompt = old + "\n\n" + text
     return True
+
+
+# ==== from plugins/mindscape_vision.py ====
 
 
 VS_MARK = "这一轮的消息里带了图"
@@ -1791,6 +1815,9 @@ def vs_compact_image(ref):
     except Exception as e:
         logger.warning("[mindscape_vision] 大图预览失败，保留原图: %s", str(e)[:120])
         return None
+
+
+# ==== from plugins/mindscape_memory.py ====
 
 
 DEFAULT_MAX_CHARS = 2500
@@ -2102,6 +2129,9 @@ def read_many(paths, max_chars):
     return "\n".join(parts)
 
 
+# ==== from plugins/mindscape_privacy.py ====
+
+
 def _gate_fns():
     """拿到 gate 里的 pg_current / pg_notes，**不写任何 import 语句**。
 
@@ -2146,6 +2176,9 @@ def pg_live_code(self_id):
     except Exception as exc:  # noqa: BLE001
         logger.warning("[mindscape_privacy] 读口令失败: %s", str(exc)[:80])
         return "", None
+
+
+# ==== from plugins/mindscape_recall.py ====
 
 
 DEFAULT_LIMIT = 15
@@ -2613,6 +2646,9 @@ async def lookup_knowledge(*args, **kwargs):
     return head + "\n\n".join(blocks) + tail
 
 
+# ==== from plugins/mindscape_notes.py ====
+
+
 LINE_RE = re.compile(r"^\-\s*([^：:]{1,40})\s*[：:]\s*(.*)$")
 
 
@@ -2744,6 +2780,9 @@ async def save_note(*args, **kwargs):
     except Exception as e:
         logger.warning("[mindscape_notes] 记账失败: %s", str(e)[:120])
         return "这本账我一时写不进去，先记在心里。"
+
+
+# ==== from plugins/mindscape_diary.py ====
 
 
 _GFX_JUNK = re.compile(r"<[^<>]{0,24}>")
@@ -3254,6 +3293,9 @@ if __name__ == "__main__":
     dy_main()
 
 
+# ==== from plugins/mindscape_learn.py ====
+
+
 LN_DEFAULT_PERSONA = (
     "你是「说话风格研究员」，正在观察一个人真实发过的群消息。"
     "请提炼**增量**风格信息。只输出一个 JSON 对象，不要任何其他文字，格式："
@@ -3376,6 +3418,9 @@ if __name__ == "__main__":
     ln_main()
 
 
+# ==== from plugins/mindscape_stickers.py ====
+
+
 def img_size(path):
     """只读文件头拿宽高，不依赖 Pillow。
 
@@ -3467,6 +3512,9 @@ def shrink_for_judge(path, max_px=512, quality=80):
     return raw, mime
 
 
+# ==== from plugins/mindscape_sticker_use.py ====
+
+
 _INSTANCE = None
 
 
@@ -3553,6 +3601,9 @@ async def save_sticker(*args, **kwargs):
     return await inst.save_sticker_impl(ev, kwargs)
 
 
+# ==== from plugins/mindscape_format.py ====
+
+
 PUNCT = "。！？…，、；："
 
 
@@ -3616,6 +3667,9 @@ def flatten(text, join_with="，", drop_last_if_short=False, short_len=8):
         else:
             out += join_with + nxt
     return out
+
+
+# ==== from plugins/mindscape_trace.py ====
 
 
 TRACE_PRIORITY = -100
@@ -3713,6 +3767,9 @@ def tr_usage(resp):
         return ""
 
 
+# ==== from plugins/mindscape_rescue.py ====
+
+
 RC_OUTBOUND_TOOLS = {"send_message_to_user", "say_lines", "at_user"}
 
 
@@ -3754,6 +3811,9 @@ def rc_sent_recent(event, now=None):
     key = "%s|%s" % (event.get_self_id(), event.get_group_id())
     ts = RC_SENT.get(key) or 0
     return (float(now if now is not None else _t.time()) - float(ts)) < RC_SENT_TTL
+
+
+# ==== from plugins/mindscape_mention.py ====
 
 
 MN_THROTTLE = 15            # 同一会话两次点名之间的最小间隔（秒）
@@ -4149,6 +4209,9 @@ async def mn_attach_hook(*args, **kwargs):
         logger.warning("[mindscape_mention] 挂 @ 失败: %s", str(exc)[:100])
 
 
+# ==== from plugins/mindscape_toolscope.py ====
+
+
 def ts_ids(raw):
     """把配置里的 self_id 列表/字符串归一成集合。"""
     if isinstance(raw, (list, tuple)):
@@ -4165,6 +4228,9 @@ def ts_removed_for(allow, self_id):
         if ids and sid not in ids:
             out.append(str(name))
     return out
+
+
+# ==== from plugins/mindscape_voice.py ====
 
 
 SECTION = "voice"
@@ -4302,6 +4368,7 @@ class _MindscapeConfigNS:
 
 
 cfg = _MindscapeConfigNS()
+# ==== from plugins/BlockMixin.py ====
 class BlockMixin:
     def setup(self, context):
         self.bl_on, self.bl_table = bl_load_config()
@@ -4330,6 +4397,7 @@ class BlockMixin:
             logger.warning("[mindscape_block] 拦截异常，已放行: %s", str(e)[:120])
 
 
+# ==== from plugins/GuardMixin.py ====
 class GuardMixin:
     def setup(self, context):
 
@@ -4447,6 +4515,7 @@ class GuardMixin:
             logger.warning("[mindscape_guard] 检查失败: %s", str(e)[:120])
 
 
+# ==== from plugins/MemoryMixin.py ====
 class MemoryMixin:
     def setup(self, context):
 
@@ -4693,6 +4762,7 @@ class MemoryMixin:
             logger.warning("[mindscape_memory] 人物注入失败: %s", str(e)[:120])
 
 
+# ==== from plugins/PrivacyMixin.py ====
 class PrivacyMixin:
     def setup(self, context):
         logger.info("[mindscape_privacy] loaded")
@@ -4737,6 +4807,7 @@ class PrivacyMixin:
             request.system_prompt = (request.system_prompt or "") + "\n\n" + "\n".join(parts)
 
 
+# ==== from plugins/StickersMixin.py ====
 class StickersMixin:
     def setup(self, context):
 
@@ -4747,6 +4818,10 @@ class StickersMixin:
         os.makedirs(self.dir, exist_ok=True)
         self.seen_ok = set()        # 已入库（键 = 分类:md5）
         self.seen_no = set()        # 明确拒绝（重启后也不清）
+        # 2026-10-27（P3）：再存一份**插入顺序**（dict 当有序集合用）⇒ 截断 3000 条时
+        #   砍掉的是"最旧的"，而不是"md5 字典序最小的"（后者纯属偶然 ✗）
+        self.seen_order_ok = {}
+        self.seen_order_no = {}
         self.seen = self._load_seen()
         self._bg = set()            # 后台采集任务，留引用防被 GC 掉
         logger.info(
@@ -4796,18 +4871,23 @@ class StickersMixin:
         except Exception:
             # 图库读不出来就不敢动去重表：全按拒绝保留，宁可少收也不重复烧 API
             self.seen_ok, self.seen_no = set(), keys
+            self.seen_order_ok, self.seen_order_no = {}, {k: 1 for k in keys}
             return keys
         if legacy:
             # 老格式分不清来源：在图库里的算入库，其余**保守归入拒绝**
             self.seen_ok = set(k for k in keys if k in live)
+            self.seen_order_ok = {k: 1 for k in keys if k in live}
             self.seen_no = keys - self.seen_ok
+            self.seen_order_no = {k: 1 for k in keys if k in self.seen_no}
             logger.info("[mindscape_stickers] 去重表迁移：老平表 %d 条 → 入库 %d / 拒绝 %d",
                         len(keys), len(self.seen_ok), len(self.seen_no))
             self._save_seen()
             return keys
         acc = set(d.get("accepted") or [])
         self.seen_ok = set(k for k in acc if k in live)
+        self.seen_order_ok = {k: 1 for k in acc if k in live}
         self.seen_no = set(d.get("rejected") or [])
+        self.seen_order_no = {k: 1 for k in (d.get("rejected") or [])}
         if self.seen_ok != acc:
             logger.info("[mindscape_stickers] 去重表自愈：入库 %d -> %d（清掉 %d 条墓碑），"
                         "拒绝记录 %d 条原样保留",
@@ -4822,10 +4902,31 @@ class StickersMixin:
         return self.seen_ok | self.seen_no | live
 
     def _save_seen(self):
+        """写去重表 —— **原子写 + 截断按时间**（2026-10-27 修 · P3）。
+
+        ① 原来是 `open(..., "w")` 直接覆盖 ⇒ 写一半崩掉就把整张表弄坏 ✗
+           ⇒ 改成「写临时文件 → fsync → os.replace」原子替换 ✓
+        ② 原来是 `sorted(...)[-3000:]` —— 按 **md5 字典序**砍，砍掉哪些纯属偶然 ✗
+           ⇒ 现在按**插入顺序**保留最近的（set 本身无序，所以先转 list 再取尾；
+              `_mark_seen` 用 dict 记录插入序，见下）✓
+        """
         try:
-            with open(self.seen_path, "w", encoding="utf-8") as f:
-                json.dump({"accepted": sorted(self.seen_ok)[-3000:],
-                           "rejected": sorted(self.seen_no)[-3000:]}, f)
+            # 兼容：自检/测试里的桩对象可能只有 seen_ok/seen_no ⇒ 取不到顺序表就退回排序 ✓
+            seq_ok = getattr(self, "seen_order_ok", None)
+            seq_no = getattr(self, "seen_order_no", None)
+            ok_list = (list(seq_ok)[-3000:] if seq_ok
+                       else sorted(getattr(self, "seen_ok", set()))[-3000:])
+            no_list = (list(seq_no)[-3000:] if seq_no
+                       else sorted(getattr(self, "seen_no", set()))[-3000:])
+            tmp = self.seen_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"accepted": ok_list, "rejected": no_list}, f)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
+            os.replace(tmp, self.seen_path)
         except Exception:
             pass
 
@@ -4837,8 +4938,14 @@ class StickersMixin:
         """
         if accepted:
             self.seen_ok.add(key)
+            if not hasattr(self, "seen_order_ok"):      # 桩对象兼容（自检里只给了 seen_ok）✓
+                self.seen_order_ok = {}
+            self.seen_order_ok[key] = 1
         else:
             self.seen_no.add(key)
+            if not hasattr(self, "seen_order_no"):
+                self.seen_order_no = {}
+            self.seen_order_no[key] = 1
         self.seen.add(key)
         self._save_seen()
     def _add_index(self, fname, category, verdict):
@@ -5026,6 +5133,7 @@ class StickersMixin:
         return None
 
 
+# ==== from plugins/StickerUseMixin.py ====
 class StickerUseMixin:
     def setup(self, context):
 
@@ -5330,6 +5438,7 @@ class StickerUseMixin:
         return str(best.get("file"))
 
 
+# ==== from plugins/FormatMixin.py ====
 class FormatMixin:
     def setup(self, context):
 
@@ -5438,6 +5547,7 @@ class FormatMixin:
             logger.warning("[mindscape_format] 处理失败: %s", str(e)[:120])
 
 
+# ==== from plugins/RescueMixin.py ====
 class RescueMixin:
     def setup(self, context):
         self.r_cfg = cfg.section("rescue") or {}
@@ -5699,6 +5809,7 @@ class RescueMixin:
             return ""
 
 
+# ==== from plugins/SilenceMixin.py ====
 class SilenceMixin:
     def setup(self, context):
 
@@ -5769,6 +5880,7 @@ class SilenceMixin:
             logger.warning("[mindscape_silence] 拦截失败: %s", str(e)[:120])
 
 
+# ==== from plugins/VisionMixin.py ====
 class VisionMixin:
     def setup(self, context):
         self.vs_on, self.vs_targets = vs_load_config()
@@ -5844,6 +5956,7 @@ class VisionMixin:
             logger.warning("[mindscape_vision] 去图重答钩子异常: %s", str(e)[:120])
 
 
+# ==== from plugins/GroupctxMixin.py ====
 class GroupctxMixin:
     def setup(self, context):
         c = cfg.section("groupctx")
@@ -5969,6 +6082,7 @@ class GroupctxMixin:
             logger.warning("[mindscape_groupctx] 注入失败: %s", str(exc)[:120])
 
 
+# ==== from plugins/TraceMixin.py ====
 class TraceMixin:
     def setup(self, context):
         c = cfg.section("trace")
@@ -6052,6 +6166,7 @@ class TraceMixin:
             logger.warning("[mindscape_trace] 记录耗时失败: %s", str(e)[:120])
 
 
+# ==== from plugins/MentionMixin.py ====
 class MentionMixin:
     def setup(self, context):
         self.mn_on, self.mn_targets = mn_load_config()
@@ -6252,11 +6367,12 @@ class MentionMixin:
         #   以前返回字符串 ✗ → 框架还要**再问一次模型**才知道「还想不想调工具」✗
         #   → 而那一轮要重发整段上下文、模型却只回空字（实测一天 122 次 ✗ ≈ 账单一半 ✓）。
         #   ⚠️ 必须放在**全部成功之后** ✓：失败时仍返回上面那两句话术 ✓（她才知道要补在正文里 ✓）。
+        # 2026-10-27（P3）：原来这一行下面还有一条 `return ("发好了…")` —— **不可达死代码** ✗
+        #   已删。哪天真想让她看到"发好了"，把这个 None 换掉就行 ✓
         return None
-        return ("发好了：%d 条（每条一个气泡）。这一轮要说的话就算说完了 —— "
-                "还想补就写进 lines 里，不用再另发正文。" % sent)
 
 
+# ==== from plugins/ToolscopeMixin.py ====
 class ToolscopeMixin:
     def setup(self, context):
         try:
@@ -6300,6 +6416,7 @@ class ToolscopeMixin:
             logger.warning("[mindscape_toolscope] 过滤失败: %s", str(e)[:120])
 
 
+# ==== from plugins/VoiceMixin.py ====
 class VoiceMixin:
     def setup(self, context):
         try:

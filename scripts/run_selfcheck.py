@@ -3543,20 +3543,22 @@ def check_build_fresh():
         import tempfile
         import build_plugin as BP
         cur = open(out, "rb").read()
-        tmp = tempfile.mkdtemp(prefix="_sc_build_")
-        old = BP.OUT_DIR
-        BP.OUT_DIR = tmp
-        buf = _io.StringIO()
-        try:
-            with _cl.redirect_stdout(buf):
-                BP.main(exclude=tuple(BP.LOCAL_ONLY))
-        finally:
-            BP.OUT_DIR = old
-        fresh = open(os.path.join(tmp, "main.py"), "rb").read()   # OUT_DIR 已经是 …/mindscape
-        if fresh == cur:
-            ok("产物新鲜度", "重建结果与 dist 逐字节一致（%d 字节）" % len(cur))
-        else:
-            bad("产物新鲜度", "重建结果与 dist 不一致 —— 改了源码没重新构建？"
+        # 2026-10-27 修（P3）：原来用 mkdtemp 且**从不删除** ⇒ 每跑一次自检就在系统临时目录
+        #   留一份 _sc_build_*（约 280 KB；review 那边跑完攒了 46 个 ✗）⇒ 换成 TemporaryDirectory ✓
+        with tempfile.TemporaryDirectory(prefix="_sc_build_") as tmp:
+            old = BP.OUT_DIR
+            BP.OUT_DIR = tmp
+            buf = _io.StringIO()
+            try:
+                with _cl.redirect_stdout(buf):
+                    BP.main(exclude=tuple(BP.LOCAL_ONLY))
+            finally:
+                BP.OUT_DIR = old
+            fresh = open(os.path.join(tmp, "main.py"), "rb").read()   # OUT_DIR 已是 …/mindscape
+            if fresh == cur:
+                ok("产物新鲜度", "重建结果与 dist 逐字节一致（%d 字节）" % len(cur))
+            else:
+                bad("产物新鲜度", "重建结果与 dist 不一致 —— 改了源码没重新构建？"
                               "（dist %d / 重建 %d 字节）" % (len(cur), len(fresh)))
     except Exception as e:
         bad("产物新鲜度", "%s: %s" % (type(e).__name__, str(e)[:120]))

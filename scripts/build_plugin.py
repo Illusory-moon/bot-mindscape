@@ -144,7 +144,9 @@ def main(exclude=()):
             else:
                 plain_classes.append(c)
         # 纯函数 / 常量：去掉里面的 Mixin 相关空行即可
-        other_src.extend([s for s in others if s.strip()])
+        # 2026-10-27（P3）：每段前面插一条**来源注释** ⇒ 6 千行产物里能直接 grep 回源 ✓
+        other_src.extend(["# ==== from plugins/%s.py ====" % name]
+                         + [s for s in others if s.strip()])
         print("  [读取] %-28s imports=%d classes=%d funcs=%d"
               % (name, len(imports), len(classes), len(others)))
 
@@ -203,7 +205,8 @@ def main(exclude=()):
     parts.append("\n\n\n".join(plain_classes) if plain_classes else "")
     parts.append("\n\n\n".join(other_src))
     parts.append("\n".join(ns))          # 命名空间必须放在所有函数定义【之后】
-    parts.append("\n\n\n".join(mixin_src[m] for m in mixins))
+    parts.append("\n\n\n".join(
+        "# ==== from plugins/%s.py ====\n%s" % (m, mixin_src[m]) for m in mixins))
     parts.append(main_cls)
     body = "\n".join(parts)
 

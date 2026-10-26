@@ -131,6 +131,10 @@ class StickersMixin:
         os.makedirs(self.dir, exist_ok=True)
         self.seen_ok = set()        # 已入库（键 = 分类:md5）
         self.seen_no = set()        # 明确拒绝（重启后也不清）
+        # 2026-10-27（P3）：再存一份**插入顺序**（dict 当有序集合用）⇒ 截断 3000 条时
+        #   砍掉的是"最旧的"，而不是"md5 字典序最小的"（后者纯属偶然 ✗）
+        self.seen_order_ok = {}
+        self.seen_order_no = {}
         self.seen = self._load_seen()
         self._bg = set()            # 后台采集任务，留引用防被 GC 掉
         logger.info(
@@ -180,18 +184,23 @@ class StickersMixin:
         except Exception:
             # 图库读不出来就不敢动去重表：全按拒绝保留，宁可少收也不重复烧 API
             self.seen_ok, self.seen_no = set(), keys
+            self.seen_order_ok, self.seen_order_no = {}, {k: 1 for k in keys}
             return keys
         if legacy:
             # 老格式分不清来源：在图库里的算入库，其余**保守归入拒绝**
             self.seen_ok = set(k for k in keys if k in live)
+            self.seen_order_ok = {k: 1 for k in keys if k in live}
             self.seen_no = keys - self.seen_ok
+            self.seen_order_no = {k: 1 for k in keys if k in self.seen_no}
             logger.info("[mindscape_stickers] 去重表迁移：老平表 %d 条 → 入库 %d / 拒绝 %d",
                         len(keys), len(self.seen_ok), len(self.seen_no))
             self._save_seen()
             return keys
         acc = set(d.get("accepted") or [])
         self.seen_ok = set(k for k in acc if k in live)
+        self.seen_order_ok = {k: 1 for k in acc if k in live}
         self.seen_no = set(d.get("rejected") or [])
+        self.seen_order_no = {k: 1 for k in (d.get("rejected") or [])}
         if self.seen_ok != acc:
             logger.info("[mindscape_stickers] 去重表自愈：入库 %d -> %d（清掉 %d 条墓碑），"
                         "拒绝记录 %d 条原样保留",
@@ -206,10 +215,31 @@ class StickersMixin:
         return self.seen_ok | self.seen_no | live
 
     def _save_seen(self):
+        """写去重表 —— **原子写 + 截断按时间**（2026-10-27 修 · P3）。
+
+        ① 原来是 `open(..., "w")` 直接覆盖 ⇒ 写一半崩掉就把整张表弄坏 ✗
+           ⇒ 改成「写临时文件 → fsync → os.replace」原子替换 ✓
+        ② 原来是 `sorted(...)[-3000:]` —— 按 **md5 字典序**砍，砍掉哪些纯属偶然 ✗
+           ⇒ 现在按**插入顺序**保留最近的（set 本身无序，所以先转 list 再取尾；
+              `_mark_seen` 用 dict 记录插入序，见下）✓
+        """
         try:
-            with open(self.seen_path, "w", encoding="utf-8") as f:
-                json.dump({"accepted": sorted(self.seen_ok)[-3000:],
-                           "rejected": sorted(self.seen_no)[-3000:]}, f)
+            # 兼容：自检/测试里的桩对象可能只有 seen_ok/seen_no ⇒ 取不到顺序表就退回排序 ✓
+            seq_ok = getattr(self, "seen_order_ok", None)
+            seq_no = getattr(self, "seen_order_no", None)
+            ok_list = (list(seq_ok)[-3000:] if seq_ok
+                       else sorted(getattr(self, "seen_ok", set()))[-3000:])
+            no_list = (list(seq_no)[-3000:] if seq_no
+                       else sorted(getattr(self, "seen_no", set()))[-3000:])
+            tmp = self.seen_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"accepted": ok_list, "rejected": no_list}, f)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
+            os.replace(tmp, self.seen_path)
         except Exception:
             pass
 
@@ -221,8 +251,14 @@ class StickersMixin:
         """
         if accepted:
             self.seen_ok.add(key)
+            if not hasattr(self, "seen_order_ok"):      # 桩对象兼容（自检里只给了 seen_ok）✓
+                self.seen_order_ok = {}
+            self.seen_order_ok[key] = 1
         else:
             self.seen_no.add(key)
+            if not hasattr(self, "seen_order_no"):
+                self.seen_order_no = {}
+            self.seen_order_no[key] = 1
         self.seen.add(key)
         self._save_seen()
     def _add_index(self, fname, category, verdict):

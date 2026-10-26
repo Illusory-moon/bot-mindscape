@@ -1015,14 +1015,22 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj, ensure_ascii=False), "application/json")
 
     def _same_origin(self):
-        host = (self.headers.get("Host") or "").split(":")[0]
-        if host not in ALLOWED_HOSTS:
+        # 2026-10-27 修（P3）：原来用 `Host.split(":")[0]` 取主机名 ⇒ IPv6 的 `[::1]:8777`
+        #   会被切成 `"["` ⇒ 本机 IPv6 访问**永远 403** ✗
+        #   改用 urlsplit 解析（它认得方括号），并把 "::1" 与 "[::1]" 两种写法都当本机 ✓
+        raw = self.headers.get("Host") or ""
+        try:
+            host = urllib.parse.urlsplit("//" + raw).hostname or ""
+        except Exception:
+            host = ""
+        if host not in ALLOWED_HOSTS and ("[%s]" % host) not in ALLOWED_HOSTS:
             return False
         origin = self.headers.get("Origin")
         if origin:
             try:
                 o = urllib.parse.urlparse(origin)
-                if (o.hostname or "") not in ALLOWED_HOSTS:
+                oh = o.hostname or ""
+                if oh not in ALLOWED_HOSTS and ("[%s]" % oh) not in ALLOWED_HOSTS:
                     return False
             except Exception:
                 return False
