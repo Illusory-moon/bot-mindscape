@@ -21,13 +21,18 @@ NEW = '''            if llm_response.usage:
                 self.stats.current_context_tokens = llm_response.usage.input
                 if self.req.conversation:
                     self.req.conversation.token_usage = llm_response.usage.total
+                # 2026-10-27 修（P2-18）：框架的 Usage 字段名随版本变过，直接取属性会在
+                #   step() 里抛 AttributeError ⇒ **打断整轮响应** ✗
+                #   ⇒ 一律 getattr 兜底：缺字段记 -1（账能对、话照常发）✓
+                _u = llm_response.usage
+                _g = lambda k: getattr(_u, k, -1)   # noqa: E731
                 logger.info(
-                    "[mindscape_cache] session=%s provider=%s miss=%d hit=%d out=%d",
+                    "[mindscape_cache] session=%s provider=%s miss=%s hit=%s out=%s",
                     self.req.session_id or "-",
-                    self.provider.provider_config.get("id", "-"),
-                    llm_response.usage.input_other,
-                    llm_response.usage.input_cached,
-                    llm_response.usage.output,
+                    (getattr(self.provider, "provider_config", None) or {}).get("id", "-"),
+                    _g("input_other"),
+                    _g("input_cached"),
+                    _g("output"),
                 )
             else:
                 logger.warning(

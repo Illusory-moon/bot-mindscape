@@ -282,10 +282,24 @@ def strip_injections(msgs, keep_last=1):
         c = m.get("content")
         if isinstance(c, str):
             new = c
+            # 2026-10-27 修（P2-13）：原来按**首次出现**的记号直接截断 ✗ ——
+            #   用户自己引用过注入块（正文里出现同款记号）时，他后面的话会被一起裁掉 ✓
+            #   ⇒ 只认**段落开头**（行首）的记号；行内的当普通文本 ✓
+            cut = -1
             for k in INJECT_MARKERS:
-                j = new.find(k)
-                if j >= 0:
-                    new = new[:j].rstrip()
+                start = 0
+                while True:
+                    j = new.find(k, start)
+                    if j < 0:
+                        break
+                    if j == 0 or new[j - 1] == "\n":
+                        cut = j if cut < 0 or j < cut else cut
+                        break
+                    start = j + 1
+            if cut == 0:
+                new = ""
+            elif cut > 0:
+                new = new[:cut].rstrip()
             if len(new) < len(c):
                 saved += len(c) - len(new)
                 m["content"] = new

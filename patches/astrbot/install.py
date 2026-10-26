@@ -23,12 +23,39 @@ import shutil
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# 2026-10-27 修（P2-14）：原来把 `python3.13` 与 `~/astrbot` **写死**在候选路径里 ⇒
+#   别人的 venv 是 3.11/3.12、或者装在别处，就一个都命中不到 ✗
+#   ⇒ 改成**扫 site-packages**：先看常见安装根，再递归找 `*/astrbot/core/pipeline/waking_check/stage.py`
+_SITE_ROOTS = [
+    "/opt/astrbot",
+    os.path.expanduser("~/astrbot"),
+    os.path.expanduser("~/.astrbot"),
+    "/app",
+]
 TARGET_CANDIDATES = [
     "/opt/astrbot/.venv/lib/python3.13/site-packages/astrbot/core/pipeline/waking_check/stage.py",
     os.path.expanduser("~/astrbot/.venv/lib/python3.13/site-packages/astrbot/core/pipeline/waking_check/stage.py"),
 ]
 MARK_BEGIN = "# ══ bot-mindscape auto-wake BEGIN ══"
 MARK_END = "# ══ bot-mindscape auto-wake END ══"
+
+_TAIL = os.path.join("astrbot", "core", "pipeline", "waking_check", "stage.py")
+
+
+def _scan_targets():
+    """在常见安装根下找 stage.py（深度有限，别把整盘扫一遍 ✓）。"""
+    found = []
+    for root in _SITE_ROOTS:
+        if not os.path.isdir(root):
+            continue
+        for cur, dirs, files in os.walk(root):
+            depth = cur[len(root):].count(os.sep)
+            if depth > 6:
+                dirs[:] = []
+                continue
+            if "stage.py" in files and cur.replace("\\", "/").endswith("waking_check"):
+                found.append(os.path.join(cur, "stage.py"))
+    return found
 
 
 def find_target(explicit=None):
@@ -37,6 +64,10 @@ def find_target(explicit=None):
     for p in TARGET_CANDIDATES:
         if os.path.exists(p):
             return p
+    # 2026-10-27（P2-14）：写死的候选都不中 ⇒ 再扫一遍常见安装根 ✓
+    hits = _scan_targets()
+    if hits:
+        return hits[0]
     return None
 
 
@@ -147,13 +178,25 @@ def patch(path):
             '_ms_record_ctx(event)  # 未唤醒的消息也要进上下文缓冲' + "\n        " + anchor,
             1,
         )
-    stop_anchor = "        if not is_wake:"
-    if stop_anchor in text and text.count("_ms_record_ctx(event)") < 2:
-        text = text.replace(
-            stop_anchor + "\n            event.stop_event()",
-            stop_anchor + "\n            _ms_record_ctx(event)\n            event.stop_event()",
-            1,
-        )
+    # 2026-10-27 修（P2-17）：原来 `stop_anchor` 把 `if not is_wake:` 连同**8 个空格**写死，
+    #   而且替换不到时**什么都不做就继续** ✗ ⇒ 框架缩进一变，就少插一个 `_ms_record_ctx`：
+    #   未唤醒的消息进不了群缓冲，groupctx 的「定向性」变差，而且**没有任何报错** ✓
+    #   ⇒ 现在分组捕获缩进、按捕获到的缩进插入；**替换失败直接返回 False** ✓
+    m_stop = re.search(r"^(\s*)if\s+not\s+is_wake\s*:\s*$", text, re.M)
+    if m_stop is None:
+        print("[失败] 找不到落盘锚点（if not is_wake:）—— 未改动任何文件")
+        return False
+    if text.count("_ms_record_ctx(event)") < 2:
+        ind2 = m_stop.group(1)
+        head = m_stop.group(0)
+        tail_pat = re.compile(re.escape(head) + r"\n(\s*)event\.stop_event\(\)")
+        m_tail = tail_pat.search(text)
+        if m_tail is None:
+            print("[失败] 找到 `if not is_wake:` 但后面没有 event.stop_event() —— 未改动任何文件")
+            return False
+        _nl = chr(10)
+        text = (text[:m_tail.start()] + head + _nl + ind2 + "    _ms_record_ctx(event)"
+                + _nl + m_tail.group(0)[len(head) + 1:] + text[m_tail.end():])
 
     # R07: 先编译检查生成结果，通过后才备份并落盘
     try:

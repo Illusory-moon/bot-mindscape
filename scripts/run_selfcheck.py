@@ -615,6 +615,23 @@ def check_structure():
         else:
             bad("缺失", rel)
 
+    # 2026-10-27（P2-19）：版本号**单一真源** = 仓库根的 VERSION；
+    #   dist/metadata.yaml 里的版本必须与它一致（否则"版本号漂了"没人知道 ✗）
+    try:
+        v = open(os.path.join(HERE, "VERSION"), encoding="utf-8").read().strip()
+        meta = open(os.path.join(HERE, "dist", "mindscape", "metadata.yaml"),
+                    encoding="utf-8").read()
+        got = ""
+        for line in meta.splitlines():
+            if line.startswith("version:"):
+                got = line.split(":", 1)[1].strip()
+                break
+        (ok if (v and got == v) else bad)(
+            "R90 版本号单一真源",
+            "VERSION=%r ｜ dist/metadata=%r" % (v, got))
+    except Exception as e:
+        bad("R90 版本号单一真源", "%s: %s" % (type(e).__name__, str(e)[:100]))
+
 
 
 def check_regressions():
@@ -2833,15 +2850,23 @@ def check_regressions():
         _miss62 = [k for k in _need62 if k not in _tcl62 or k not in _jnl62]
         import mindscape_janitor as JN62
         importlib.reload(JN62)
-        _msgs62 = [{"role": "user", "content": "用户原话 " + k + chr(10) + "注入正文块……"}
+        # 2026-10-27 修（配 P2-13）：注入块总是**整段贴在末尾 / 行首** ⇒ 测试数据也按真实形态构造
+        #   （记号在行首、前面是用户原话 + 换行）；并补一条**反向用例**：
+        #   正文里"引用"同款记号时**一个字都不许裁** ✓
+        _msgs62 = [{"role": "user", "content": "用户原话" + chr(10) + k + chr(10) + "注入正文块……"}
                    for k in _need62]
         _msgs62.append({"role": "user", "content": "最后一条必须原样留着"})
         _out62, _saved62 = JN62.strip_injections(_msgs62, keep_last=1)
         _leak62 = [i for i, m in enumerate(_out62[:-1]) if "注入正文块" in str(m.get("content"))]
-        (ok if (not _miss62 and not _leak62 and _saved62 > 0) else bad)(
+        _cite62 = "他说的「" + _need62[0] + "」这几个字我没听懂"
+        _cite_out, _cite_saved = JN62.strip_injections(
+            [{"role": "user", "content": _cite62}, {"role": "user", "content": "最后一条"}],
+            keep_last=1)
+        _cite_ok = (_cite_out[0]["content"] == _cite62 and _cite_saved == 0)
+        (ok if (not _miss62 and not _leak62 and _saved62 > 0 and _cite_ok) else bad)(
             "R62 注入记号两份名单齐全",
-            "%d 个记号，名单缺 %s，剥离后残留 %s，剥掉 %d 字"
-            % (len(_need62), _miss62[:3], _leak62[:3], _saved62))
+            "%d 个记号，名单缺 %s，剥离后残留 %s，剥掉 %d 字，行内引用不误伤=%s"
+            % (len(_need62), _miss62[:3], _leak62[:3], _saved62, _cite_ok))
     except Exception as e:
         bad("R62 注入记号两份名单齐全", str(e)[:140])
 

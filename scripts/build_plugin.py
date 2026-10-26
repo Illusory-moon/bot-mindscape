@@ -21,6 +21,22 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(HERE, "plugins")
 OUT_DIR = os.path.join(HERE, "dist", "mindscape")
 
+
+def _version():
+    """版本号**单一真源** = 仓库根的 `VERSION` 文件（2026-10-27 · P2-19）。
+
+    事故形态：版本号原先硬编码在构建器里（`version: 0.1.0`），而 `publish_plugin.py`
+    只 bump **市场仓**那份 ⇒ 本仓 `dist/metadata.yaml` 永远不动 ⇒ 版本号不可信、会漂 ✗
+    ⇒ 现在 build 读 `VERSION` 注入；自检再断言 dist 里的版本与 `VERSION` 一致 ✓
+    """
+    p = os.path.join(HERE, "VERSION")
+    try:
+        with open(p, encoding="utf-8") as f:
+            v = f.read().strip()
+        return v or "0.0.0"
+    except Exception:
+        return "0.0.0"
+
 # 顺序有意义：core/config 是共享层；Mixin 的先后决定 MRO
 ORDER = [
     "mindscape_core", "mindscape_config", "mindscape_gate", "mindscape_groupctx",
@@ -31,10 +47,14 @@ ORDER = [
     "mindscape_mention", "mindscape_toolscope", "mindscape_voice",
 ]
 
-# 这些模块里的类是 Mixin，需要被主类继承（按此顺序）
-MIXIN_ORDER = ["BlockMixin", "GuardMixin", "MemoryMixin", "PrivacyMixin", "StickersMixin",
-               "StickerUseMixin", "FormatMixin", "RescueMixin",
-               "SilenceMixin", "VisionMixin", "GroupctxMixin", "TraceMixin",
+# 这些模块里的类是 Mixin，需要被主类继承（按此顺序 = MRO）
+# ⚠️ 2026-10-27（P2-16）：这份顺序**必须与 ORDER 里 Mixin 模块的出现顺序一致**，
+#   否则构建会直接失败（见文件末尾的一致性校验 ✓）。原来的顺序与 ORDER 不一致
+#   （groupctx 在 ORDER 第一个、却排在 MIXIN_ORDER 第 11），今天无害但随时会咬人 ✗
+#   ⇒ 已按 ORDER 的顺序重排 ✓
+MIXIN_ORDER = ["GroupctxMixin", "BlockMixin", "GuardMixin", "SilenceMixin", "VisionMixin",
+               "MemoryMixin", "PrivacyMixin", "StickersMixin", "StickerUseMixin",
+               "FormatMixin", "TraceMixin", "RescueMixin",
                "MentionMixin", "ToolscopeMixin", "VoiceMixin"]
 
 
@@ -117,6 +137,7 @@ LOCAL_ONLY = ["mindscape_janitor"]
 def main(exclude=()):
     all_imports = {}
     mixin_src = {}
+    mixin_mod = {}          # Mixin 类名 → 所在模块名（P2-16：校验两套顺序是否一致用）
     plain_classes = []
     other_src = []
 
@@ -141,6 +162,7 @@ def main(exclude=()):
                 cname = "?"
             if cname.endswith("Mixin"):
                 mixin_src[cname] = c
+                mixin_mod[cname] = name        # 2026-10-27（P2-16）：记下它属于哪个模块
             else:
                 plain_classes.append(c)
         # 纯函数 / 常量：去掉里面的 Mixin 相关空行即可
@@ -162,6 +184,17 @@ def main(exclude=()):
         # 源码有、MIXIN_ORDER 没有 ⇒ 类体进产物但不被继承 ⇒ 钩子静默失效 ✗ ⇒ 硬错 ✓
         raise SystemExit("[FAIL] 这些 Mixin 在源码里但没登记进 MIXIN_ORDER：%s"
                          "（不登记 = 类体进产物但不被继承，钩子永不注册）" % ", ".join(sorted(extra)))
+    # 2026-10-27（P2-16）：两套真源的**顺序**也必须一致 ——
+    #   ORDER 决定"文件读入顺序"，MIXIN_ORDER 决定"基类 MRO 顺序"；
+    #   两者不一致时今天可能无害（没有同名方法），但只要有人加了同名方法，行为就取决于哪套 ✓
+    order_seq = [mixin_mod[m] for m in MIXIN_ORDER if m in mixin_mod]
+    read_seq = [n for n in ORDER if n in set(order_seq)]
+    if order_seq != read_seq:
+        raise SystemExit(
+            "[FAIL] ORDER 与 MIXIN_ORDER 的**顺序**不一致 ✗\n"
+            "       ORDER 里的 Mixin 顺序 : %s\n"
+            "       MIXIN_ORDER 的顺序     : %s"
+            % (", ".join(read_seq), ", ".join(order_seq)))
 
     setups = "\n".join("        %s.setup(self, context)" % m for m in mixins)
     main_head = [
@@ -218,7 +251,7 @@ def main(exclude=()):
         f.write(body)
     with open(os.path.join(OUT_DIR, "metadata.yaml"), "w", encoding="utf-8", newline="\n") as f:
         f.write("name: mindscape\ndesc: bot-mindscape 整合插件（认知/表达/沉浸/运维）\n"
-                "author: bot-mindscape\nversion: 0.1.0\n")
+                "author: bot-mindscape\nversion: %s\n" % _version())
 
     # 语法自检
     try:

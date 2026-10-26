@@ -4368,6 +4368,132 @@ class _MindscapeConfigNS:
 
 
 cfg = _MindscapeConfigNS()
+# ==== from plugins/GroupctxMixin.py ====
+class GroupctxMixin:
+    def setup(self, context):
+        c = cfg.section("groupctx")
+        self.gc_on = bool(c.get("enabled"))
+        self.gc_path = gc_buffer_path(c)
+        self.gc_count = int(c.get("count") or DEFAULT_COUNT)
+        self.gc_window = int(c.get("window_sec") or DEFAULT_WINDOW)
+        self.gc_tail = int(c.get("tail_bytes") or DEFAULT_TAIL)
+        self.gc_mark = True if c.get("directness") is None else bool(c.get("directness"))
+        self.gc_targets = [str(x) for x in (c.get("targets") or [])]
+        self.gc_img_on = True if c.get("images") is None else bool(c.get("images"))
+        self.gc_img_max = int(c.get("image_max") or DEFAULT_IMG_MAX)
+        self.gc_img_window = int(c.get("image_window_sec") or DEFAULT_IMG_WINDOW)
+        self.gc_img_same = (DEFAULT_IMG_SAME if c.get("image_same_sender") is None
+                            else bool(c.get("image_same_sender")))
+        logger.info(
+            "[mindscape_groupctx] loaded | enabled=%s | buffer=%s | 最近 %d 条/%ds | 定向性=%s | 历史图=%s(max %d/%ds 同人=%s)",
+            self.gc_on, self.gc_path, self.gc_count, self.gc_window, self.gc_mark,
+            self.gc_img_on, self.gc_img_max, self.gc_img_window, self.gc_img_same)
+        scope_warn(logger, "mindscape_groupctx", self.gc_targets, self.gc_on)
+
+    @filter.on_llm_request(priority=GC_PRIORITY)
+    async def gc_inject(self, event: AstrMessageEvent, request: ProviderRequest):
+        try:
+            if not self.gc_on or not scope_hit(self.gc_targets, event.get_self_id()):
+                return
+            gid = event.get_group_id()
+            if gid is None:
+                return
+            # 自主冒泡轮不要群缓冲 —— 那会让它退化成「接别人的话」，
+            # 而这一轮的意义是自己找话题。
+            if event.get_extra("cron_job"):
+                return
+            now = time.time()
+            recs = gc_read_recent(self.gc_path, event.get_platform_name(),
+                                  str(gid), self.gc_count, self.gc_window,
+                                  self.gc_tail)
+            q_quoted, q_mine, q_img = gc_quote(event)
+            hist_refs = []
+            if self.gc_img_on and not gc_has_image(event) and not (q_quoted and q_img):
+                hist_refs = gc_history_images(
+                    recs, self.gc_img_window, self.gc_img_max * 3,
+                    sender=str(event.get_sender_id()) if self.gc_img_same else None)
+            hist_imgs = []
+            ref2path = {}
+            for _ref, _w, _t in hist_refs:
+                if len(hist_imgs) >= self.gc_img_max:
+                    break
+                _p = await gc_resolve_ref(_ref)
+                if _p:
+                    hist_imgs.append((_p, _w, _t))
+                    ref2path[str(_ref)] = _p
+            img_no = {}
+            for _k, (_p, _w, _t) in enumerate(hist_imgs, 1):
+                img_no[_p] = _k
+            lines = []
+            if self.gc_mark:
+                lines += ["", "【本条消息的定向性】", gc_head(event)]
+                if q_quoted and q_img:
+                    lines.append(gc_quote_note(q_mine))
+                    if q_mine and gc_quote_rewrite(request, True):
+                        logger.info("[mindscape_groupctx] 引用正文改写=自己发的图")
+            if recs:
+                lines.append("")
+                lines.append("【本群最近的真实聊天记录（用于理解上下文，不要逐条回应，也不要复述）】")
+                for r in recs:
+                    tag = " ".join("［附件%d］" % img_no[ref2path[str(x)]]
+                                   for x in (r.get("imgs") or []) if str(x) in ref2path)
+                    lines.append("[" + fmt_cst(float(r.get("ts") or now), "%H:%M:%S")
+                                 + "] " + strip_invisible(str(r.get("who", "?")))[:16] + ": "
+                                 + strip_invisible(str(r.get("text", "")))[:200]
+                                 + (("  " + tag) if tag else ""))
+            if hist_imgs:
+                lines.append("")
+                lines.append("【上面历史里带的那几张图，按顺序就是附件 1…%d（标了［附件N］的那条就是它）】"
+                             % len(hist_imgs))
+                lines.append("本条消息时间：%s。历史图虽然可见，并不等于本条消息在请你评价它。"
+                             % time.strftime("%H:%M:%S", time.localtime(now)))
+                for _k, (_p, _w, _t) in enumerate(hist_imgs, 1):
+                    lines.append("附件%d = %s 在 %s 发的图（距本条约 %d 秒）"
+                                 % (_k, _w, time.strftime("%H:%M:%S", time.localtime(_t)),
+                                    max(0, int(now - _t))))
+                lines.append("先回应本条消息。只有当本条没有明确指向那张历史图，且图只是与本条话题无关的"
+                             "情绪或状态表达时，才不要在回复中谈图；否则可自然结合图来回答。"
+                             "时间间隔只作判断线索，不能单独决定是否谈图。")
+            if not lines:
+                return
+            # ⚠️ 2026-10-08（省钱要省在根上 ✓）：这一整段**每轮都在变**（定向性 + 本群最近聊天 ✗）——
+            # 以前拼进 system_prompt ✗ → 它一变，**后面的整段对话历史全部按全价重算** ✗
+            # （实测缓存命中率只有 34% ✓ 而未命中 ¥2/M vs 命中 ¥0.04/M = 差 **50 倍** ✗✗）。
+            # 改挂到 `extra_user_content_parts` ✓ —— 这是框架自带的「接在用户消息之后」的位置 ✓
+            # （框架自己的 astrbot/group_chat_context.py 就是这么用的 ✓）→ 稳定前缀不再被污染 ✓。
+            try:
+                # 用到处再导入 ✓（模块级导入在测试环境的假 astrbot 里会炸 ✗）
+                from astrbot.core.agent.message import TextPart
+                parts = getattr(request, "extra_user_content_parts", None)
+                if parts is None:
+                    parts = []
+                    request.extra_user_content_parts = parts
+                parts.append(TextPart(text=sys_tag(chr(10).join(lines))))
+            except Exception as e:
+                # 兜底：宁可费钱，不可丢上下文 ✓ —— 但要打警告 ✗（不然缓存没救回来都不知道 ✓）
+                logger.warning("[mindscape_groupctx] 挂 extra_user_content_parts 失败（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
+                request.system_prompt = ((request.system_prompt or "") + chr(10)
+                                         + sys_tag(chr(10).join(lines)))
+            if hist_imgs:
+                try:
+                    urls = getattr(request, "image_urls", None)
+                    if urls is None:
+                        urls = []
+                        request.image_urls = urls
+                    for _p, _w, _t in hist_imgs:
+                        if _p not in urls:
+                            urls.append(_p)
+                except Exception as exc:
+                    logger.warning("[mindscape_groupctx] 历史图挂载失败: %s", str(exc)[:120])
+            logger.info("[mindscape_groupctx] 注入 self=%s 群=%s 历史=%d 条 引用=%s 历史图=%d",
+                        event.get_self_id(), gid, len(recs),
+                        ("自己发的图" if (q_quoted and q_img and q_mine) else
+                         "别人的图" if (q_quoted and q_img) else "无"),
+                        len(hist_imgs))
+        except Exception as exc:
+            logger.warning("[mindscape_groupctx] 注入失败: %s", str(exc)[:120])
+
+
 # ==== from plugins/BlockMixin.py ====
 class BlockMixin:
     def setup(self, context):
@@ -4513,6 +4639,153 @@ class GuardMixin:
                 event.stop_event()
         except Exception as e:
             logger.warning("[mindscape_guard] 检查失败: %s", str(e)[:120])
+
+
+# ==== from plugins/SilenceMixin.py ====
+class SilenceMixin:
+    def setup(self, context):
+
+        self.si_on, self.si_token, self.si_targets, self.si_prompt = si_load_config()
+        self.si_count = 0
+        logger.info("[mindscape_silence] loaded | enabled=%s token=%s targets=%d",
+                    self.si_on, self.si_token, len(self.si_targets))
+        scope_warn(logger, "mindscape_silence", self.si_targets, self.si_on)
+
+    def _si_hit(self, event):
+        if not self.si_on:
+            return False
+        return scope_hit(self.si_targets, event.get_self_id())
+
+    @filter.on_llm_request(priority=SI_PRIORITY)
+    async def si_grant(self, event: AstrMessageEvent, request):
+        """把「可以真的不说话」的出口告诉模型。"""
+        try:
+            if not self._si_hit(event):
+                return
+            if event.get_extra("cron_job"):
+                if si_attach(request, SI_CRON_NOTE, SI_CRON_NOTE.splitlines()[0]):
+                    logger.info("[mindscape_silence] 冒泡轮：不给令牌（不调工具即沉默）| bot=%s",
+                                event.get_self_id())
+                return
+            if si_attach(request, self.si_prompt, self.si_token):
+                logger.info("[mindscape_silence] 回复轮：已授予沉默权 | bot=%s",
+                            event.get_self_id())
+        except Exception as e:
+            logger.warning("[mindscape_silence] 注入失败: %s", str(e)[:120])
+
+    @filter.on_decorating_result(priority=1000)
+    async def si_block(self, event: AstrMessageEvent):
+        try:
+            if not self._si_hit(event):
+                return
+            result = event.get_result()
+            if result is None:
+                return
+            txt = result.get_plain_text() or ""
+            if not txt.strip():
+                return
+            if si_is_silence(txt, self.si_token) or si_is_ooc_silence(txt):
+                self.si_count += 1
+                logger.info("[mindscape_silence] 真静默（第 %d 次%s）| bot=%s",
+                            self.si_count,
+                            "" if si_is_silence(txt, self.si_token) else "，动作描写",
+                            event.get_self_id())
+                event.clear_result()
+                event.stop_event()
+                return
+            # 令牌混在正文里：剃掉它，绝不让它出现在群里
+            if self.si_token.lower() in txt.lower():
+                for comp in (getattr(result, "chain", None) or []):
+                    t = getattr(comp, "text", None)
+                    if isinstance(t, str) and t.strip():
+                        comp.text = si_strip(t, self.si_token)
+                # 剃完只剩空白 —— 那它本来就是想沉默（只是令牌形式没被上面认出来，
+                # 比如尾部多了零宽字符）。按真静默处理，否则会留下一条「空回复」：
+                # 用户看到的是「叫它不理」，日志里也什么都没有。
+                if not si_norm(result.get_plain_text() or ""):
+                    self.si_count += 1
+                    logger.info("[mindscape_silence] 真静默（第 %d 次，令牌带杂字）| bot=%s",
+                                self.si_count, event.get_self_id())
+                    event.clear_result()
+                    event.stop_event()
+        except Exception as e:
+            logger.warning("[mindscape_silence] 拦截失败: %s", str(e)[:120])
+
+
+# ==== from plugins/VisionMixin.py ====
+class VisionMixin:
+    def setup(self, context):
+        self.vs_on, self.vs_targets = vs_load_config()
+        logger.info("[mindscape_vision] loaded | enabled=%s | targets=%s",
+                    self.vs_on, self.vs_targets or "全部")
+        scope_warn(logger, "mindscape_vision", self.vs_targets, self.vs_on)
+
+    def _vs_hit(self, event):
+        if not self.vs_on:
+            return False
+        return scope_hit(self.vs_targets, event.get_self_id())
+
+    @filter.on_llm_request(priority=VS_PRIORITY)
+    async def vs_hint(self, event: AstrMessageEvent, request):
+        """有图 → 提醒「先查再认」；**没图但正文长得像有图** → 明确标注「那只是文字」✓。"""
+        try:
+            if not self._vs_hit(event):
+                return
+            urls = getattr(request, "image_urls", None)
+            # ⚠️ 先过**格式闸门**（2026-10-14 那次"她不回消息"的真凶 ✓）：
+            #    不合规的图必须在下发前剔掉，否则整轮请求 400 全灭 ✗
+            if urls:
+                kept, dropped = await asyncio.to_thread(
+                    vs_filter_images, list(urls), event.get_self_id())
+                if dropped:
+                    request.image_urls = kept
+                    urls = kept
+            if urls:
+                for index, ref in enumerate(urls):
+                    preview = await asyncio.to_thread(vs_compact_image, str(ref))
+                    if preview:
+                        urls[index] = preview
+            if vs_has_image(event):
+                if vs_attach(request, VS_HINT, VS_MARK):
+                    logger.info("[mindscape_vision] 有图：已提醒先查再认 | bot=%s",
+                                event.get_self_id())
+                return
+            # 本轮**没有图**：正文里若出现像图片/附件的字样，由代码认出来并标注「那只是文字」✓
+            fake = VS_FAKE_RE.search(str(getattr(event, "message_str", "") or ""))
+            if not fake:
+                return
+            if vs_attach(request, VS_TEXT_HINT % fake.group(0)[:40], VS_TEXT_MARK):
+                logger.info("[mindscape_vision] 正文像附件、本轮无图 → 已标注为文字 | bot=%s | 命中=%s",
+                            event.get_self_id(), fake.group(0)[:40])
+        except Exception as e:
+            logger.warning("[mindscape_vision] 注入失败: %s", str(e)[:120])
+
+    @filter.on_llm_response()
+    async def vs_image_error_retry(self, event, response):
+        """**B 层兜底**：图不合规把整轮打挂了 ⇒ 去掉图重答一次 ✗
+
+        ⚠️ 2026-10-14 真事故：那一轮所有模型调用全 400（`unsupported image`），
+           `guard` 又把报错拦住（不进群 ✓）⇒ 主人只看到「她不回消息、也不报错」✗
+        ⇒ A 层（格式闸门）治根；这一层是**万一漏网时她还能开口**的保险 ✓
+        ⚠️ 每条消息**只重试一次**（`VS_RETRY_FLAG`）—— 绝不允许变成循环请求 ✗
+        """
+        try:
+            if not self.vs_on:
+                return
+            text = str(getattr(response, "completion_text", "") or "")
+            if not vs_is_image_error(text):
+                return
+            if getattr(event, VS_RETRY_FLAG, False):
+                logger.warning("[mindscape_vision] 图不合规，但这条已经重试过 ⇒ 不再重试 ✗")
+                return
+            setattr(event, VS_RETRY_FLAG, True)
+            logger.warning("[mindscape_vision] 图不合规把整轮打挂了 ⇒ 去掉图重答一次 | bot=%s",
+                           event.get_self_id())
+            again = await vs_retry_without_image(self, event, response)
+            if again:
+                response.completion_text = again
+        except Exception as e:
+            logger.warning("[mindscape_vision] 去图重答钩子异常: %s", str(e)[:120])
 
 
 # ==== from plugins/MemoryMixin.py ====
@@ -5547,6 +5820,90 @@ class FormatMixin:
             logger.warning("[mindscape_format] 处理失败: %s", str(e)[:120])
 
 
+# ==== from plugins/TraceMixin.py ====
+class TraceMixin:
+    def setup(self, context):
+        c = cfg.section("trace")
+        self.tr_on = True if c.get("enabled") is None else bool(c.get("enabled"))
+        self.tr_warn_ms = int(c.get("warn_ms") or DEFAULT_WARN_MS)
+        self.tr_warn_chars = int(c.get("warn_chars") or DEFAULT_WARN_CHARS)
+        self.tr_pending = {}
+        logger.info(
+            "[mindscape_trace] loaded | enabled=%s | 慢于 %dms 或 system_prompt"
+            " 超过 %d 字时改成 WARNING",
+            self.tr_on, self.tr_warn_ms, self.tr_warn_chars)
+
+    def tr_label(self, event):
+        """日志里区分两个 bot 的那一列。"""
+        return "self=%s 群=%s" % (event.get_self_id(),
+                                  event.get_group_id() or "-")
+
+    def tr_remember(self, key, info):
+        self.tr_pending[key] = info
+        # 失败/中断的轮次永远等不到响应 —— 别让它把内存攒起来
+        if len(self.tr_pending) > TRACE_PENDING_MAX:
+            for k in list(self.tr_pending)[:-TRACE_PENDING_MAX // 2]:
+                self.tr_pending.pop(k, None)
+
+    @filter.on_llm_request(priority=TRACE_PRIORITY)
+    async def tr_measure_request(self, event: AstrMessageEvent,
+                                 request: ProviderRequest):
+        if not self.tr_on:
+            return
+        try:
+            hn, hc = tr_hist(request)
+            info = {
+                "t": time.time(),
+                "sys": len(request.system_prompt or ""),
+                "ctx": len(request.contexts or []),
+                "ctx_chars": tr_ctx_chars(request.contexts),
+                "hist_n": hn,
+                "hist_c": hc,
+                "tools": tr_tool_count(request),
+                "user": len(request.prompt or ""),
+            }
+            self.tr_remember(tr_key(event), info)
+            event.set_extra(TRACE_KEY, info)
+            logger.info(
+                "[mindscape_trace] 出站 %s sys=%d字 会话=%d条/%d字 上下文=%d条 工具=%d 输入=%d字"
+                " sys指纹=%s",
+                self.tr_label(event), info["sys"], info["hist_n"],
+                info["hist_c"], info["ctx"], info["tools"], info["user"],
+                tr_fp(request.system_prompt or ""))
+        except Exception as e:
+            logger.warning("[mindscape_trace] 记录请求失败: %s", str(e)[:120])
+
+    @filter.on_llm_response()
+    async def tr_measure_response(self, event: AstrMessageEvent, response):
+        if not self.tr_on:
+            return
+        try:
+            info = self.tr_pending.pop(tr_key(event), None)
+            if not isinstance(info, dict):
+                info = event.get_extra(TRACE_KEY)
+            if not isinstance(info, dict) or not info.get("t"):
+                logger.warning(
+                    "[mindscape_trace] 收到响应但没找到本轮的请求记录（出站日志可能没打）| %s",
+                    self.tr_label(event))
+                return
+            ms = int((time.time() - float(info["t"])) * 1000)
+            slow = ms >= self.tr_warn_ms
+            fat = int(info.get("sys") or 0) >= self.tr_warn_chars
+            line = ("[mindscape_trace] %s %s 耗时=%.2fs sys=%d字"
+                    " 会话=%d条/%d字 工具=%d 输入=%d字%s")
+            args = ("SLOW" if slow else ("FAT" if fat else "完成"),
+                    self.tr_label(event), ms / 1000.0,
+                    info.get("sys") or 0, info.get("hist_n") or 0,
+                    info.get("hist_c") or 0, info.get("tools") or 0,
+                    info.get("user") or 0, tr_usage(response))
+            if slow or fat:
+                logger.warning(line, *args)
+            else:
+                logger.info(line, *args)
+        except Exception as e:
+            logger.warning("[mindscape_trace] 记录耗时失败: %s", str(e)[:120])
+
+
 # ==== from plugins/RescueMixin.py ====
 class RescueMixin:
     def setup(self, context):
@@ -5807,363 +6164,6 @@ class RescueMixin:
         except Exception as e:
             logger.warning("[mindscape_rescue] 身份记忆检索失败: %s", type(e).__name__)
             return ""
-
-
-# ==== from plugins/SilenceMixin.py ====
-class SilenceMixin:
-    def setup(self, context):
-
-        self.si_on, self.si_token, self.si_targets, self.si_prompt = si_load_config()
-        self.si_count = 0
-        logger.info("[mindscape_silence] loaded | enabled=%s token=%s targets=%d",
-                    self.si_on, self.si_token, len(self.si_targets))
-        scope_warn(logger, "mindscape_silence", self.si_targets, self.si_on)
-
-    def _si_hit(self, event):
-        if not self.si_on:
-            return False
-        return scope_hit(self.si_targets, event.get_self_id())
-
-    @filter.on_llm_request(priority=SI_PRIORITY)
-    async def si_grant(self, event: AstrMessageEvent, request):
-        """把「可以真的不说话」的出口告诉模型。"""
-        try:
-            if not self._si_hit(event):
-                return
-            if event.get_extra("cron_job"):
-                if si_attach(request, SI_CRON_NOTE, SI_CRON_NOTE.splitlines()[0]):
-                    logger.info("[mindscape_silence] 冒泡轮：不给令牌（不调工具即沉默）| bot=%s",
-                                event.get_self_id())
-                return
-            if si_attach(request, self.si_prompt, self.si_token):
-                logger.info("[mindscape_silence] 回复轮：已授予沉默权 | bot=%s",
-                            event.get_self_id())
-        except Exception as e:
-            logger.warning("[mindscape_silence] 注入失败: %s", str(e)[:120])
-
-    @filter.on_decorating_result(priority=1000)
-    async def si_block(self, event: AstrMessageEvent):
-        try:
-            if not self._si_hit(event):
-                return
-            result = event.get_result()
-            if result is None:
-                return
-            txt = result.get_plain_text() or ""
-            if not txt.strip():
-                return
-            if si_is_silence(txt, self.si_token) or si_is_ooc_silence(txt):
-                self.si_count += 1
-                logger.info("[mindscape_silence] 真静默（第 %d 次%s）| bot=%s",
-                            self.si_count,
-                            "" if si_is_silence(txt, self.si_token) else "，动作描写",
-                            event.get_self_id())
-                event.clear_result()
-                event.stop_event()
-                return
-            # 令牌混在正文里：剃掉它，绝不让它出现在群里
-            if self.si_token.lower() in txt.lower():
-                for comp in (getattr(result, "chain", None) or []):
-                    t = getattr(comp, "text", None)
-                    if isinstance(t, str) and t.strip():
-                        comp.text = si_strip(t, self.si_token)
-                # 剃完只剩空白 —— 那它本来就是想沉默（只是令牌形式没被上面认出来，
-                # 比如尾部多了零宽字符）。按真静默处理，否则会留下一条「空回复」：
-                # 用户看到的是「叫它不理」，日志里也什么都没有。
-                if not si_norm(result.get_plain_text() or ""):
-                    self.si_count += 1
-                    logger.info("[mindscape_silence] 真静默（第 %d 次，令牌带杂字）| bot=%s",
-                                self.si_count, event.get_self_id())
-                    event.clear_result()
-                    event.stop_event()
-        except Exception as e:
-            logger.warning("[mindscape_silence] 拦截失败: %s", str(e)[:120])
-
-
-# ==== from plugins/VisionMixin.py ====
-class VisionMixin:
-    def setup(self, context):
-        self.vs_on, self.vs_targets = vs_load_config()
-        logger.info("[mindscape_vision] loaded | enabled=%s | targets=%s",
-                    self.vs_on, self.vs_targets or "全部")
-        scope_warn(logger, "mindscape_vision", self.vs_targets, self.vs_on)
-
-    def _vs_hit(self, event):
-        if not self.vs_on:
-            return False
-        return scope_hit(self.vs_targets, event.get_self_id())
-
-    @filter.on_llm_request(priority=VS_PRIORITY)
-    async def vs_hint(self, event: AstrMessageEvent, request):
-        """有图 → 提醒「先查再认」；**没图但正文长得像有图** → 明确标注「那只是文字」✓。"""
-        try:
-            if not self._vs_hit(event):
-                return
-            urls = getattr(request, "image_urls", None)
-            # ⚠️ 先过**格式闸门**（2026-10-14 那次"她不回消息"的真凶 ✓）：
-            #    不合规的图必须在下发前剔掉，否则整轮请求 400 全灭 ✗
-            if urls:
-                kept, dropped = await asyncio.to_thread(
-                    vs_filter_images, list(urls), event.get_self_id())
-                if dropped:
-                    request.image_urls = kept
-                    urls = kept
-            if urls:
-                for index, ref in enumerate(urls):
-                    preview = await asyncio.to_thread(vs_compact_image, str(ref))
-                    if preview:
-                        urls[index] = preview
-            if vs_has_image(event):
-                if vs_attach(request, VS_HINT, VS_MARK):
-                    logger.info("[mindscape_vision] 有图：已提醒先查再认 | bot=%s",
-                                event.get_self_id())
-                return
-            # 本轮**没有图**：正文里若出现像图片/附件的字样，由代码认出来并标注「那只是文字」✓
-            fake = VS_FAKE_RE.search(str(getattr(event, "message_str", "") or ""))
-            if not fake:
-                return
-            if vs_attach(request, VS_TEXT_HINT % fake.group(0)[:40], VS_TEXT_MARK):
-                logger.info("[mindscape_vision] 正文像附件、本轮无图 → 已标注为文字 | bot=%s | 命中=%s",
-                            event.get_self_id(), fake.group(0)[:40])
-        except Exception as e:
-            logger.warning("[mindscape_vision] 注入失败: %s", str(e)[:120])
-
-    @filter.on_llm_response()
-    async def vs_image_error_retry(self, event, response):
-        """**B 层兜底**：图不合规把整轮打挂了 ⇒ 去掉图重答一次 ✗
-
-        ⚠️ 2026-10-14 真事故：那一轮所有模型调用全 400（`unsupported image`），
-           `guard` 又把报错拦住（不进群 ✓）⇒ 主人只看到「她不回消息、也不报错」✗
-        ⇒ A 层（格式闸门）治根；这一层是**万一漏网时她还能开口**的保险 ✓
-        ⚠️ 每条消息**只重试一次**（`VS_RETRY_FLAG`）—— 绝不允许变成循环请求 ✗
-        """
-        try:
-            if not self.vs_on:
-                return
-            text = str(getattr(response, "completion_text", "") or "")
-            if not vs_is_image_error(text):
-                return
-            if getattr(event, VS_RETRY_FLAG, False):
-                logger.warning("[mindscape_vision] 图不合规，但这条已经重试过 ⇒ 不再重试 ✗")
-                return
-            setattr(event, VS_RETRY_FLAG, True)
-            logger.warning("[mindscape_vision] 图不合规把整轮打挂了 ⇒ 去掉图重答一次 | bot=%s",
-                           event.get_self_id())
-            again = await vs_retry_without_image(self, event, response)
-            if again:
-                response.completion_text = again
-        except Exception as e:
-            logger.warning("[mindscape_vision] 去图重答钩子异常: %s", str(e)[:120])
-
-
-# ==== from plugins/GroupctxMixin.py ====
-class GroupctxMixin:
-    def setup(self, context):
-        c = cfg.section("groupctx")
-        self.gc_on = bool(c.get("enabled"))
-        self.gc_path = gc_buffer_path(c)
-        self.gc_count = int(c.get("count") or DEFAULT_COUNT)
-        self.gc_window = int(c.get("window_sec") or DEFAULT_WINDOW)
-        self.gc_tail = int(c.get("tail_bytes") or DEFAULT_TAIL)
-        self.gc_mark = True if c.get("directness") is None else bool(c.get("directness"))
-        self.gc_targets = [str(x) for x in (c.get("targets") or [])]
-        self.gc_img_on = True if c.get("images") is None else bool(c.get("images"))
-        self.gc_img_max = int(c.get("image_max") or DEFAULT_IMG_MAX)
-        self.gc_img_window = int(c.get("image_window_sec") or DEFAULT_IMG_WINDOW)
-        self.gc_img_same = (DEFAULT_IMG_SAME if c.get("image_same_sender") is None
-                            else bool(c.get("image_same_sender")))
-        logger.info(
-            "[mindscape_groupctx] loaded | enabled=%s | buffer=%s | 最近 %d 条/%ds | 定向性=%s | 历史图=%s(max %d/%ds 同人=%s)",
-            self.gc_on, self.gc_path, self.gc_count, self.gc_window, self.gc_mark,
-            self.gc_img_on, self.gc_img_max, self.gc_img_window, self.gc_img_same)
-        scope_warn(logger, "mindscape_groupctx", self.gc_targets, self.gc_on)
-
-    @filter.on_llm_request(priority=GC_PRIORITY)
-    async def gc_inject(self, event: AstrMessageEvent, request: ProviderRequest):
-        try:
-            if not self.gc_on or not scope_hit(self.gc_targets, event.get_self_id()):
-                return
-            gid = event.get_group_id()
-            if gid is None:
-                return
-            # 自主冒泡轮不要群缓冲 —— 那会让它退化成「接别人的话」，
-            # 而这一轮的意义是自己找话题。
-            if event.get_extra("cron_job"):
-                return
-            now = time.time()
-            recs = gc_read_recent(self.gc_path, event.get_platform_name(),
-                                  str(gid), self.gc_count, self.gc_window,
-                                  self.gc_tail)
-            q_quoted, q_mine, q_img = gc_quote(event)
-            hist_refs = []
-            if self.gc_img_on and not gc_has_image(event) and not (q_quoted and q_img):
-                hist_refs = gc_history_images(
-                    recs, self.gc_img_window, self.gc_img_max * 3,
-                    sender=str(event.get_sender_id()) if self.gc_img_same else None)
-            hist_imgs = []
-            ref2path = {}
-            for _ref, _w, _t in hist_refs:
-                if len(hist_imgs) >= self.gc_img_max:
-                    break
-                _p = await gc_resolve_ref(_ref)
-                if _p:
-                    hist_imgs.append((_p, _w, _t))
-                    ref2path[str(_ref)] = _p
-            img_no = {}
-            for _k, (_p, _w, _t) in enumerate(hist_imgs, 1):
-                img_no[_p] = _k
-            lines = []
-            if self.gc_mark:
-                lines += ["", "【本条消息的定向性】", gc_head(event)]
-                if q_quoted and q_img:
-                    lines.append(gc_quote_note(q_mine))
-                    if q_mine and gc_quote_rewrite(request, True):
-                        logger.info("[mindscape_groupctx] 引用正文改写=自己发的图")
-            if recs:
-                lines.append("")
-                lines.append("【本群最近的真实聊天记录（用于理解上下文，不要逐条回应，也不要复述）】")
-                for r in recs:
-                    tag = " ".join("［附件%d］" % img_no[ref2path[str(x)]]
-                                   for x in (r.get("imgs") or []) if str(x) in ref2path)
-                    lines.append("[" + fmt_cst(float(r.get("ts") or now), "%H:%M:%S")
-                                 + "] " + strip_invisible(str(r.get("who", "?")))[:16] + ": "
-                                 + strip_invisible(str(r.get("text", "")))[:200]
-                                 + (("  " + tag) if tag else ""))
-            if hist_imgs:
-                lines.append("")
-                lines.append("【上面历史里带的那几张图，按顺序就是附件 1…%d（标了［附件N］的那条就是它）】"
-                             % len(hist_imgs))
-                lines.append("本条消息时间：%s。历史图虽然可见，并不等于本条消息在请你评价它。"
-                             % time.strftime("%H:%M:%S", time.localtime(now)))
-                for _k, (_p, _w, _t) in enumerate(hist_imgs, 1):
-                    lines.append("附件%d = %s 在 %s 发的图（距本条约 %d 秒）"
-                                 % (_k, _w, time.strftime("%H:%M:%S", time.localtime(_t)),
-                                    max(0, int(now - _t))))
-                lines.append("先回应本条消息。只有当本条没有明确指向那张历史图，且图只是与本条话题无关的"
-                             "情绪或状态表达时，才不要在回复中谈图；否则可自然结合图来回答。"
-                             "时间间隔只作判断线索，不能单独决定是否谈图。")
-            if not lines:
-                return
-            # ⚠️ 2026-10-08（省钱要省在根上 ✓）：这一整段**每轮都在变**（定向性 + 本群最近聊天 ✗）——
-            # 以前拼进 system_prompt ✗ → 它一变，**后面的整段对话历史全部按全价重算** ✗
-            # （实测缓存命中率只有 34% ✓ 而未命中 ¥2/M vs 命中 ¥0.04/M = 差 **50 倍** ✗✗）。
-            # 改挂到 `extra_user_content_parts` ✓ —— 这是框架自带的「接在用户消息之后」的位置 ✓
-            # （框架自己的 astrbot/group_chat_context.py 就是这么用的 ✓）→ 稳定前缀不再被污染 ✓。
-            try:
-                # 用到处再导入 ✓（模块级导入在测试环境的假 astrbot 里会炸 ✗）
-                from astrbot.core.agent.message import TextPart
-                parts = getattr(request, "extra_user_content_parts", None)
-                if parts is None:
-                    parts = []
-                    request.extra_user_content_parts = parts
-                parts.append(TextPart(text=sys_tag(chr(10).join(lines))))
-            except Exception as e:
-                # 兜底：宁可费钱，不可丢上下文 ✓ —— 但要打警告 ✗（不然缓存没救回来都不知道 ✓）
-                logger.warning("[mindscape_groupctx] 挂 extra_user_content_parts 失败（缓存会吃亏），退回 system_prompt: %s", str(e)[:90])
-                request.system_prompt = ((request.system_prompt or "") + chr(10)
-                                         + sys_tag(chr(10).join(lines)))
-            if hist_imgs:
-                try:
-                    urls = getattr(request, "image_urls", None)
-                    if urls is None:
-                        urls = []
-                        request.image_urls = urls
-                    for _p, _w, _t in hist_imgs:
-                        if _p not in urls:
-                            urls.append(_p)
-                except Exception as exc:
-                    logger.warning("[mindscape_groupctx] 历史图挂载失败: %s", str(exc)[:120])
-            logger.info("[mindscape_groupctx] 注入 self=%s 群=%s 历史=%d 条 引用=%s 历史图=%d",
-                        event.get_self_id(), gid, len(recs),
-                        ("自己发的图" if (q_quoted and q_img and q_mine) else
-                         "别人的图" if (q_quoted and q_img) else "无"),
-                        len(hist_imgs))
-        except Exception as exc:
-            logger.warning("[mindscape_groupctx] 注入失败: %s", str(exc)[:120])
-
-
-# ==== from plugins/TraceMixin.py ====
-class TraceMixin:
-    def setup(self, context):
-        c = cfg.section("trace")
-        self.tr_on = True if c.get("enabled") is None else bool(c.get("enabled"))
-        self.tr_warn_ms = int(c.get("warn_ms") or DEFAULT_WARN_MS)
-        self.tr_warn_chars = int(c.get("warn_chars") or DEFAULT_WARN_CHARS)
-        self.tr_pending = {}
-        logger.info(
-            "[mindscape_trace] loaded | enabled=%s | 慢于 %dms 或 system_prompt"
-            " 超过 %d 字时改成 WARNING",
-            self.tr_on, self.tr_warn_ms, self.tr_warn_chars)
-
-    def tr_label(self, event):
-        """日志里区分两个 bot 的那一列。"""
-        return "self=%s 群=%s" % (event.get_self_id(),
-                                  event.get_group_id() or "-")
-
-    def tr_remember(self, key, info):
-        self.tr_pending[key] = info
-        # 失败/中断的轮次永远等不到响应 —— 别让它把内存攒起来
-        if len(self.tr_pending) > TRACE_PENDING_MAX:
-            for k in list(self.tr_pending)[:-TRACE_PENDING_MAX // 2]:
-                self.tr_pending.pop(k, None)
-
-    @filter.on_llm_request(priority=TRACE_PRIORITY)
-    async def tr_measure_request(self, event: AstrMessageEvent,
-                                 request: ProviderRequest):
-        if not self.tr_on:
-            return
-        try:
-            hn, hc = tr_hist(request)
-            info = {
-                "t": time.time(),
-                "sys": len(request.system_prompt or ""),
-                "ctx": len(request.contexts or []),
-                "ctx_chars": tr_ctx_chars(request.contexts),
-                "hist_n": hn,
-                "hist_c": hc,
-                "tools": tr_tool_count(request),
-                "user": len(request.prompt or ""),
-            }
-            self.tr_remember(tr_key(event), info)
-            event.set_extra(TRACE_KEY, info)
-            logger.info(
-                "[mindscape_trace] 出站 %s sys=%d字 会话=%d条/%d字 上下文=%d条 工具=%d 输入=%d字"
-                " sys指纹=%s",
-                self.tr_label(event), info["sys"], info["hist_n"],
-                info["hist_c"], info["ctx"], info["tools"], info["user"],
-                tr_fp(request.system_prompt or ""))
-        except Exception as e:
-            logger.warning("[mindscape_trace] 记录请求失败: %s", str(e)[:120])
-
-    @filter.on_llm_response()
-    async def tr_measure_response(self, event: AstrMessageEvent, response):
-        if not self.tr_on:
-            return
-        try:
-            info = self.tr_pending.pop(tr_key(event), None)
-            if not isinstance(info, dict):
-                info = event.get_extra(TRACE_KEY)
-            if not isinstance(info, dict) or not info.get("t"):
-                logger.warning(
-                    "[mindscape_trace] 收到响应但没找到本轮的请求记录（出站日志可能没打）| %s",
-                    self.tr_label(event))
-                return
-            ms = int((time.time() - float(info["t"])) * 1000)
-            slow = ms >= self.tr_warn_ms
-            fat = int(info.get("sys") or 0) >= self.tr_warn_chars
-            line = ("[mindscape_trace] %s %s 耗时=%.2fs sys=%d字"
-                    " 会话=%d条/%d字 工具=%d 输入=%d字%s")
-            args = ("SLOW" if slow else ("FAT" if fat else "完成"),
-                    self.tr_label(event), ms / 1000.0,
-                    info.get("sys") or 0, info.get("hist_n") or 0,
-                    info.get("hist_c") or 0, info.get("tools") or 0,
-                    info.get("user") or 0, tr_usage(response))
-            if slow or fat:
-                logger.warning(line, *args)
-            else:
-                logger.info(line, *args)
-        except Exception as e:
-            logger.warning("[mindscape_trace] 记录耗时失败: %s", str(e)[:120])
 
 
 # ==== from plugins/MentionMixin.py ====
@@ -6503,23 +6503,23 @@ class VoiceMixin:
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
 # ==================================================================
-class MindscapePlugin(BlockMixin, GuardMixin, MemoryMixin, PrivacyMixin, StickersMixin, StickerUseMixin, FormatMixin, RescueMixin, SilenceMixin, VisionMixin, GroupctxMixin, TraceMixin, MentionMixin, ToolscopeMixin, VoiceMixin, star.Star):
+class MindscapePlugin(GroupctxMixin, BlockMixin, GuardMixin, SilenceMixin, VisionMixin, MemoryMixin, PrivacyMixin, StickersMixin, StickerUseMixin, FormatMixin, TraceMixin, RescueMixin, MentionMixin, ToolscopeMixin, VoiceMixin, star.Star):
     def __init__(self, context):
         self.context = context
         self.name = "mindscape"
         self.author = "bot-mindscape"
+        GroupctxMixin.setup(self, context)
         BlockMixin.setup(self, context)
         GuardMixin.setup(self, context)
+        SilenceMixin.setup(self, context)
+        VisionMixin.setup(self, context)
         MemoryMixin.setup(self, context)
         PrivacyMixin.setup(self, context)
         StickersMixin.setup(self, context)
         StickerUseMixin.setup(self, context)
         FormatMixin.setup(self, context)
-        RescueMixin.setup(self, context)
-        SilenceMixin.setup(self, context)
-        VisionMixin.setup(self, context)
-        GroupctxMixin.setup(self, context)
         TraceMixin.setup(self, context)
+        RescueMixin.setup(self, context)
         MentionMixin.setup(self, context)
         ToolscopeMixin.setup(self, context)
         VoiceMixin.setup(self, context)
