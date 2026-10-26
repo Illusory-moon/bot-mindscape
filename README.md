@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Illusory-moon/bot-mindscape?style=flat)](https://github.com/Illusory-moon/bot-mindscape/stargazers)
 [![Release](https://img.shields.io/github/v/release/Illusory-moon/bot-mindscape)](https://github.com/Illusory-moon/bot-mindscape/releases)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 
 <img src="assets/demo-2-memory.png" width="600" alt="三天前的事它还记着">
 
@@ -31,8 +31,9 @@ python scripts/build_plugin.py --market   # 构建成单文件插件（装进 As
 
 > **两种管理界面随你挑**：
 > - 桌面版：`python scripts/config_gui.py`（tkinter，只用标准库）
->   ⚠️ 运行依赖仍需要 `pip install -r requirements.txt`（PyYAML 等）；"零依赖"指的是**不额外装 GUI 库** ✓
+>   ⚠️ 仍需 `pip install -r requirements.txt`（PyYAML 等）；这里说的是**不用额外装 GUI 库**（tkinter 属标准库）✓
 > - 网页版：Windows 双击 `open_dashboard.bat`，会自动启动管理台并打开浏览器；也可运行 `python scripts/web_ui.py` 后访问 http://127.0.0.1:8777
+> （双击 `open_dashboard.bat` 时会在 **8777–8787** 里自动挑一个空闲端口，实际地址看它打开的浏览器 ✓）
 >
 > 各层怎么对接 bot 框架，见 [部署指南](docs/deploy.md)。
 

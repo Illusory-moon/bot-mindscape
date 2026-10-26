@@ -8,7 +8,10 @@
   2. 图库浏览 / 改名 / 改标签 / 移除
   3. 与远程服务器双向同步（需要配置 ui.sync，见 mindscape_sync.py）
 
-安全说明：写操作要求同源 + 页面令牌；换 --host 对外监听时请自加认证。
+安全说明：**读写都要求同源**（Host/Origin 白名单）+ 写操作要页面令牌；
+配置回显会把 `password` / `key_file` 这类键打码（保存时按原值还原 ✓）。
+2026-10-27：监听非本机地址**必须显式** `--allow-remote`，否则直接拒启动；
+响应头带 `X-Frame-Options: DENY` / `nosniff` / `no-referrer` / `no-store` ✓
 """
 import argparse
 import hashlib

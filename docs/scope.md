@@ -33,7 +33,7 @@
 
 ## ⚠️ 两个已知陷阱
 
-### 1. 「空 = 全部」的那三个模块
+### 1. 「空 = 全部」的那四个模块（`silence` / `vision` / `format` / `groupctx`）
 
 `silence` / `vision` / `format` 的 `targets` **留空会作用于全部 bot**。
 两个 bot 同容器时，给 A 开的配置会**悄悄作用到 B** 上。

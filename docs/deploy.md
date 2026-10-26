@@ -5,7 +5,7 @@
 
 ## 前置条件
 
-- Python 3.9+
+- Python 3.11+（`scripts/check_live.py` 用了 `hashlib.file_digest`，3.11 才有）
 - 一个 OpenAI 兼容的 LLM 接口（日记提炼 / 视觉判断 / 选图）
 - bot 框架的消息库可读（SQLite）
 
@@ -122,6 +122,31 @@ groupctx:
 > 只作为独立脚本使用。
 > **定时任务必须设 `MINDSCAPE_CONFIG`**，否则它和插件会各读一份配置 ——
 > 表现就是「bot 当场记得的事，摘要里没有」这种诡异的不同步。
+
+### 隐私闸门口令轮换（开了 `privacy_gate` 才需要）
+
+README 里说「每天 04:00 轮换」—— 那件事由 **这个 unit 完成**，缺一步就**永远不轮换**
+（而且不报错 ✗，只是口令一直不变）。2026-10-27 补上安装步骤：
+
+```bash
+# 1) 把脚本和 unit 放到位（路径按你机器改）
+install -D -m 755 scripts/privacy_gate_rotate.py /opt/mindscape/privacy_gate_rotate.py
+install -D -m 644 scripts/systemd/mindscape-privacy-gate.service /etc/systemd/system/
+install -D -m 644 scripts/systemd/mindscape-privacy-gate.timer   /etc/systemd/system/
+
+# 2) ⚠️ 两个环境变量都要对：
+#    MINDSCAPE_CONFIG     插件实际读的那份 config.yaml
+#    MINDSCAPE_PLUGIN_DIR  含 mindscape_config.py / mindscape_gate.py 的目录
+systemctl daemon-reload
+systemctl enable --now mindscape-privacy-gate.timer
+
+# 3) 验一次（成功会在审计文件里多一条 "rotated"）
+systemctl start mindscape-privacy-gate.service
+journalctl -u mindscape-privacy-gate.service -n 20 --no-pager
+```
+
+> ⚠️ unit 文件必须是 **LF** 换行（仓库 `.gitattributes` 已锁 `*.service eol=lf`）；
+> CRLF 下 systemd 的行为随版本而异，轻则告警、重则 `ExecStart` 带着 `` 执行失败 ✗
 
 ## 其他框架
 

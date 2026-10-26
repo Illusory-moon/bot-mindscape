@@ -163,8 +163,9 @@ if result is None or not result.chain:
    -> 追加写入 memory.md 与 people.md
 
 ② 每轮对话：mindscape_memory 挂在 on_llm_request
-      | 按四层拼装，每层独立字数预算（硬上限，按条目边界裁剪）：
-      |   规矩（rules）→ 账本（notes.md）→ 摘要（digest.md）→ 原文（memory.md）
+      | 按五层拼装，每层独立字数预算（硬上限，按条目边界裁剪）：
+      |   规矩（rules）→ 账本（notes.md）→ 风格（稳定层 + 近期层）→ 摘要（digest.md）→ 原文（memory.md）
+      | ⚠️ 2026-10-27 更正：原先这里写「四层」且漏了风格层（review §3 抓的 ✗）
       | 拼进 system_prompt
    -> 模型带着「记忆」生成回复
 
