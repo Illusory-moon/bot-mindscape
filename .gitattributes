@@ -1,3 +1,6 @@
 *.bat text eol=crlf
 *.service text eol=lf
 *.sh text eol=lf
+# 构建产物按 LF 存：CI(Linux) 与本地(Windows) 构建必须逐字节一致 ✓
+dist/mindscape/main.py text eol=lf
+dist/mindscape/metadata.yaml text eol=lf

@@ -211,9 +211,12 @@ def main(exclude=()):
     body = "\n".join(parts)
 
     os.makedirs(OUT_DIR, exist_ok=True)
-    with open(os.path.join(OUT_DIR, "main.py"), "w", encoding="utf-8") as f:
+    # 2026-10-27（CI 抓的）：open(..., "w") 在 Windows 上会把 LF 翻成 CRLF
+    #   ⇒ 同一份源码在 Windows / Linux 构建出的产物字节不同 ⇒「产物新鲜度」在 CI 必红 ✗
+    #   ⇒ 显式指定 newline，让两个平台产出一模一样 ✓
+    with open(os.path.join(OUT_DIR, "main.py"), "w", encoding="utf-8", newline="\n") as f:
         f.write(body)
-    with open(os.path.join(OUT_DIR, "metadata.yaml"), "w", encoding="utf-8") as f:
+    with open(os.path.join(OUT_DIR, "metadata.yaml"), "w", encoding="utf-8", newline="\n") as f:
         f.write("name: mindscape\ndesc: bot-mindscape 整合插件（认知/表达/沉浸/运维）\n"
                 "author: bot-mindscape\nversion: 0.1.0\n")
 

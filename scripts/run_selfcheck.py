@@ -3559,7 +3559,11 @@ def check_build_fresh():
             finally:
                 BP.OUT_DIR = old
             fresh = open(os.path.join(tmp, "main.py"), "rb").read()   # OUT_DIR 已是 …/mindscape
-            if fresh == cur:
+            # 2026-10-27：比对前把 CRLF 归一 —— 否则 Windows 上构建出 CRLF、Linux 上 LF，
+            #   「产物新鲜度」会因平台不同红/绿（CI 第一次真跑就是这么挂的 ✗）
+            fresh = fresh.replace(b"\r\n", b"\n")
+            cur_n = cur.replace(b"\r\n", b"\n")
+            if fresh == cur_n:
                 ok("产物新鲜度", "重建结果与 dist 逐字节一致（%d 字节）" % len(cur))
             else:
                 bad("产物新鲜度", "重建结果与 dist 不一致 —— 改了源码没重新构建？"
