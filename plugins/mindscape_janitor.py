@@ -445,14 +445,31 @@ def jn_single_instance(lock_path=None):
     （这条是**故意**的 ✓ 别改成先删后写 ✗），而且她**确实可能**说两遍一样的话 ✓。
     所以这里只保证一件事：**同一时刻只有一个 janitor 在跑** ✓。
     """
-    import fcntl
-    path = jn_abs(lock_path or "/tmp/mindscape_janitor.lock")
+    # 2026-10-27 修（P1-5）：原来第一行就是 `import fcntl`，而且**没被 try 包住**
+    #   ⇒ Windows 上直接 ImportError 冒泡，janitor 整个跑不了
+    #   （而它是"防假死"的唯一手段 ✗）。锁路径原来写死 `/tmp`，Windows 也没这个目录 ✗
+    #   ⇒ POSIX 用 fcntl.flock / Windows 用 msvcrt.locking，都是非阻塞；路径走临时目录 ✓
+    import tempfile
+    path = jn_abs(lock_path or os.path.join(tempfile.gettempdir(), "mindscape_janitor.lock"))
+    fh = None
     try:
         fh = open(path, "w")
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return None
+        try:
+            import fcntl
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except ImportError:
+            import msvcrt
+            fh.seek(0)
+            fh.write("1")
+            fh.flush()
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
     except Exception:
+        if fh is not None:
+            try:
+                fh.close()
+            except Exception:
+                pass
         return None
     return fh          # 必须由调用方持有引用 ✓ 函数返回/进程结束才释放 ✓
 

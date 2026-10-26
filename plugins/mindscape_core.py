@@ -249,22 +249,66 @@ class IndexLock:
 
     采集插件与导入脚本会同时碰索引，没有锁的话后写的会覆盖先写的。
     拿不到锁就抛错，绝不带旧快照往下写。
+
+    ⚠️ 2026-10-27 修（P2-1）：原来锁文件只写 pid，且**崩溃后没人清理**
+      （`__exit__` 不会跑）⇒ 一次 `os._exit`/断电就让它**永久阻塞**，只能人工删 `.lock` ✗
+      ⇒ 现在锁内容写 `pid + 时间戳`；等到超时后判定**僵尸锁**：
+        pid 已不存在 **或** 时间戳超过 STALE_SECONDS ⇒ 删掉夺锁重试一次 ✓
     """
+    STALE_SECONDS = 600          # 10 分钟：正常写索引远小于这个数
 
     def __init__(self, path, timeout=5.0):
         self.lock = path + ".lock"
         self.timeout = timeout
         self.fd = None
 
+    @staticmethod
+    def _pid_alive(pid):
+        """进程还在不在（跨平台，只做「明显死了」的判断）。"""
+        if pid <= 0:
+            return False
+        try:
+            if os.name == "nt":
+                import subprocess
+                out = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid],
+                                     capture_output=True, text=True, timeout=5).stdout
+                return str(pid) in out
+            os.kill(pid, 0)
+            return True
+        except Exception:
+            return False
+
+    def _is_stale(self):
+        """pid 死了、或锁太旧 ⇒ 僵尸锁。读不出来就当作活锁（宁可等超时也不乱抢 ✓）。"""
+        import time
+        try:
+            with open(self.lock, encoding="utf-8", errors="replace") as f:
+                parts = (f.read() or "").split()
+            pid = int(parts[0]) if parts else 0
+            ts = float(parts[1]) if len(parts) > 1 else 0.0
+        except Exception:
+            return False
+        if ts and (time.time() - ts) > self.STALE_SECONDS:
+            return True
+        return not self._pid_alive(pid)
+
     def __enter__(self):
         import time
         t0 = time.time()
+        stolen = False
         while True:
             try:
                 self.fd = os.open(self.lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(self.fd, str(os.getpid()).encode())
+                os.write(self.fd, ("%d %f" % (os.getpid(), time.time())).encode())
                 return self
             except FileExistsError:
+                if not stolen and self._is_stale():
+                    stolen = True
+                    try:
+                        os.remove(self.lock)      # 接管僵尸锁（只抢一次 ✓）
+                        continue
+                    except Exception:
+                        pass
                 if time.time() - t0 > self.timeout:
                     raise RuntimeError("索引被另一个进程占用: " + self.lock)
                 time.sleep(0.2)

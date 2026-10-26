@@ -46,22 +46,66 @@ class IndexLock:
 
     采集插件与导入脚本会同时碰索引，没有锁的话后写的会覆盖先写的。
     拿不到锁就抛错，绝不带旧快照往下写。
+
+    ⚠️ 2026-10-27 修（P2-1）：原来锁文件只写 pid，且**崩溃后没人清理**
+      （`__exit__` 不会跑）⇒ 一次 `os._exit`/断电就让它**永久阻塞**，只能人工删 `.lock` ✗
+      ⇒ 现在锁内容写 `pid + 时间戳`；等到超时后判定**僵尸锁**：
+        pid 已不存在 **或** 时间戳超过 STALE_SECONDS ⇒ 删掉夺锁重试一次 ✓
     """
+    STALE_SECONDS = 600          # 10 分钟：正常写索引远小于这个数
 
     def __init__(self, path, timeout=5.0):
         self.lock = path + ".lock"
         self.timeout = timeout
         self.fd = None
 
+    @staticmethod
+    def _pid_alive(pid):
+        """进程还在不在（跨平台，只做「明显死了」的判断）。"""
+        if pid <= 0:
+            return False
+        try:
+            if os.name == "nt":
+                import subprocess
+                out = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid],
+                                     capture_output=True, text=True, timeout=5).stdout
+                return str(pid) in out
+            os.kill(pid, 0)
+            return True
+        except Exception:
+            return False
+
+    def _is_stale(self):
+        """pid 死了、或锁太旧 ⇒ 僵尸锁。读不出来就当作活锁（宁可等超时也不乱抢 ✓）。"""
+        import time
+        try:
+            with open(self.lock, encoding="utf-8", errors="replace") as f:
+                parts = (f.read() or "").split()
+            pid = int(parts[0]) if parts else 0
+            ts = float(parts[1]) if len(parts) > 1 else 0.0
+        except Exception:
+            return False
+        if ts and (time.time() - ts) > self.STALE_SECONDS:
+            return True
+        return not self._pid_alive(pid)
+
     def __enter__(self):
         import time
         t0 = time.time()
+        stolen = False
         while True:
             try:
                 self.fd = os.open(self.lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(self.fd, str(os.getpid()).encode())
+                os.write(self.fd, ("%d %f" % (os.getpid(), time.time())).encode())
                 return self
             except FileExistsError:
+                if not stolen and self._is_stale():
+                    stolen = True
+                    try:
+                        os.remove(self.lock)      # 接管僵尸锁（只抢一次 ✓）
+                        continue
+                    except Exception:
+                        pass
                 if time.time() - t0 > self.timeout:
                     raise RuntimeError("索引被另一个进程占用: " + self.lock)
                 time.sleep(0.2)
@@ -80,8 +124,30 @@ class IndexLock:
 
 
 class _PrivacyLogFilter(logging.Filter):
+    """把日志里的口令替换成 `[口令已隐去]`。
+
+    ⚠️ 2026-10-27 修（P2-2）：原来**每条日志记录**都调 `pg_redact()`，而它内部会
+      遍历每个 bot、**开文件读整份账本**、再跑 4 条正则 ⇒ 全局日志热路径变成磁盘 I/O ✗
+      （bot 越多越慢；而过滤器一旦装上就永不移除）
+    ⇒ 现在：
+      ① `privacy_gate.enabled` 为假 ⇒ **直接短路**，一次文件都不碰 ✓
+      ② 口令带 **30 秒缓存**，键 = (路径, mtime, size) ⇒ 账本没变就复用 ✓
+      ③ 只有真的命中了才改写 record（其余零副作用）
+    """
+    _CACHE_TTL = 30.0
+
     def filter(self, record):
-        message = record.getMessage()
+        try:
+            if not pg_config().get("enabled"):
+                return True
+        except Exception:
+            return True
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        if not message:
+            return True
         clean = pg_redact(message)
         if clean != message:
             record.msg = clean
@@ -400,7 +466,23 @@ PG_LINE = re.compile(r"^- 口令：([A-Za-z0-9]+) —— 24 小时内有效（�
 PG_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
-PG_ZONE = ZoneInfo("Asia/Shanghai")
+def _pg_zone():
+    """UTC+8 时区对象 —— **不许在 import 时炸**（2026-10-27 修 · P1-4）。
+
+    事故形态：原来是模块级 `PG_ZONE = ZoneInfo("Asia/Shanghai")` ⇒ 在没有 tzdata 的环境
+    （Windows 原生 Python、`python:3.12-slim`、Alpine…）**import 就抛 ZoneInfoNotFoundError**
+    ⇒ `mindscape_gate` 起不来 ⇒ 依赖它的 `mindscape_guard` 也起不来 ⇒ **整个插件加载失败** ✗
+    （实测：自检因此连带红 7 项）
+    ⇒ 现在：优先系统 tz 数据，拿不到就退成**固定 +8 偏移**
+      （本系统只用这一个时区、且中国无夏令时 ⇒ 固定偏移与 ZoneInfo 等价 ✓）
+    """
+    try:
+        return ZoneInfo("Asia/Shanghai")
+    except Exception:
+        return datetime.timezone(datetime.timedelta(hours=8), "Asia/Shanghai")
+
+
+PG_ZONE = _pg_zone()
 
 
 def pg_config():
@@ -480,16 +562,52 @@ def pg_secret_in(self_id, text):
     return bool(code and code.lower() in (text or "").lower())
 
 
-def pg_redact(text):
-    result = str(text)
+_PG_CODE_CACHE = {}          # path -> (mtime, size, code, at)
+
+
+_PG_CODE_TTL = 30.0          # 秒
+
+
+def pg_codes_fast():
+    """各 bot 的当前口令 —— 带 30 秒缓存（2026-10-27 修 · P2-2）。
+
+    为什么：`pg_redact()` 会被挂在**所有 logger 的所有 handler** 上 ⇒ 每条日志都调一次。
+    原来每次都**开文件读整份账本**、再跑正则 ⇒ 日志热路径 = 磁盘 I/O ✗（bot 越多越慢）。
+    ⇒ 这里按 (路径, mtime, size) 缓存 30 秒：账本没变就直接复用 ✓
+      （口令一天才轮换一次，30 秒的滞后对"打码"来说完全够 ✓）
+    """
+    import time
+    now = time.time()
+    codes = []
     for bot in cfg.bot_entries():
-        sid = bot.get("self_id")
-        path = pg_notes(sid)
-        if path and os.path.isfile(path):
+        path = pg_notes(bot.get("self_id"))
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            st = os.stat(path)
+        except Exception:
+            continue
+        hit = _PG_CODE_CACHE.get(path)
+        if hit and hit[0] == st.st_mtime and hit[1] == st.st_size and (now - hit[3]) < _PG_CODE_TTL:
+            if hit[2]:
+                codes.append(hit[2])
+            continue
+        code = ""
+        try:
             with open(path, encoding="utf-8") as stream:
                 code, _ = pg_current(stream.read())
-            if code:
-                result = re.sub(re.escape(code), "[口令已隐去]", result, flags=re.IGNORECASE)
+        except Exception:
+            code = ""
+        _PG_CODE_CACHE[path] = (st.st_mtime, st.st_size, code, now)
+        if code:
+            codes.append(code)
+    return codes
+
+
+def pg_redact(text):
+    result = str(text)
+    for code in pg_codes_fast():
+        result = re.sub(re.escape(code), "[口令已隐去]", result, flags=re.IGNORECASE)
     return result
 
 

@@ -1,7 +1,17 @@
 [Unit]
 Description=Rotate bot privacy gate codes
+# 2026-10-27（P1-6）：这两个路径是**部署方**的约定，装到别处要一起改
+#   · MINDSCAPE_PLUGIN_DIR 指向 plugins/（rotate 脚本靠它找 mindscape_config / mindscape_gate）
+#   · MINDSCAPE_CONFIG 指向插件实际读取的那份 config.yaml
+#   ⚠️ 两处都不能省：缺 PLUGIN_DIR 会 import 失败 ⇒ 口令永不过期且**没有任何提示** ✗
+#   ⚠️ 本文件必须是 **LF** 换行（.gitattributes 已锁 `*.service text eol=lf`）
+After=network.target
 
 [Service]
 Type=oneshot
 Environment=MINDSCAPE_CONFIG=/opt/astrbot/data/plugin_data/astrbot_plugin_mindscape/config.yaml
+Environment=MINDSCAPE_PLUGIN_DIR=/opt/mindscape/plugins
 ExecStart=/usr/bin/python3 /opt/mindscape/privacy_gate_rotate.py
+# 失败要能在 journal 里看见（rotate 会往 privacy-gate.audit.jsonl 记一条 'rotated'）
+StandardOutput=journal
+StandardError=journal

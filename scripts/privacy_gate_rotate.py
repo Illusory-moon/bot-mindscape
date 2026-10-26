@@ -5,7 +5,31 @@ import os
 import shutil
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "plugins"))
+
+def _plugin_dir():
+    """找 plugins/ 目录 —— 别再用「上两级 + plugins」硬算（2026-10-27 修 · P1-6）。
+
+    事故形态：原来写 `dirname(dirname(__file__))/plugins` ⇒ 把本脚本装到
+    `/opt/mindscape/privacy_gate_rotate.py` 时算出来是 `/plugins`（不存在）
+    ⇒ `import mindscape_config` 直接失败 ⇒ **口令永不过期**，
+      而 README 明写"每天 04:00 轮换"✗
+    ⇒ 现在按优先级试：环境变量 → 脚本同级 plugins/ → 上一级 plugins/ ✓
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    cands = []
+    env = os.environ.get("MINDSCAPE_PLUGIN_DIR")
+    if env:
+        cands.append(env)
+    cands.append(os.path.join(here, "plugins"))
+    cands.append(os.path.join(os.path.dirname(here), "plugins"))
+    for c in cands:
+        if c and os.path.isdir(c):
+            return c
+    raise RuntimeError("找不到 plugins/ 目录（试过：%s）—— 请设 MINDSCAPE_PLUGIN_DIR"
+                       % ", ".join(c or "-" for c in cands))
+
+
+sys.path.insert(0, _plugin_dir())
 import mindscape_config as cfg
 from mindscape_gate import pg_audit, pg_current, pg_notes, pg_rotate
 

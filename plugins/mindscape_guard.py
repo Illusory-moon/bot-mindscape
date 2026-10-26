@@ -287,8 +287,30 @@ def redact(text, limit=100):
 
 
 class _PrivacyLogFilter(logging.Filter):
+    """把日志里的口令替换成 `[口令已隐去]`。
+
+    ⚠️ 2026-10-27 修（P2-2）：原来**每条日志记录**都调 `pg_redact()`，而它内部会
+      遍历每个 bot、**开文件读整份账本**、再跑 4 条正则 ⇒ 全局日志热路径变成磁盘 I/O ✗
+      （bot 越多越慢；而过滤器一旦装上就永不移除）
+    ⇒ 现在：
+      ① `privacy_gate.enabled` 为假 ⇒ **直接短路**，一次文件都不碰 ✓
+      ② 口令带 **30 秒缓存**，键 = (路径, mtime, size) ⇒ 账本没变就复用 ✓
+      ③ 只有真的命中了才改写 record（其余零副作用）
+    """
+    _CACHE_TTL = 30.0
+
     def filter(self, record):
-        message = record.getMessage()
+        try:
+            if not pg_config().get("enabled"):
+                return True
+        except Exception:
+            return True
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        if not message:
+            return True
         clean = pg_redact(message)
         if clean != message:
             record.msg = clean

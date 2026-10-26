@@ -6,5 +6,10 @@
 PyYAML>=6.0        # 配置读写（plugins/ 与所有脚本都依赖）
 httpx>=0.24        # 视觉判定 / 选图请求（plugins/mindscape_stickers*.py）
 Pillow>=9.0        # 大图和动图预览（plugins/mindscape_vision.py）
+# 时区数据（2026-10-27 加）：Windows 原生 Python 不自带 tz 数据库，slim / Alpine 镜像也常缺
+# ⇒ 没有它 `ZoneInfo("Asia/Shanghai")` 会抛 ZoneInfoNotFoundError（曾导致整个插件加载失败 ✗）
+tzdata; sys_platform == "win32"
 
-# GUI 与 Web 管理台都只用标准库（tkinter / http.server），无需额外安装。
+# GUI 与 Web 管理台：页面 / HTTP 只用标准库（tkinter / http.server）✓
+# 但**远端同步 / 观测**要用 paramiko（2026-10-27 补：README 原写"零依赖"，与代码不符 ✗）
+paramiko>=3.0      # 仅在用管理台「同步到服务器」功能时需要
