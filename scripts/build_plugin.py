@@ -126,8 +126,10 @@ def main(exclude=()):
             continue
         p = os.path.join(SRC, name + ".py")
         if not os.path.exists(p):
-            print("  [跳过] " + name)
-            continue
+            # 2026-10-27 修（P2-15）：原来只打印「[跳过]」就继续，**退出码仍是 0**
+            #   ⇒ 改名/漏文件时产物静默少一层功能，而自检的"字节一致"照样通过 ✗（它比的是
+            #     同一份残缺构建）⇒ 现在直接硬错 ✓
+            raise SystemExit("[FAIL] ORDER 里的模块文件不存在：%s.py —— 改名了？还是忘了提交？" % name)
         imports, classes, others = split_module(p)
         for s in imports:
             all_imports[s.strip()] = s
@@ -150,7 +152,14 @@ def main(exclude=()):
     mixins = [m for m in MIXIN_ORDER if m in mixin_src]
     missing = [m for m in MIXIN_ORDER if m not in mixin_src]
     if missing:
-        print("  [警告] 缺少 Mixin: " + ", ".join(missing))
+        # 2026-10-27 修（P2-15）：反方向也一样致命 —— 声明了却没找到 ⇒ 那个 Mixin 的功能
+        #   整个不进基类（钩子永不注册），而产物语法完全合法 ✗ ⇒ 改成硬错 ✓
+        raise SystemExit("[FAIL] MIXIN_ORDER 里的这些 Mixin 没在源码里找到：%s" % ", ".join(missing))
+    extra = [c for c in mixin_src if c not in MIXIN_ORDER]
+    if extra:
+        # 源码有、MIXIN_ORDER 没有 ⇒ 类体进产物但不被继承 ⇒ 钩子静默失效 ✗ ⇒ 硬错 ✓
+        raise SystemExit("[FAIL] 这些 Mixin 在源码里但没登记进 MIXIN_ORDER：%s"
+                         "（不登记 = 类体进产物但不被继承，钩子永不注册）" % ", ".join(sorted(extra)))
 
     setups = "\n".join("        %s.setup(self, context)" % m for m in mixins)
     main_head = [

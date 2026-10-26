@@ -3503,6 +3503,9 @@ def pick_image(comps, image_cls, reply_cls, depth=0, max_depth=3):
     return None
 
 
+PICK_HARD_TIMEOUT = 6.0
+
+
 DEFAULT_PICK_PROMPT = (
     "你正在群聊里说话。\n\n"
     "你刚回复了这段话：\n「{reply}」\n\n"
@@ -5191,7 +5194,15 @@ class StickerUseMixin:
             if not pool:
                 return
             reply = (result.get_plain_text() or "")[:200]
-            fname = await self._pick(reply, pool)
+            # 2026-10-27 修（P2-4）：配图只是**加分项**，但它挂在 decorating 钩子里
+            #   同步等一次 LLM 调用 ⇒ 第三方 API 慢就把这条回复一起拖住（原来 timeout=90s ✗）
+            #   ⇒ 整个挑图套一个**硬上限**：超时就退回本地兜底（池里第一张），
+            #     绝不让一张表情包决定这条消息什么时候发出去 ✓
+            try:
+                fname = await asyncio.wait_for(self._pick(reply, pool), timeout=PICK_HARD_TIMEOUT)
+            except Exception:
+                fname = (pool[0] or {}).get("file") if pool else None
+                logger.info("[mindscape_sticker_use] 挑图超过 %.0fs，改用兜底图", PICK_HARD_TIMEOUT)
             if not fname:
                 return
             path = os.path.join(self.dir, fname)
@@ -5252,7 +5263,7 @@ class StickerUseMixin:
             "{reply}", reply or "（没说什么）"
         ).replace("{candidates}", chr(10).join(lines))
         try:
-            async with httpx.AsyncClient(timeout=90) as cli:
+            async with httpx.AsyncClient(timeout=5) as cli:
                 resp = await cli.post(
                     api_base + "/chat/completions",
                     headers={"Authorization": "Bearer " + key},
