@@ -15,10 +15,15 @@ import hashlib
 import html
 import json
 import os
+import re
 import secrets
 import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
+try:
+    from http.server import ThreadingHTTPServer
+except ImportError:            # 3.6 及更早没有它
+    ThreadingHTTPServer = None
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
@@ -237,6 +242,54 @@ def read_text(path, limit=None):
         return t[:limit] if limit else t
     except Exception as e:
         return "(读取失败: %s)" % str(e)[:100]
+
+
+# ── 2026-10-27（P1-1）：配置回显**打码** ───────────────────────────────────────
+# 为什么：管理台把整份 config.yaml 原文塞进页面 ⇒ 一旦被读到（DNS rebinding / 肩窥 /
+# 截图），`ui.sync.password` 这类明文口令就跟着走了 ✗
+# 但**不能只是不显示**：页面是「整份编辑 + 保存」的，少了键就等于保存时把它删掉 ✗
+# ⇒ 所以：**显示打码 + 保存时按「键名 + 缩进」换回磁盘真值** ✓
+_CFG_MASK = "***(已隐去)"
+_CFG_SENSITIVE = ("password", "passwd", "secret", "token", "api_key", "apikey",
+                  "key_file", "private_key", "access_key", "secret_key")
+_CFG_LINE_RE = re.compile(r"^(\s*)([A-Za-z0-9_\-]+)(\s*:\s*)(.*)$")
+
+
+def _cfg_sensitive_lines(text):
+    """返回 {(缩进, 键名): 原始值文本}（只收敏感键、且值非空的行）。"""
+    out = {}
+    for line in (text or "").splitlines():
+        m = _CFG_LINE_RE.match(line)
+        if m and m.group(2).lower() in _CFG_SENSITIVE and m.group(4).strip():
+            out[(len(m.group(1)), m.group(2))] = m.group(4)
+    return out
+
+
+def redact_cfg_text(text):
+    """回显用：把敏感键的值换成掩码（其余一个字节都不动）。"""
+    lines = []
+    for line in (text or "").splitlines():
+        m = _CFG_LINE_RE.match(line)
+        if m and m.group(2).lower() in _CFG_SENSITIVE and m.group(4).strip():
+            lines.append("%s%s%s%s" % (m.group(1), m.group(2), m.group(3), _CFG_MASK))
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def restore_cfg_text(new_text, old_text):
+    """保存用：把掩码按「缩进 + 键名」换回**磁盘上**的真值（找不到就原样保留）。"""
+    old = _cfg_sensitive_lines(old_text)
+    lines = []
+    for line in (new_text or "").splitlines():
+        m = _CFG_LINE_RE.match(line)
+        if m and m.group(4).strip().strip("\"'") == _CFG_MASK:
+            key = (len(m.group(1)), m.group(2))
+            if key in old:
+                lines.append("%s%s%s%s" % (m.group(1), m.group(2), m.group(3), old[key]))
+                continue
+        lines.append(line)
+    return "\n".join(lines)
 
 
 JS = r"""let TK = '@@TOKEN@@';   // 管理台重启会换令牌 ⇒ 允许替换（post 里令牌过期就自动换新 ✓）
@@ -928,7 +981,7 @@ def render():
         % ("" if r["live"] else ' class="tomb"', html.escape(r["key"], quote=True),
            html.escape(r["cat"]), html.escape(r["label"])) for r in srows
     ) or '<tr><td colspan="3" style="color:#6f6880">去重表是空的</td></tr>'
-    page = PAGE.format(config=html.escape(raw), gallery=gallery,
+    page = PAGE.format(config=html.escape(redact_cfg_text(raw)), gallery=gallery,
                        token=TOKEN, syncmsg=html.escape(syncmsg),
                        restartmsg=html.escape(restartmsg),
                        gdir=html.escape(stickers_dir()), gcount=gcount,
@@ -948,6 +1001,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        # 2026-10-27 修（P1-1 / P2-6）：管理台页面里有**整份配置原文**和令牌，
+        #   原来一个安全响应头都没有 ✗ ⇒ 被 iframe 套壳（点击劫持）、被缓存、被 Referer 带走。
+        #   这里统一补四条，零成本：
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Cache-Control", "no-store, max-age=0")
         self.end_headers()
         self.wfile.write(data)
 
@@ -975,6 +1035,13 @@ class Handler(BaseHTTPRequestHandler):
         return self.rfile.read(n).decode("utf-8", "replace")
 
     def do_GET(self):
+        # 2026-10-27 修（P1-1）：原来只有 do_POST 校验同源，**GET 完全没校验** ✗ ——
+        #   而页面里塞着整份 config.yaml 原文 + 管理令牌。默认只监听 127.0.0.1 看似安全，
+        #   但 DNS rebinding 下恶意页面可以把 evil.com:8777 解析到本机：此时浏览器发出的
+        #   `Host` 是 `evil.com:8777` ⇒ 用同一套 `_same_origin()` 就能挡掉 ✓
+        if not self._same_origin():
+            self._send(403, "拒绝跨站访问（Host/Origin 不在白名单）", "text/plain")
+            return
         path = urllib.parse.urlparse(self.path).path
         if path.startswith("/img/"):
             from mindscape_core import is_inside, load_index, safe_name
@@ -1088,13 +1155,20 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/config":
+            # 2026-10-27（P1-1）：页面里的配置**敏感键是打码的**（见 redact_cfg_text），
+            #   所以保存前必须先把掩码换回磁盘上的真值，否则一次"另存"就把口令写成 `***` ✗
+            cp = config_path()
+            try:
+                old_raw = read_text(cp) if os.path.exists(cp) else ""
+                body = restore_cfg_text(body, old_raw)
+            except Exception:
+                pass
             if yaml is not None:
                 try:
                     yaml.safe_load(body)
                 except Exception as e:
                     self._json({"ok": False, "error": "YAML 语法错误: " + str(e)[:120]})
                     return
-            cp = config_path()
             try:
                 os.makedirs(os.path.dirname(cp) or ".", exist_ok=True)
                 if os.path.exists(cp):
@@ -1187,13 +1261,31 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8777)
     ap.add_argument("--host", default="127.0.0.1")
+    # 2026-10-27（P2-6）：对外监听必须**显式**加这个开关 ⇒ 防止手滑 `--host 0.0.0.0`
+    #   把一个只有页面令牌、明文 HTTP 的管理台暴露出去 ✗
+    ap.add_argument("--allow-remote", action="store_true",
+                    help="允许监听非本机地址（对外暴露前请自己加认证/反代）")
     a = ap.parse_args()
+    if a.host not in ALLOWED_HOSTS and not a.allow_remote:
+        print("拒绝启动：--host %s 不是本机地址，且没带 --allow-remote ✗" % a.host)
+        print("        该服务只有**页面令牌**、没有传输加密；对外暴露请走反代 + 认证。")
+        return
     print("bot-mindscape 管理台: http://%s:%d" % (a.host, a.port))
     if a.host not in ALLOWED_HOSTS:
         print("警告：正在监听非本机地址 %s —— 该服务只有页面令牌，请自加认证。" % a.host)
     else:
         print("（只监听本机，写操作需要页面令牌，Ctrl+C 退出）")
-    HTTPServer((a.host, a.port), Handler).serve_forever()
+    # 2026-10-27（P2-6）：单线程 HTTPServer + 无 socket timeout ⇒ 一次远端 SFTP 卡住，
+    #   整个页面就冻死 ✗ ⇒ 换 ThreadingHTTPServer，并给每个连接 120 秒超时。
+    srv_cls = ThreadingHTTPServer if ThreadingHTTPServer else HTTPServer
+    httpd = srv_cls((a.host, a.port), Handler)
+    httpd.timeout = 120
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
 
 
 if __name__ == "__main__":

@@ -169,6 +169,43 @@ def vs_sniff_image(raw):
     return ""
 
 
+def vs_safe_remote(url):
+    """远程图 URL 的安全闸门（2026-10-27 加 · P2-5 SSRF）。
+
+    为什么：`image_urls` 里是**框架给的引用**，但引用链里可能夹着用户可控的外链
+    （引用消息、卡片图）。原样 `urlopen` 就是 SSRF —— bot 会替别人去访问内网/元数据地址 ✗
+
+    判据（全部满足才放行）：
+      · scheme 是 http/https
+      · 主机名解析出来的**每一个**地址都不是私网 / 回环 / 链路本地 / 保留段
+      · 解析不了的域名也不放行（宁可不看这张图 ✗）
+    ⚠️ 只挡"明显不对"，不做域名白名单 —— 图床/CDN 太多，白名单会误杀真图 ✓
+    """
+    import ipaddress
+    import socket
+    import urllib.parse
+    try:
+        u = urllib.parse.urlparse(str(url or ""))
+    except Exception:
+        return False
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return False
+    try:
+        infos = socket.getaddrinfo(u.hostname, None)
+    except Exception:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except Exception:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            logger.warning("[mindscape_vision] 拒绝访问非公网图地址（%s → %s）", u.hostname, ip)
+            return False
+    return True
+
+
 def vs_read_head(ref, limit=64):
     """读一个图引用的前若干字节（本地路径 / http(s) / data:base64 都认 ✓）。"""
     text = str(ref or "")
@@ -179,6 +216,8 @@ def vs_read_head(ref, limit=64):
         return base64.b64decode(payload[:96] + "=" * (-len(payload[:96]) % 4),
                                 validate=False)[:limit]
     if text.startswith(("http://", "https://")):
+        if not vs_safe_remote(text):
+            return b""
         with urllib.request.urlopen(urllib.request.Request(
                 text, headers={"User-Agent": "Mozilla/5.0"}), timeout=8) as response:
             return response.read(limit)
@@ -235,6 +274,8 @@ def vs_compact_image(ref):
     """大图只给模型传静态预览；原始消息和图片不改。"""
     try:
         if ref.startswith(("http://", "https://")):
+            if not vs_safe_remote(ref):      # 2026-10-27（P2-5）：远程引用先过 SSRF 闸门 ✓
+                return None
             with urllib.request.urlopen(urllib.request.Request(
                     ref, headers={"User-Agent": "Mozilla/5.0"}), timeout=10) as response:
                 size = int(response.headers.get("Content-Length") or 0)
