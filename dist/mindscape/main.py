@@ -4210,15 +4210,7 @@ class GuardMixin:
             if result is None:
                 return
             txt = result.get_plain_text() or ""
-            # 🔍 一次性诊断（msdiag · 排查「||| 未被拆就发出」）—— 抓完即撤 ✗
-            try:
-                if "|||" in txt:
-                    _ch = getattr(result, "chain", None)
-                    logger.warning("[msdiag] guard.block_error 看到 =%r ｜ chain=%d 段 ｜ 各段=%r",
-                                   txt[:90], len(_ch or []),
-                                   [getattr(c, "text", None) for c in (_ch or [])][:4])
-            except Exception:
-                pass
+            # （2026-10-27 已删：一次性诊断 [msdiag] —— 会把出站正文写进日志 ✗）
             if not txt.strip():
                 return
             # ⭐ 出站总整理：私有标签/思考 → `|||` 去掉 → markdown 标记扒掉 ✓
@@ -5231,22 +5223,8 @@ class FormatMixin:
             if not scope_hit(self.targets, event.get_self_id()):
                 return
             result = event.get_result()
-            # 🔍 一次性诊断（2026-10-16 排查「漏句号」）—— 纯日志、零 token，抓完即撤 ✗
-            #    目的：看清【每一轮出站】到底长什么样、走的哪种 result、
-            #          以及整形前后有没有句号（grep 标记：msdiag）
-            try:
-                _before = result.get_plain_text() if result is not None else ""
-                _tail = (result.chain[-1].__class__.__name__ if result is not None
-                         and getattr(result, "chain", None) else "-")
-                logger.warning("[msdiag] flatten_result 出站 self=%s 结果类=%s llm=%s 首类=%s 有句号=%s 原文=%s",
-                               event.get_self_id(),
-                               type(result).__name__ if result is not None else "None",
-                               getattr(result, "is_llm_result", lambda: "?")() if result is not None else "-",
-                               _tail,
-                               any(x in _before for x in ("。", "．")),
-                               _before[:200])
-            except Exception:
-                pass
+            # （2026-10-27 已删：一次性诊断 [msdiag] —— 它把**每条出站正文前 200 字**写进日志 ✗
+            #   与 trace.py「只记尺寸与耗时、不记正文」的承诺冲突；排查期已过，按原计划撤掉 ✓）
             if result is None or not result.is_llm_result():
                 return
             chain = getattr(result, "chain", None)
@@ -5263,12 +5241,6 @@ class FormatMixin:
                 new = flatten(txt, join_with, drop, short_len)
                 if no_period:
                     new = drop_period(new)
-                # 🔍 一次性诊断（msdiag · 排查「||| 未被拆就发出」）—— 抓完即撤 ✗
-                try:
-                    if "|||" in txt or new != txt:
-                        logger.warning("[msdiag] flatten_result 改写 前=%r 后=%r", txt[:70], str(new)[:70])
-                except Exception:
-                    pass
                 if new != txt:
                     comp.text = new
         except Exception as e:
@@ -5393,12 +5365,9 @@ class RescueMixin:
                     parts.append(str(m["text"]))
             if parts:
                 event.set_extra("_ms_sent_text", " ".join(parts)[:300])
-            # 🔍 一次性诊断（2026-10-16 排查「工具发话漏句号」）—— 纯日志、零 token
-            #    抓完即撤 ✗（grep 标记：msdiag）⚠️ 这里记的是**工具参数原文**（未整形）✓
-            logger.warning("[msdiag] tool=send_message_to_user self=%s 群=%s 段=%d 带句号=%s 文本=%s",
-                           event.get_self_id(), event.get_group_id() or "-", len(parts),
-                           any(p.rstrip().endswith(("。", "．")) for p in parts),
-                           (" ||| ".join(parts))[:220])
+            # （2026-10-27 已删：一次性诊断 [msdiag] —— 它把**工具参数原文**写进日志 ✗
+            #   与「日志不记正文」的承诺冲突；排查期已过，按原计划撤掉 ✓
+            #   ⚠️ 上面的 set_extra 是**功能**（抑制/去重用），不是日志，保留 ✓）
         except Exception:
             pass
 

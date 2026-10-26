@@ -25,6 +25,15 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGINS = os.path.join(HERE, "plugins")
 PASS, FAIL = [], []
 
+# 2026-10-27 修（P2-9）：Windows 控制台是 GBK，而本脚本的断言文案里有 `⇒`/`✓` 等字符
+#   ⇒ 干净环境下会直接 UnicodeEncodeError 崩掉（review 里实测崩了）✗
+#   这里把标出流改成 UTF-8 + 遇错替换，**先保住能跑完**，再谈断言对不对 ✓
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 
 def ok(name, detail=""):
     PASS.append(name)
@@ -427,9 +436,42 @@ def check_privacy():
     section("4. 脱敏扫描")
     pats = _private_names()
     if pats is None:
-        # 没有词表 ⇒ 显式记一次「跳过」✓ —— 不许静默算通过（那是假绿 ✗）
-        bad("脱敏扫描", "跳过：缺 scripts/private-names.txt（仓库只带 .example 模板）"
-                        " ⇒ 本次**没有**做脱敏扫描，别把它当成通过 ✗")
+        # 2026-10-27 修（P1-2 后半 / P2-9）：
+        #   原来缺私表就 `bad()`（红）⇒ 干净克隆上**必红**，而 README 又让新用户第一步就
+        #   跑自检 ⇒ 第一印象直接是失败 ✗；更糟的是「脱敏扫描」在公开仓里**等于不存在** ✗
+        #   现在：① 缺私表 ⇒ **不判失败**，只显式说明"私有词表跳过" ✓
+        #        ② 但**内置基线检查照跑**（长数字串 = 疑似号码、sk- 密钥）⇒ 公开仓也有防护 ✓
+        SKIP = {"run_selfcheck.py", "private-names.txt"}
+        idirs, ifiles, inames, inamed = _gitignored()
+        hits = []
+        for root, dirs, names in os.walk(HERE):
+            rel_root = os.path.relpath(root, HERE).replace("\\", "/")
+            if rel_root == ".":
+                rel_root = ""
+            dirs[:] = [d for d in dirs
+                       if d not in ("__pycache__", ".git")
+                       and d not in idirs and d not in inamed]
+            for n in names:
+                if not n.endswith((".py", ".md", ".yaml", ".json", ".txt")):
+                    continue
+                rel = (rel_root + "/" + n) if rel_root else n
+                if n in SKIP or n in inames or rel in ifiles:
+                    continue
+                fp = os.path.join(root, n)
+                try:
+                    txt = open(fp, encoding="utf-8", errors="replace").read()
+                except Exception:
+                    continue
+                for m in re.finditer(r"(?<!\d)\d{7,10}(?!\d)", txt):
+                    hits.append("%s -> 疑似号码 %s****" % (rel, m.group()[:3]))
+                if re.search(r"sk-[A-Za-z0-9]{20,}", txt):
+                    hits.append(rel + " -> APIKEY")
+        if hits:
+            for x in hits:
+                bad("泄漏（内置基线）", x)
+            return
+        ok("脱敏基线", "未发现长数字串/API key ✓（⚠️ 私有词表未提供 ⇒ **私有名字**这一类"
+                      "本次没有查；把 scripts/private-names.txt 放进来才算完整 ✓）")
         return
     SKIP = {"run_selfcheck.py", "private-names.txt"}
     idirs, ifiles, inames, inamed = _gitignored()

@@ -173,22 +173,8 @@ class FormatMixin:
             if not scope_hit(self.targets, event.get_self_id()):
                 return
             result = event.get_result()
-            # 🔍 一次性诊断（2026-10-16 排查「漏句号」）—— 纯日志、零 token，抓完即撤 ✗
-            #    目的：看清【每一轮出站】到底长什么样、走的哪种 result、
-            #          以及整形前后有没有句号（grep 标记：msdiag）
-            try:
-                _before = result.get_plain_text() if result is not None else ""
-                _tail = (result.chain[-1].__class__.__name__ if result is not None
-                         and getattr(result, "chain", None) else "-")
-                logger.warning("[msdiag] flatten_result 出站 self=%s 结果类=%s llm=%s 首类=%s 有句号=%s 原文=%s",
-                               event.get_self_id(),
-                               type(result).__name__ if result is not None else "None",
-                               getattr(result, "is_llm_result", lambda: "?")() if result is not None else "-",
-                               _tail,
-                               any(x in _before for x in ("。", "．")),
-                               _before[:200])
-            except Exception:
-                pass
+            # （2026-10-27 已删：一次性诊断 [msdiag] —— 它把**每条出站正文前 200 字**写进日志 ✗
+            #   与 trace.py「只记尺寸与耗时、不记正文」的承诺冲突；排查期已过，按原计划撤掉 ✓）
             if result is None or not result.is_llm_result():
                 return
             chain = getattr(result, "chain", None)
@@ -205,12 +191,6 @@ class FormatMixin:
                 new = flatten(txt, join_with, drop, short_len)
                 if no_period:
                     new = drop_period(new)
-                # 🔍 一次性诊断（msdiag · 排查「||| 未被拆就发出」）—— 抓完即撤 ✗
-                try:
-                    if "|||" in txt or new != txt:
-                        logger.warning("[msdiag] flatten_result 改写 前=%r 后=%r", txt[:70], str(new)[:70])
-                except Exception:
-                    pass
                 if new != txt:
                     comp.text = new
         except Exception as e:

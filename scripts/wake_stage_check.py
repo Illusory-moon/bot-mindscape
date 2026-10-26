@@ -21,7 +21,9 @@ CHECKS = [
     ("@ 名字防误判", "_by_at", "@完整名字才算叫它（防「@爱<名>的某某」误判）✓"),
     ("抽样唤醒", "sample_prob", "低概率冒泡 ✓"),
     ("唤醒原因", "wake_reason", "groupctx 靠它决定「定向性」四种情形 ✓"),
-    ("群限制", "group_restrict", "不在白名单的群整条跳过 ✓"),
+    # 2026-10-27 修（P1-8）：原来查的是 `group_restrict`，而实现里用的字段叫
+    # `restricted_groups` ⇒ 这一项**永远 MISS**（自检恒红，等于没在守）✗
+    ("群限制", "restricted_groups", "不在白名单的群整条跳过 ✓"),
     ("上下文缓冲", "group_ctx_buffer.jsonl", "未唤醒的消息也落一份给 groupctx ✓"),
     ("缓冲调用点", "_ms_record_ctx(event)", "唤醒/未唤醒两条路径都要写缓冲 ✓"),
     ("指令拦截", "_ms_is_cmd_query", "#角色面板/*<名>光锥 这类别的 bot 的指令不唤醒 ✓"),

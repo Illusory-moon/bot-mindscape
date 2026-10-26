@@ -343,15 +343,63 @@ class App:
                 "column": self._get("jan_column") or "content", "max_mb": fnum("jan_max_mb", 2.0),
             },
         }
-        # 浅层合并：保留原配置里本次未编辑的键
-        for sec, val in patch.items():
-            if sec in ("memory", "stickers", "waking", "guard", "format", "janitor", "diary"):
-                if isinstance(data.get(sec), dict) and isinstance(val, dict):
-                    data[sec].update(val)
+        # 深合并（2026-10-27 修 · P1-3 数据丢失）：
+        #   原来是 `data[sec].update(val)` = **浅合并** ⇒ `memory.bots` / `diary.targets` /
+        #   `stickers.targets` / `waking.bots` / `format.targets` 这些**列表**会被整体替换成
+        #   单元素列表 ⇒ 同容器跑两个 bot 时，保存一次就**抹掉另一个 bot** 的配置，而且没有提示 ✗
+        #   现在：按 `self_id` 逐项对齐（命中就只覆盖这次编辑到的字段），未命中的项原样保留 ✓
+        KEYED_DICT_LISTS = (("memory", "bots"), ("diary", "targets"),
+                            ("stickers", "targets"), ("waking", "bots"))
+        KEYED_STR_LISTS = (("format", "targets"), ("format", "no_period"))
+
+        def _merge_dict_list(old, new):
+            """按 self_id 合并 dict 列表：更新命中项（只覆盖 new 里出现的键）、保留其余、缺失追加。"""
+            if not isinstance(old, list):
+                return new
+            out = [dict(x) if isinstance(x, dict) else x for x in old]
+            idx = {str(x.get("self_id")): i for i, x in enumerate(out)
+                   if isinstance(x, dict) and x.get("self_id") is not None}
+            for item in (new or []):
+                if not isinstance(item, dict):
+                    continue
+                k = str(item.get("self_id"))
+                if k in idx:
+                    out[idx[k]].update(item)
                 else:
-                    data[sec] = val
-            else:
-                data[sec] = val
+                    out.append(dict(item))
+            return out
+
+        def _merge_str_list(old, new):
+            """字符串列表（如 format.targets 全是 self_id）：**并集**，原有项一个都不丢。"""
+            if not isinstance(old, list):
+                return new
+            out = [x for x in old]
+            for x in (new or []):
+                if x not in out:
+                    out.append(x)
+            return out
+
+        def _deep_merge(dst, src, path=()):
+            for k, v in src.items():
+                p = path + (k,)
+                if p in KEYED_DICT_LISTS:
+                    dst[k] = _merge_dict_list(dst.get(k), v)
+                elif p in KEYED_STR_LISTS:
+                    dst[k] = _merge_str_list(dst.get(k), v)
+                elif isinstance(v, dict) and isinstance(dst.get(k), dict):
+                    _deep_merge(dst[k], v, p)
+                else:
+                    dst[k] = v
+
+        before_bots = len((data.get("memory") or {}).get("bots") or [])
+        _deep_merge(data, patch)
+        after_bots = len((data.get("memory") or {}).get("bots") or [])
+        if after_bots < before_bots:
+            messagebox.showerror(
+                "拒绝保存",
+                "合并后 bot 数量从 %d 变成 %d —— 这会抹掉其他 bot 的配置，已中止 ✗\n"
+                "（若确实要删，请手工编辑配置文件）" % (before_bots, after_bots))
+            return
 
         target = self._path or DEFAULT_CONFIG
         try:

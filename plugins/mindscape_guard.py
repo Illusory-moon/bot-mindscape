@@ -595,15 +595,7 @@ class GuardMixin:
             if result is None:
                 return
             txt = result.get_plain_text() or ""
-            # 🔍 一次性诊断（msdiag · 排查「||| 未被拆就发出」）—— 抓完即撤 ✗
-            try:
-                if "|||" in txt:
-                    _ch = getattr(result, "chain", None)
-                    logger.warning("[msdiag] guard.block_error 看到 =%r ｜ chain=%d 段 ｜ 各段=%r",
-                                   txt[:90], len(_ch or []),
-                                   [getattr(c, "text", None) for c in (_ch or [])][:4])
-            except Exception:
-                pass
+            # （2026-10-27 已删：一次性诊断 [msdiag] —— 会把出站正文写进日志 ✗）
             if not txt.strip():
                 return
             # ⭐ 出站总整理：私有标签/思考 → `|||` 去掉 → markdown 标记扒掉 ✓

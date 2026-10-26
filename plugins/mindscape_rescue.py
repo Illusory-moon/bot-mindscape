@@ -208,12 +208,9 @@ class RescueMixin:
                     parts.append(str(m["text"]))
             if parts:
                 event.set_extra("_ms_sent_text", " ".join(parts)[:300])
-            # 🔍 一次性诊断（2026-10-16 排查「工具发话漏句号」）—— 纯日志、零 token
-            #    抓完即撤 ✗（grep 标记：msdiag）⚠️ 这里记的是**工具参数原文**（未整形）✓
-            logger.warning("[msdiag] tool=send_message_to_user self=%s 群=%s 段=%d 带句号=%s 文本=%s",
-                           event.get_self_id(), event.get_group_id() or "-", len(parts),
-                           any(p.rstrip().endswith(("。", "．")) for p in parts),
-                           (" ||| ".join(parts))[:220])
+            # （2026-10-27 已删：一次性诊断 [msdiag] —— 它把**工具参数原文**写进日志 ✗
+            #   与「日志不记正文」的承诺冲突；排查期已过，按原计划撤掉 ✓
+            #   ⚠️ 上面的 set_extra 是**功能**（抑制/去重用），不是日志，保留 ✓）
         except Exception:
             pass
 
