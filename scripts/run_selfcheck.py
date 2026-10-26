@@ -3854,7 +3854,11 @@ def main():
             if os.path.isfile(_p):
                 _extra.append(os.path.abspath(_p))
                 break
-        _CG.check(os.path.dirname(os.path.abspath(HERE)), ok, bad, section, extra_paths=_extra)
+        # 2026-10-27 修（CI 第一次真跑就抓到的）：原来传的是 `dirname(HERE)`（工作区根）
+        #   ⇒ 干净克隆里那是 clone 的**上一级**、压根没有 plugins/ ⇒ 这项直接红 ✗
+        #   而本地工作区恰好有 bot-mindscape/plugins ⇒ 本地一直假绿 ✓
+        #   ⇒ 改成传 **HERE（仓库根）**：`_sources()` 第一个就试 plugins/ ✓ 两边都对 ✓
+        _CG.check(HERE, ok, bad, section, extra_paths=_extra)
     except Exception as e:
         bad("CF 耦合冲突检测", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
