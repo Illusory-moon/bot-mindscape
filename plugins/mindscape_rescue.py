@@ -35,6 +35,7 @@
       timeout: 20
 """
 import os
+from mindscape_core import log_llm_usage
 import re
 from collections import deque
 
@@ -296,6 +297,11 @@ class RescueMixin:
             if resp.status_code != 200:
                 return ""
             _d = resp.json()
+            # 2026-10-27：直连调用补记账（原来官方照收钱、本地不记 ✗）
+            try:   # 2026-10-27：直连调用补记账（顶层 import ⇒ 合并后是全局 ✓）
+                log_llm_usage(_d, "rescue")
+            except Exception:
+                pass
             # ⚠️ 2026-10-22 主人查账：**这三处直连 provider 的调用原本一行账都不打** ✗
             #    实测（探针）：30 秒内 3 次请求，① 护栏只记到 2 条 ⇒ 漏的正是这条路 ✓
             #    ⇒ 只补**用量日志**（不改逻辑）；文案跟宿主那一套对齐，方便一起汇总 ✓

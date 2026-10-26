@@ -25,7 +25,7 @@ import re
 import urllib.request
 
 import mindscape_config as cfg
-from mindscape_core import today_cst
+from mindscape_core import log_llm_usage, today_cst
 
 HEADER_RE = re.compile(r"^##\s*(\d{4}-\d{2}-\d{2})")
 
@@ -148,6 +148,11 @@ def digest_llm(llm, date, entries, max_input_chars, max_tokens, timeout=90):
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         out = json.loads(resp.read().decode("utf-8"))
+    # 2026-10-27：直连的调用原来**一个字都不记账** ✗ ⇒ 补一行进同一个账本 ✓
+    try:   # 2026-10-27：直连调用补记账（顶层 import ⇒ 合并后是全局 ✓）
+        log_llm_usage(out, "digest")
+    except Exception:
+        pass
     txt = ((out.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     return txt.strip() or None
 

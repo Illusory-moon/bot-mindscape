@@ -7,6 +7,7 @@
 import json
 import os
 import re
+import sys
 
 DEFAULT_PROMPT = (
     "看这张图，判断它适不适合当一个「{persona}」用的表情包。\n\n"
@@ -41,6 +42,54 @@ def now_cst():
     """北京时间「现在」（naive datetime，UTC+8 硬算）。"""
     import datetime
     return datetime.datetime.utcnow() + datetime.timedelta(hours=CST_OFFSET_HOURS)
+
+
+def log_llm_usage(resp_json, sid, model_hint=""):
+    """把一次**直连** LLM 的用量写进账本（2026-10-27 加 · 对账缺口 621/1055 ✗）。
+
+    为什么要它：⑥ 的用量记账是打在容器 `openai_source.py` 上的补丁 ⇒ 只覆盖
+    **走 AstrBot provider** 的调用 ✗；而插件里有 5 处是 `httpx/urllib` **直连** DeepSeek
+    （digest / rescue / sticker_use / stickers / style）⇒ 官方照收钱、本地一个字都不记 ✗
+    （10-26 实测：官方 1055 次，本地只记得 434 次 = 41%）
+
+    做法：跟 ⑥ **同一个文件、同一套字段**（`t/model/sid/miss/hit/out/pid`）⇒ 汇总脚本不用改 ✓
+    失败一律吞掉（记账绝不能影响主流程 ✓）。
+    """
+    import json as _json
+    import os as _os
+    try:
+        u = (resp_json or {}).get("usage") or {}
+        if not u:
+            return False
+        hit = u.get("prompt_cache_hit_tokens")
+        miss = u.get("prompt_cache_miss_tokens")
+        if hit is None and miss is None:
+            # OpenAI 兼容格式：prompt_tokens 里含缓存命中部分
+            total_in = int(u.get("prompt_tokens") or 0)
+            cached = int(((u.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0)
+            hit, miss = cached, max(0, total_in - cached)
+        row = {
+            "t": now_cst().strftime("%Y-%m-%d %H:%M:%S"),
+            "model": str((resp_json or {}).get("model") or model_hint or "?"),
+            "sid": str(sid or "?"),
+            "miss": int(miss or 0),
+            "hit": int(hit or 0),
+            "out": int(u.get("completion_tokens") or 0),
+            "pid": _os.getpid(),
+        }
+        # 数据目录：合并产物里 `data_dir` 是全局 ✓；开发态走 sys.modules 里的 config ✓
+        #   ⚠️ 不写 `cfg.data_dir()` —— core 被 config 反向依赖，R17 会判"蹭别人的全局名" ✗
+        _fn = globals().get("data_dir")
+        if not callable(_fn):
+            _mod = sys.modules.get("mindscape_config")
+            _fn = getattr(_mod, "data_dir", None)
+        base = _fn() if callable(_fn) else _os.path.expanduser("~/.mindscape")
+        path = _os.path.join(base, "mindscape_usage.jsonl")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(row, ensure_ascii=False) + "\n")
+        return True
+    except Exception:
+        return False
 
 
 def today_cst():

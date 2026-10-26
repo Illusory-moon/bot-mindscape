@@ -187,6 +187,54 @@ def now_cst():
     return datetime.datetime.utcnow() + datetime.timedelta(hours=CST_OFFSET_HOURS)
 
 
+def log_llm_usage(resp_json, sid, model_hint=""):
+    """把一次**直连** LLM 的用量写进账本（2026-10-27 加 · 对账缺口 621/1055 ✗）。
+
+    为什么要它：⑥ 的用量记账是打在容器 `openai_source.py` 上的补丁 ⇒ 只覆盖
+    **走 AstrBot provider** 的调用 ✗；而插件里有 5 处是 `httpx/urllib` **直连** DeepSeek
+    （digest / rescue / sticker_use / stickers / style）⇒ 官方照收钱、本地一个字都不记 ✗
+    （10-26 实测：官方 1055 次，本地只记得 434 次 = 41%）
+
+    做法：跟 ⑥ **同一个文件、同一套字段**（`t/model/sid/miss/hit/out/pid`）⇒ 汇总脚本不用改 ✓
+    失败一律吞掉（记账绝不能影响主流程 ✓）。
+    """
+    import json as _json
+    import os as _os
+    try:
+        u = (resp_json or {}).get("usage") or {}
+        if not u:
+            return False
+        hit = u.get("prompt_cache_hit_tokens")
+        miss = u.get("prompt_cache_miss_tokens")
+        if hit is None and miss is None:
+            # OpenAI 兼容格式：prompt_tokens 里含缓存命中部分
+            total_in = int(u.get("prompt_tokens") or 0)
+            cached = int(((u.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0)
+            hit, miss = cached, max(0, total_in - cached)
+        row = {
+            "t": now_cst().strftime("%Y-%m-%d %H:%M:%S"),
+            "model": str((resp_json or {}).get("model") or model_hint or "?"),
+            "sid": str(sid or "?"),
+            "miss": int(miss or 0),
+            "hit": int(hit or 0),
+            "out": int(u.get("completion_tokens") or 0),
+            "pid": _os.getpid(),
+        }
+        # 数据目录：合并产物里 `data_dir` 是全局 ✓；开发态走 sys.modules 里的 config ✓
+        #   ⚠️ 不写 `cfg.data_dir()` —— core 被 config 反向依赖，R17 会判"蹭别人的全局名" ✗
+        _fn = globals().get("data_dir")
+        if not callable(_fn):
+            _mod = sys.modules.get("mindscape_config")
+            _fn = getattr(_mod, "data_dir", None)
+        base = _fn() if callable(_fn) else _os.path.expanduser("~/.mindscape")
+        path = _os.path.join(base, "mindscape_usage.jsonl")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(row, ensure_ascii=False) + "\n")
+        return True
+    except Exception:
+        return False
+
+
 def today_cst():
     """北京时间「今天」（date）。"""
     return now_cst().date()
@@ -5381,6 +5429,12 @@ class StickersMixin:
                 logger.warning("[mindscape_stickers] 判断 API %s", resp.status_code)
                 return None
             _d = resp.json()
+            # 2026-10-27：直连调用补记账（原来官方照收钱、本地不记 ✗）
+            #   ⚠️ 用**顶层 import** 的 log_llm_usage（函数体内 import 会被构建器漏掉 ✗）
+            try:
+                log_llm_usage(_d, "stickers")
+            except Exception:
+                pass
             # ⚠️ 2026-10-22 主人查账：**这三处直连 provider 的调用原本一行账都不打** ✗
             #    实测（探针）：30 秒内 3 次请求，① 护栏只记到 2 条 ⇒ 漏的正是这条路 ✓
             #    ⇒ 只补**用量日志**（不改逻辑）；文案跟宿主那一套对齐，方便一起汇总 ✓
@@ -5657,6 +5711,13 @@ class StickerUseMixin:
             if resp.status_code != 200:
                 return None
             _d = resp.json()
+            # 2026-10-27：直连调用补记账（原来官方照收钱、本地不记 ✗）
+            #   ⚠️ 用**顶层 import** 的 `log_llm_usage` —— 写函数体内 import 的话，
+            #   构建器只剥顶层、合并产物里没有 mindscape_core ⇒ ModuleNotFoundError ⇒ 静默失效 ✗
+            try:
+                log_llm_usage(_d, "sticker_use")
+            except Exception:
+                pass
             # ⚠️ 2026-10-22 主人查账：**这三处直连 provider 的调用原本一行账都不打** ✗
             #    实测（探针）：30 秒内 3 次请求，① 护栏只记到 2 条 ⇒ 漏的正是这条路 ✓
             #    ⇒ 只补**用量日志**（不改逻辑）；文案跟宿主那一套对齐，方便一起汇总 ✓
@@ -6111,6 +6172,11 @@ class RescueMixin:
             if resp.status_code != 200:
                 return ""
             _d = resp.json()
+            # 2026-10-27：直连调用补记账（原来官方照收钱、本地不记 ✗）
+            try:   # 2026-10-27：直连调用补记账（顶层 import ⇒ 合并后是全局 ✓）
+                log_llm_usage(_d, "rescue")
+            except Exception:
+                pass
             # ⚠️ 2026-10-22 主人查账：**这三处直连 provider 的调用原本一行账都不打** ✗
             #    实测（探针）：30 秒内 3 次请求，① 护栏只记到 2 条 ⇒ 漏的正是这条路 ✓
             #    ⇒ 只补**用量日志**（不改逻辑）；文案跟宿主那一套对齐，方便一起汇总 ✓

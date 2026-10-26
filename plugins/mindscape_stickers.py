@@ -26,7 +26,7 @@ from astrbot.core.message.components import Image
 from astrbot.core.star.filter.event_message_type import EventMessageType
 
 import mindscape_config as cfg
-from mindscape_core import (DEFAULT_PROMPT, IndexLock, abs_path, load_index,
+from mindscape_core import (DEFAULT_PROMPT, IndexLock, abs_path, load_index, log_llm_usage,
                            match_score, parse_verdict, save_index, verdict_ok)
 
 
@@ -421,6 +421,12 @@ class StickersMixin:
                 logger.warning("[mindscape_stickers] 判断 API %s", resp.status_code)
                 return None
             _d = resp.json()
+            # 2026-10-27：直连调用补记账（原来官方照收钱、本地不记 ✗）
+            #   ⚠️ 用**顶层 import** 的 log_llm_usage（函数体内 import 会被构建器漏掉 ✗）
+            try:
+                log_llm_usage(_d, "stickers")
+            except Exception:
+                pass
             # ⚠️ 2026-10-22 主人查账：**这三处直连 provider 的调用原本一行账都不打** ✗
             #    实测（探针）：30 秒内 3 次请求，① 护栏只记到 2 条 ⇒ 漏的正是这条路 ✓
             #    ⇒ 只补**用量日志**（不改逻辑）；文案跟宿主那一套对齐，方便一起汇总 ✓

@@ -23,8 +23,8 @@ from astrbot.core.message.message_event_result import MessageChain, MessageEvent
 from astrbot.core.star.filter.event_message_type import EventMessageType
 
 import mindscape_config as cfg
-from mindscape_core import (IndexLock, abs_path, is_inside, load_index, match_score,
-                           safe_name, save_index)
+from mindscape_core import (IndexLock, abs_path, is_inside, load_index, log_llm_usage,
+                           match_score, safe_name, save_index)
 
 
 # 模块级工具需要拿到 Mixin 实例（框架只传 event，不给 self）
@@ -338,6 +338,13 @@ class StickerUseMixin:
             if resp.status_code != 200:
                 return None
             _d = resp.json()
+            # 2026-10-27：直连调用补记账（原来官方照收钱、本地不记 ✗）
+            #   ⚠️ 用**顶层 import** 的 `log_llm_usage` —— 写函数体内 import 的话，
+            #   构建器只剥顶层、合并产物里没有 mindscape_core ⇒ ModuleNotFoundError ⇒ 静默失效 ✗
+            try:
+                log_llm_usage(_d, "sticker_use")
+            except Exception:
+                pass
             # ⚠️ 2026-10-22 主人查账：**这三处直连 provider 的调用原本一行账都不打** ✗
             #    实测（探针）：30 秒内 3 次请求，① 护栏只记到 2 条 ⇒ 漏的正是这条路 ✓
             #    ⇒ 只补**用量日志**（不改逻辑）；文案跟宿主那一套对齐，方便一起汇总 ✓

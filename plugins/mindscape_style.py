@@ -21,6 +21,7 @@ import re
 import urllib.request
 
 import mindscape_config as cfg
+from mindscape_core import log_llm_usage
 from mindscape_digest import dg_abs, sample_lines
 
 # 只有这三类是「怎么说」；兴趣 / 值得记的 属于事实，刻意排除
@@ -150,8 +151,13 @@ def sc_llm(llm, lines, max_input_chars, max_tokens, timeout=120):
         data=body,
         headers={"Content-Type": "application/json", "Authorization": "Bearer " + key},
     )
+    # 2026-10-27：直连调用原来**不记账** ✗ ⇒ 拿到响应后补一行（同一账本、同一套字段 ✓）
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         out = json.loads(resp.read().decode("utf-8"))
+    try:
+        log_llm_usage(out, "style")     # 顶层 import（函数体内 import 会被构建器漏掉 ✗）
+    except Exception:
+        pass
     txt = ((out.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     return txt.strip() or None
 
