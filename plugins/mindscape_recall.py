@@ -460,13 +460,21 @@ async def lookup_knowledge(*args, **kwargs):
 
     want = str(kwargs.get("which") or "").strip()
     blocks, names = [], []
+    # ⚠️ 2026-10-29 实测：她给 kw=「言灵 寓言集其三 台词」⇒ 命中 5 份 / 8 段，
+    #    目标那份《千星纪游PV》排在**最后** ⇒ 被噪音埋住，她答「没存货」✗
+    #    ⇒ 多份命中时：① **最相关的排最前** ② **每份只给最优 1 段**（降噪 ✓）
+    picked = []
     for d in docs:
         if want and want not in d["name"]:
             continue
         hits, total = rc_search_sections(d["path"], kw)
         if hits:
-            names.append(d["name"])
-            blocks.extend(hits)
+            picked.append((d["name"], hits))
+    multi = len(picked) > 1
+    picked.sort(key=lambda x: -sum(len(h) for h in x[1]))
+    for name, hits in picked:
+        names.append(name)
+        blocks.extend(hits[:1] if multi else hits)
     try:
         logger.info("[mindscape_recall] lookup_knowledge | bot=%s | kw=%s | which=%s | 资料=%d | 命中份=%d | 段=%d",
                     sid or "?", kw[:40], want[:20] or "-", len(docs), len(names), len(blocks))
