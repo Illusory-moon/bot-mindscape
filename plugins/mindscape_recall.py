@@ -382,7 +382,7 @@ def rc_sections(text):
     return [s for s in secs if s]
 
 
-def rc_search_sections(path, keyword, limit=3, max_chars=2000):
+def rc_search_sections(path, keyword, limit=3, max_chars=8000):
     """在结构化文档里按【段落】检索 —— 问到某个主题就给整段，不是散落的几行。"""
     if not path or not os.path.exists(path):
         return [], 0
@@ -401,9 +401,32 @@ def rc_search_sections(path, keyword, limit=3, max_chars=2000):
         if hit:
             scored.append((hit, -len(s), s))
     scored.sort(key=lambda x: (-x[0], x[1]))
-    out, used = [], 0
+    out, used, dropped = [], 0, 0
     for _, _, s in scored:
+        if used + len(s) <= max_chars:
+            out.append(s)
+            used += len(s)
+            if len(out) >= limit:
+                break
+            continue
+        if not out:
+            # ⚠️ 2026-10-29 实测：第一节自己就超过上限时，**截断但要告诉她后面还有** ✓
+            #    （原来直接 break ⇒ 后面的小节全被丢掉 ⇒ 她答「资料里没给」✗）
+            cut = s[:max_chars]
+            out.append(cut + "\n\n（**这一节还有 %d 字没给出** —— 想看得更细，"
+                            "换个更具体的关键词再查一次）" % (len(s) - max_chars))
+            used = max_chars
+            dropped += 1
+            break
         if out and used + len(s) > max_chars:
+            # ⚠️ 2026-10-29 实测：这里原来是**静默 break** ✗ ——
+            #    第一段自己就超过上限时，后面所有段全被丢掉 ⇒ 她答「资料里没给」✗
+            dropped = len(scored) - len(out)
+            try:
+                logger.info("[mindscape_recall] 段落超出上限被截掉 | 已给=%d 段 | 丢掉=%d 段 | 上限=%d 字",
+                            len(out), dropped, max_chars)
+            except Exception:
+                pass
             break
         out.append(s)
         used += len(s)
