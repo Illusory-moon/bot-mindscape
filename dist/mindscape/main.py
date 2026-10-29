@@ -1175,6 +1175,29 @@ def strip_md_marks(text):
     return out, n
 
 
+JSON_TAIL_OBJ = re.compile(r"[，,、；;]?\s*\{[^{}]{0,500}\}\s*$")
+
+
+JSON_TAIL_BRACE = re.compile(r"[，,、；;]?\s*[}｝]\s*$")
+
+
+def strip_json_junk(text):
+    """扒掉出站文本**尾部**的 JSON 残渣 ⇒ 返回 (新文本, 改了几处) ✓"""
+    if not isinstance(text, str) or not text:
+        return text, 0
+    out, n = text, 0
+    for _ in range(3):
+        before = out
+        out = JSON_TAIL_OBJ.sub("", out)
+        out = JSON_TAIL_BRACE.sub("", out)
+        if out == before:
+            break
+        n += 1
+    if n:
+        logger.warning("[mindscape_guard] 扒掉出站尾部 JSON 残渣，原尾部：%r", text[-40:])
+    return out.rstrip(), n
+
+
 def normalize_outbound(text):
     """出站总整理：**私有标签/思考** → **`|||` 去掉** → **markdown 标记扒掉** ✓
 
@@ -1195,6 +1218,11 @@ def normalize_outbound(text):
         hits += 1
     out, _n2 = strip_md_marks(out)
     hits += _n2
+    out, _n3 = strip_json_junk(out)
+    hits += _n3
+    if "|" in out:                       # 孤立竖线：先只观测（可能是 ||| 被吃掉两个剩的）
+        logger.warning("[mindscape_guard] 出站仍有孤立竖线 %d 个（只观测不改）：%r",
+                       out.count("|"), out[:60])
     return out, hits
 
 
@@ -2504,6 +2532,12 @@ async def recall_memory(*args, **kwargs):
         sid = str(ev.get_self_id()) if ev is not None else ""
     except Exception:
         sid = ""
+    # 记一笔「这一轮真的调过工具」✓（给文件末尾的"声称查过"观测用）
+    try:
+        RC_LOOKED["%s|%s" % (sid, str(getattr(ev, "get_group_id", lambda: "")() or ""))] = (
+            time.time(), id(ev))
+    except Exception:
+        pass
     path = _diary_for(sid)
     # 日记 + 发言档案（她自己以前说过的话）一起翻 ——
     # 会话里只留最近几条，所以「我上次说过什么」必须来档案里找 ✓。
@@ -2690,8 +2724,62 @@ async def lookup_knowledge(*args, **kwargs):
                 "换个更贴的说法再查一次；如果还是没有，就老实说这块你不清楚，"
                 "不要凭印象编。" % ("、".join(d["name"] for d in docs), kw))
     head = "【资料原文 · %s】用你自己的口吻讲，别照念：\n\n" % "、".join(names)
-    tail = "\n\n（以上是资料，讲的时候不要提「资料」「文档」这些词。）"
+    tail = ("\n\n（以上是资料，讲的时候不要提「资料」「文档」这些词。）"
+            "\n（本次返回 %d 段 · 共 %d 字；不够就换个更贴的说法再查一次 —— "
+            "别把「没读到」说成「没有」。）" % (len(blocks), sum(len(b) for b in blocks)))
     return head + "\n\n".join(blocks) + tail
+
+
+RC_LOOKED = {}           # 会话键 → (时间戳, event id)
+
+
+RC_CLAIM_RE = re.compile(r"我查过|我翻过|翻过了|查过资料|看过资料|查了资料|我查了一下|我去查了")
+
+
+RC_CLAIM_SEEN = set()
+
+
+def rc_text_of(result):
+    """从结果链里拼纯文本 ✓"""
+    parts = []
+    for c in (getattr(result, "chain", None) or []):
+        txt = getattr(c, "text", None)
+        if isinstance(txt, str) and txt:
+            parts.append(txt)
+    return "".join(parts)
+
+
+@filter.on_decorating_result(priority=-6)
+async def rc_claim_hook(*args, **kwargs):
+    """正文声称查过资料，但这一轮没调 lookup_knowledge ⇒ 记一条告警（**不改文本**）✓"""
+    try:
+        event = None
+        for a in args:
+            if hasattr(a, "get_self_id"):
+                event = a
+                break
+        if event is None:
+            return
+        res = event.get_result()
+        if res is None:
+            return
+        hit = RC_CLAIM_RE.search(rc_text_of(res))
+        if not hit:
+            return
+        sid = str(event.get_self_id())
+        key = "%s|%s" % (sid, str(getattr(event, "get_group_id", lambda: "")() or ""))
+        looked = RC_LOOKED.get(key)
+        if looked and (looked[1] == id(event) or time.time() - looked[0] < 180):
+            return                                   # 本轮/近 3 分钟真查过 ⇒ 正常 ✓
+        mid = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
+        if mid and mid in RC_CLAIM_SEEN:
+            return
+        if mid:
+            RC_CLAIM_SEEN.add(mid)
+        logger.warning("[mindscape_recall] 正文声称查过资料，但本轮没调 lookup_knowledge | bot=%s | 命中=%s",
+                       sid, hit.group(0))
+    except Exception as e:
+        logger.debug("[mindscape_recall] 声称查过观测异常: %s", str(e)[:80])
 
 
 # ==== from plugins/mindscape_notes.py ====

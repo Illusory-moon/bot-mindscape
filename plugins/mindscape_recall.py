@@ -6,9 +6,11 @@
 """
 import os
 import re
+import time
 from collections import deque
 
 from astrbot.api import llm_tool, logger
+from astrbot.api.event import filter
 
 import mindscape_config as cfg
 
@@ -283,6 +285,12 @@ async def recall_memory(*args, **kwargs):
         sid = str(ev.get_self_id()) if ev is not None else ""
     except Exception:
         sid = ""
+    # 记一笔「这一轮真的调过工具」✓（给文件末尾的"声称查过"观测用）
+    try:
+        RC_LOOKED["%s|%s" % (sid, str(getattr(ev, "get_group_id", lambda: "")() or ""))] = (
+            time.time(), id(ev))
+    except Exception:
+        pass
     path = _diary_for(sid)
     # 日记 + 发言档案（她自己以前说过的话）一起翻 ——
     # 会话里只留最近几条，所以「我上次说过什么」必须来档案里找 ✓。
@@ -469,5 +477,59 @@ async def lookup_knowledge(*args, **kwargs):
                 "换个更贴的说法再查一次；如果还是没有，就老实说这块你不清楚，"
                 "不要凭印象编。" % ("、".join(d["name"] for d in docs), kw))
     head = "【资料原文 · %s】用你自己的口吻讲，别照念：\n\n" % "、".join(names)
-    tail = "\n\n（以上是资料，讲的时候不要提「资料」「文档」这些词。）"
+    tail = ("\n\n（以上是资料，讲的时候不要提「资料」「文档」这些词。）"
+            "\n（本次返回 %d 段 · 共 %d 字；不够就换个更贴的说法再查一次 —— "
+            "别把「没读到」说成「没有」。）" % (len(blocks), sum(len(b) for b in blocks)))
     return head + "\n\n".join(blocks) + tail
+
+
+# ── 观测：有没有「声称查过、其实没查」 ────────────────────────────────
+# 2026-10-29 实况 ✗：她说「我翻过了~……伊德莉拉的名字我一次都没见着」，
+#   但那一轮日志里**一条 lookup_knowledge 都没有** —— 她把 40 分钟前那次查询记成了「本轮」✗
+# 口径：**只记告警、不改文本** ✓（先测出事实，再决定要不要动嘴 ✗）
+RC_LOOKED = {}           # 会话键 → (时间戳, event id)
+RC_CLAIM_RE = re.compile(r"我查过|我翻过|翻过了|查过资料|看过资料|查了资料|我查了一下|我去查了")
+RC_CLAIM_SEEN = set()
+
+
+def rc_text_of(result):
+    """从结果链里拼纯文本 ✓"""
+    parts = []
+    for c in (getattr(result, "chain", None) or []):
+        txt = getattr(c, "text", None)
+        if isinstance(txt, str) and txt:
+            parts.append(txt)
+    return "".join(parts)
+
+
+@filter.on_decorating_result(priority=-6)
+async def rc_claim_hook(*args, **kwargs):
+    """正文声称查过资料，但这一轮没调 lookup_knowledge ⇒ 记一条告警（**不改文本**）✓"""
+    try:
+        event = None
+        for a in args:
+            if hasattr(a, "get_self_id"):
+                event = a
+                break
+        if event is None:
+            return
+        res = event.get_result()
+        if res is None:
+            return
+        hit = RC_CLAIM_RE.search(rc_text_of(res))
+        if not hit:
+            return
+        sid = str(event.get_self_id())
+        key = "%s|%s" % (sid, str(getattr(event, "get_group_id", lambda: "")() or ""))
+        looked = RC_LOOKED.get(key)
+        if looked and (looked[1] == id(event) or time.time() - looked[0] < 180):
+            return                                   # 本轮/近 3 分钟真查过 ⇒ 正常 ✓
+        mid = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
+        if mid and mid in RC_CLAIM_SEEN:
+            return
+        if mid:
+            RC_CLAIM_SEEN.add(mid)
+        logger.warning("[mindscape_recall] 正文声称查过资料，但本轮没调 lookup_knowledge | bot=%s | 命中=%s",
+                       sid, hit.group(0))
+    except Exception as e:
+        logger.debug("[mindscape_recall] 声称查过观测异常: %s", str(e)[:80])

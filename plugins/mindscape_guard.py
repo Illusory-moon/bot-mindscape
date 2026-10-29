@@ -214,6 +214,30 @@ def strip_md_marks(text):
     return out, n
 
 
+# ── 出站残渣：JSON 尾巴（2026-10-29 ⚠️）─────────────────────────────
+# 事故形态：她发「…去问他要出处~，}」 —— 结尾多出一个 `，}`，像工具参数 JSON 的尾巴 ✗
+# 判据：**只有"明显是残渣"的形状才删** ✓ —— 正文里正常的括号、花括号一律不碰 ✗
+JSON_TAIL_OBJ = re.compile(r"[，,、；;]?\s*\{[^{}]{0,500}\}\s*$")
+JSON_TAIL_BRACE = re.compile(r"[，,、；;]?\s*[}｝]\s*$")
+
+
+def strip_json_junk(text):
+    """扒掉出站文本**尾部**的 JSON 残渣 ⇒ 返回 (新文本, 改了几处) ✓"""
+    if not isinstance(text, str) or not text:
+        return text, 0
+    out, n = text, 0
+    for _ in range(3):
+        before = out
+        out = JSON_TAIL_OBJ.sub("", out)
+        out = JSON_TAIL_BRACE.sub("", out)
+        if out == before:
+            break
+        n += 1
+    if n:
+        logger.warning("[mindscape_guard] 扒掉出站尾部 JSON 残渣，原尾部：%r", text[-40:])
+    return out.rstrip(), n
+
+
 def normalize_outbound(text):
     """出站总整理：**私有标签/思考** → **`|||` 去掉** → **markdown 标记扒掉** ✓
 
@@ -234,6 +258,11 @@ def normalize_outbound(text):
         hits += 1
     out, _n2 = strip_md_marks(out)
     hits += _n2
+    out, _n3 = strip_json_junk(out)
+    hits += _n3
+    if "|" in out:                       # 孤立竖线：先只观测（可能是 ||| 被吃掉两个剩的）
+        logger.warning("[mindscape_guard] 出站仍有孤立竖线 %d 个（只观测不改）：%r",
+                       out.count("|"), out[:60])
     return out, hits
 
 
