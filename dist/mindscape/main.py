@@ -2386,7 +2386,7 @@ def search_diary(path, keyword, limit=DEFAULT_LIMIT, scan_lines=SCAN_LINE_CAP,
     """
     paths = [path] if isinstance(path, str) else list(path or [])
     if not paths:
-        return [], 0
+        return [], 0, (0, 0)
     terms = split_terms(keyword)
     if not terms:
         return [], 0
@@ -2630,7 +2630,12 @@ def rc_sections(text):
 
 
 def rc_search_sections(path, keyword, limit=3, max_chars=8000):
-    """在结构化文档里按【段落】检索 —— 问到某个主题就给整段，不是散落的几行。"""
+    """在结构化文档里按【段落】检索 —— 问到某个主题就给整段，不是散落的几行。
+
+    返回 (段落列表, 总段数, 最佳分)。**最佳分 = (标题有没有命中, 正文命中几个词)** ✓
+    ⚠️ 2026-10-29：标题必须加权 —— 否则「4.2」这种词在 4.1 节里（`4.2-03` 交叉引用）
+    也会命中，再按"段长"排序就会把 4.1 排到 4.2 前面 ✗
+    """
     if not path or not os.path.exists(path):
         return [], 0
     try:
@@ -2640,16 +2645,20 @@ def rc_search_sections(path, keyword, limit=3, max_chars=8000):
         return [], 0
     terms = split_terms(keyword)
     if not terms:
-        return [], len(secs)
+        return [], len(secs), (0, 0)
     scored = []
     for s in secs:
         low = s.lower()
         hit = sum(1 for t in terms if t in low)
-        if hit:
-            scored.append((hit, -len(s), s))
-    scored.sort(key=lambda x: (-x[0], x[1]))
+        if not hit:
+            continue
+        head = s.splitlines()[0].lower() if s else ""
+        head_hit = 1 if any(t in head for t in terms) else 0
+        scored.append((head_hit, hit, -len(s), s))
+    scored.sort(key=lambda x: (-x[0], -x[1], x[2]))
+    best = (scored[0][0], scored[0][1]) if scored else (0, 0)
     out, used, dropped = [], 0, 0
-    for _, _, s in scored:
+    for _, _, _, s in scored:
         if used + len(s) <= max_chars:
             out.append(s)
             used += len(s)
@@ -2679,7 +2688,7 @@ def rc_search_sections(path, keyword, limit=3, max_chars=8000):
         used += len(s)
         if len(out) >= limit:
             break
-    return out, len(secs)
+    return out, len(secs), best
 
 
 @llm_tool(name="lookup_knowledge")
@@ -2737,12 +2746,16 @@ async def lookup_knowledge(*args, **kwargs):
     for d in docs:
         if want and want not in d["name"]:
             continue
-        hits, total = rc_search_sections(d["path"], kw)
+        hits, total, score = rc_search_sections(d["path"], kw)
         if hits:
-            picked.append((d["name"], hits))
+            picked.append((score, d["name"], hits))
     multi = len(picked) > 1
-    picked.sort(key=lambda x: -sum(len(h) for h in x[1]))
-    for name, hits in picked:
+    # ⚠️ 2026-10-29 实测：原来按"段长"排 ⇒ 4.1（更长）压过 4.2 ⇒ 她讲错版本 ✗
+    #    ⇒ 先看**标题命中**，再看命中词数，最后才看长度；并且多份命中只给最相关 3 份（降噪）
+    picked.sort(key=lambda x: (-x[0][0], -x[0][1], -sum(len(h) for h in x[2])))
+    if multi:
+        picked = picked[:3]
+    for _score, name, hits in picked:
         names.append(name)
         blocks.extend(hits[:1] if multi else hits)
     try:
