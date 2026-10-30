@@ -508,9 +508,16 @@ async def lookup_knowledge(*args, **kwargs):
     picked.sort(key=lambda x: (-x[0][0], -x[0][1], -sum(len(h) for h in x[2])))
     if multi:
         picked = picked[:3]
-    for _score, name, hits in picked:
+    for _idx, (_score, name, hits) in enumerate(picked):
         names.append(name)
-        blocks.extend(hits[:1] if multi else hits)
+        if not multi:
+            blocks.extend(hits)
+        elif _idx == 0:
+            # ⚠️ 2026-10-30 实测：最相关那份的"最佳段"可能只是**标题+前言**（几百字），
+            #    正文干货在下一段 ⇒ 第一名给 2 段 ✓（其余仍 1 段，防噪音）
+            blocks.extend(hits[:2])
+        else:
+            blocks.extend(hits[:1])
     try:
         logger.info("[mindscape_recall] lookup_knowledge | bot=%s | kw=%s | which=%s | 资料=%d | 命中份=%d | 段=%d",
                     sid or "?", kw[:40], want[:20] or "-", len(docs), len(names), len(blocks))
