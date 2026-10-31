@@ -4541,6 +4541,89 @@ def vc_synth(conf, text):
     if os.path.getsize(out) < 1024:
         return None
     return out
+
+
+# ==== from plugins/mindscape_bubble.py ====
+
+
+SECTION = "bubble"
+
+
+DEFAULT_NOTE = (
+    "现在没有人给你发消息，也没有人在等你回话 —— 是你自己想冒个泡。"
+    "可以不说，也可以只说半句，两个都对。"
+    "想说什么都行：手上正干着的事、刚冒出来的一个念头、突然想起的东西，或者一句「今天有点想说话」。"
+    "不用有由头，不用有意义。"
+    "说的时候：短、随口，像平时在群里打字那样，别写小作文；不要接别人的话、不要回答谁、不要问问题等人接；"
+    "不要解释你为什么出现，别用「冒泡」「定时」「任务」「系统」这类词；"
+    "**同一类事别反复说**（尤其别每次都拿同一件小事当由头）—— 换个说法、换个念头。"
+    "想发图就用 send_sticker，想说话就用 send_message_to_user。"
+)
+
+
+def bb_conf():
+    try:
+        return cfg.section(SECTION) or {}
+    except Exception:
+        return {}
+
+
+def bb_sync(db=None, note=None, targets=None):
+    """把模板同步进冒泡任务的 note。返回 (扫到几个, 改了几个)。
+
+    ⚠️ 只改 `payload.note`；`session` / `gate` / `self_id` 等**原样保留** ✗
+    """
+    c = bb_conf()
+    if db is None:
+        db = str(c.get("db") or "")
+    if note is None:
+        note = str(c.get("note") or "").strip() or DEFAULT_NOTE
+    if targets is None:
+        targets = {str(x) for x in (c.get("targets") or [])}
+    else:
+        targets = {str(x) for x in targets}
+    if not db or not os.path.exists(db) or not targets:
+        return 0, 0
+
+    seen, changed = 0, 0
+    try:
+        con = sqlite3.connect(db, timeout=10)
+    except Exception as e:
+        logger.warning("[mindscape_bubble] 连不上库 %s: %s", db, str(e)[:80])
+        return 0, 0
+    try:
+        try:
+            rows = con.execute("select job_id, payload from cron_jobs").fetchall()
+        except Exception as e:
+            logger.warning("[mindscape_bubble] 读 cron_jobs 失败（表不存在？）: %s", str(e)[:80])
+            return 0, 0
+        for job_id, payload in rows:
+            try:
+                d = json.loads(payload or "{}")
+            except Exception:
+                continue
+            if not isinstance(d, dict):
+                continue
+            if str(d.get("self_id") or "") not in targets:
+                continue
+            seen += 1
+            if str(d.get("note") or "") == note:
+                continue
+            d["note"] = note
+            try:
+                con.execute("update cron_jobs set payload=? where job_id=?",
+                            (json.dumps(d, ensure_ascii=False), job_id))
+                changed += 1
+            except Exception as e:
+                logger.warning("[mindscape_bubble] 写 %s 失败: %s", str(job_id)[:20], str(e)[:80])
+        if changed:
+            con.commit()
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+    return seen, changed
 # ==================================================================
 # 命名空间：让 cfg.xxx() / core.xxx() 这类调用在合并后依然可用
 # ==================================================================
@@ -6705,10 +6788,33 @@ class VoiceMixin:
         except Exception as e:
             logger.warning("[mindscape_voice] 构造结果失败: %s", str(e)[:120])
             return "发语音失败 —— 还是用文字说吧"
+
+
+# ==== from plugins/BubbleMixin.py ====
+class BubbleMixin:
+    """启动时把「冒泡提示词」同步成 config 里那一份（幂等）。"""
+
+    def setup(self, context):
+        c = bb_conf()
+        self.bb_on = c.get("enabled") is not False
+        logger.info("[mindscape_bubble] loaded | enabled=%s | targets=%d 个",
+                    self.bb_on, len(c.get("targets") or []))
+
+    @filter.on_astrbot_loaded()
+    async def bb_sync_on_load(self, *args, **kwargs):
+        try:
+            c = bb_conf()
+            if c.get("enabled") is False:
+                logger.info("[mindscape_bubble] 已在配置里关掉，跳过同步")
+                return
+            seen, changed = bb_sync()
+            logger.info("[mindscape_bubble] 冒泡提示词同步：扫到 %d 个任务，改了 %d 个", seen, changed)
+        except Exception as e:
+            logger.warning("[mindscape_bubble] 同步异常: %s", str(e)[:120])
 # ==================================================================
 # 插件入口：把所有 Mixin 的钩子收进同一个类
 # ==================================================================
-class MindscapePlugin(GroupctxMixin, BlockMixin, GuardMixin, SilenceMixin, VisionMixin, MemoryMixin, PrivacyMixin, StickersMixin, StickerUseMixin, FormatMixin, TraceMixin, RescueMixin, MentionMixin, ToolscopeMixin, VoiceMixin, star.Star):
+class MindscapePlugin(GroupctxMixin, BlockMixin, GuardMixin, SilenceMixin, VisionMixin, MemoryMixin, PrivacyMixin, StickersMixin, StickerUseMixin, FormatMixin, TraceMixin, RescueMixin, MentionMixin, ToolscopeMixin, VoiceMixin, BubbleMixin, star.Star):
     def __init__(self, context):
         self.context = context
         self.name = "mindscape"
@@ -6728,4 +6834,5 @@ class MindscapePlugin(GroupctxMixin, BlockMixin, GuardMixin, SilenceMixin, Visio
         MentionMixin.setup(self, context)
         ToolscopeMixin.setup(self, context)
         VoiceMixin.setup(self, context)
-        logger.info("[mindscape] 插件已加载（15 个模块）")
+        BubbleMixin.setup(self, context)
+        logger.info("[mindscape] 插件已加载（16 个模块）")
