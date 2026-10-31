@@ -30,7 +30,7 @@ from astrbot.api.event import filter
 
 import mindscape_config as cfg
 
-SECTION = "bubble"
+BB_SECTION = "bubble"
 
 # 兜底模板（config 没写 note 时用它，免得同步成空字符串）
 DEFAULT_NOTE = (
@@ -47,7 +47,7 @@ DEFAULT_NOTE = (
 
 def bb_conf():
     try:
-        return cfg.section(SECTION) or {}
+        return cfg.section(BB_SECTION) or {}
     except Exception:
         return {}
 

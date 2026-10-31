@@ -16,6 +16,7 @@ import datetime
 import hashlib
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -153,6 +154,17 @@ class VoiceMixin:
     def setup(self, context):
         try:
             self.v_cfg = vcfg()
+            # 诊断（2026-10-31）：线上出现"有配置但说缺 api_base"，先把它读的**是哪份**打出来
+            try:
+                import os as _os
+                _p = cfg.config_path()
+                _mt = time.strftime("%m-%d %H:%M", time.localtime(_os.path.getmtime(_p))) \
+                    if _os.path.exists(_p) else "不存在"
+                logger.info("[mindscape_voice] 配置来源 | path=%s | mtime=%s | api_base=%s | voice_id=%s",
+                            _p, _mt, bool(str(self.v_cfg.get("api_base") or "").strip()),
+                            bool(str(self.v_cfg.get("voice_id") or "").strip()))
+            except Exception as _e:
+                logger.warning("[mindscape_voice] 诊断失败: %s", str(_e)[:80])
             logger.info("[mindscape_voice] loaded | enabled=%s targets=%s 只私聊=%s 上限=%s字",
                         bool(self.v_cfg.get("enabled")),
                         self.v_cfg.get("targets") or [],

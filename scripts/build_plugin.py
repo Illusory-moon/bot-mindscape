@@ -15,6 +15,7 @@
 """
 import ast
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -56,6 +57,29 @@ MIXIN_ORDER = ["GroupctxMixin", "BlockMixin", "GuardMixin", "SilenceMixin", "Vis
                "MemoryMixin", "PrivacyMixin", "StickersMixin", "StickerUseMixin",
                "FormatMixin", "TraceMixin", "RescueMixin",
                "MentionMixin", "ToolscopeMixin", "VoiceMixin", "BubbleMixin"]
+
+
+def _check_global_collision(sources):
+    """⚠️ 合并成单文件后，**模块级同名常量会互相覆盖** ✗
+
+    2026-10-31 真事故：新模块写了 `SECTION = "bubble"`，把 voice 模块的
+    `SECTION = "voice"` 盖掉了 ⇒ 语音模块从此读的是 bubble 段 ⇒「缺 api_base / voice_id」✗
+    合并产物里没有任何报错，只在运行时的日志里露出一句意思不明的话 ✗
+    ⇒ 所以**在构建期拦**：同一个模块级名字出现在两个模块里就直接失败 ✓
+    """
+    names = {}
+    pat = re.compile(r"^([A-Z][A-Z0-9_]*) = ", re.M)
+    for mod, src in sources.items():
+        for m in pat.finditer(src):
+            names.setdefault(m.group(1), []).append(mod)
+    bad = {k: v for k, v in names.items() if len(v) > 1}
+    if bad:
+        raise SystemExit(
+            "[FAIL] 这些模块级常量在多个模块里重名，合并后会互相覆盖 ✗：\n"
+            + "\n".join("  %-16s %s" % (k, ", ".join(v)) for k, v in sorted(bad.items()))
+            + "\n     改法：给每个模块的常量加前缀（如 BB_SECTION / MN_TIMEOUT）✓"
+        )
+    return len(names)
 
 
 def _seg(src_lines, node):
@@ -140,6 +164,15 @@ def main(exclude=()):
     mixin_mod = {}          # Mixin 类名 → 所在模块名（P2-16：校验两套顺序是否一致用）
     plain_classes = []
     other_src = []
+
+    _srcs = {}
+    for name in ORDER:
+        _p = os.path.join(SRC, name + ".py")
+        if os.path.exists(_p):
+            with open(_p, encoding="utf-8") as _f:
+                _srcs[name] = _f.read()
+    n_const = _check_global_collision(_srcs)
+    print("  模块级常量：%d 个，无重名 ✓" % n_const)
 
     for name in ORDER:
         if name in exclude:
