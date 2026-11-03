@@ -1304,6 +1304,35 @@ def ms_chain_text(message):
     return "".join(parts)
 
 
+def ms_chain_clean_plain(message):
+    """把 MessageChain 里**每个文本组件**过一遍 normalize_outbound（就地改，返回改了几处）。
+
+    ⚠️ 只碰 Plain（有 .text 的组件），At / Image / 表情一律不动 ✗
+    ⚠️ 为什么必须在 send 级做：`say_lines` 走的是 `ev.send(chain)`，
+       **不经过结果管线** ⇒ decorating 钩子上的整理**看不到它** ✗
+       （2026-11-03 真事故：模型把 `|||` 写进单条 line 里 ⇒ 原样进群 ✗）
+    """
+    if isinstance(message, str):
+        new, n = normalize_outbound(message)
+        return new, n
+    total = 0
+    for c in (getattr(message, "chain", None) or []):
+        txt = getattr(c, "text", None)
+        if not isinstance(txt, str) or not txt:
+            continue
+        try:
+            new, n = normalize_outbound(txt)
+        except Exception:
+            continue
+        if n and new != txt:
+            try:
+                c.text = new          # 就地改：Plain 是可变的
+                total += n
+            except Exception:
+                pass
+    return message, total
+
+
 def ms_install_send_guard(check):
     """给平台事件类的 send 包一层，返回这次包了几个类（幂等）。"""
     try:
@@ -1350,6 +1379,14 @@ def ms_install_send_guard(check):
                         "[mindscape_guard] 拦下直接发送的报错（这条不走结果管线）: %s",
                         redact(txt))
                     return None
+            # ⭐ 出站整理（2026-11-03 补）：这条直发路以前**只拦报错、不整理** ✗
+            try:
+                message, _n_clean = ms_chain_clean_plain(message)
+                if _n_clean:
+                    logger.info("[mindscape_guard] 直发整理 self=%s 改了 %d 处（含 ||| / markdown）",
+                                self.get_self_id(), _n_clean)
+            except Exception as _e:
+                logger.warning("[mindscape_guard] 直发整理失败: %s", str(_e)[:100])
             sent = await _orig(self, message, **kw)
             if txt.strip() and private_code:
                 pg_audit("given", self.get_self_id(), self.get_sender_id() or "")
