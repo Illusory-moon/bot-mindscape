@@ -25,6 +25,10 @@
 git clone https://github.com/Illusory-moon/bot-mindscape.git
 cd bot-mindscape
 pip install -r requirements.txt
+python scripts/check_deps.py          # 依赖自检：装到哪个解释器、缺哪个包，一次看清
+```
+> ⚠️ **依赖要装到「跑它的那个 Python」里**：本机跑就装本机；AstrBot 在 Docker 里就得
+> `docker exec -it <容器名> pip install PyYAML httpx pillow`（宿主机装它看不到 ✗）✓
 
 # 2) 复制配置并按提示填写（最小可用配置在 config/config.minimal.yaml）
 cp config/config.example.yaml config/config.yaml

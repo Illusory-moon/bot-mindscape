@@ -8,7 +8,7 @@
 | 项 | 要求 | 怎么查 |
 |---|---|---|
 | Python | **3.11+** | `python --version` |
-| 依赖 | `PyYAML` / `httpx` / `Pillow` / `paramiko` | `pip install -r requirements.txt` |
+| 依赖 | `PyYAML` / `httpx` / `Pillow` / `paramiko`(可选) | `pip install -r requirements.txt` → `python scripts/check_deps.py` |
 | LLM 接口 | OpenAI 兼容（日记提炼 / 视觉判断 / 选图）| `export MINDSCAPE_API_KEY=...` |
 | 消息库 | 可读的 SQLite（AstrBot 自带 `data_v4.db` 即可）| 见 [B2](#b2-消息来源库怎么指) |
 | AstrBot | 有就能装插件；没有可用 Docker | 找 `data/plugins/` 目录 |
@@ -18,6 +18,7 @@
 | # | 命令 | 期望 | 失败看 |
 |---|---|---|---|
 | 1 | `pip install -r requirements.txt` | 无报错 | [troubleshooting · 依赖](docs/troubleshooting.md#装不上依赖) |
+| 1b | `python scripts/check_deps.py` | `必需依赖齐全 ✓`；首行会打出**当前解释器路径** | 缺包 → 按它给的命令装（**注意那个路径**）|
 | 2 | `cp config/config.example.yaml config/config.yaml` | 文件存在 | — |
 | 3 | 编辑 `config/config.yaml`：填 `memory.bots[0].self_id` 与三处数据路径 | YAML 能解析：`python -c "import yaml;yaml.safe_load(open('config/config.yaml',encoding='utf-8'))"` → `None`（无输出即成功）| [troubleshooting · 配置](docs/troubleshooting.md#配置读不到) |
 | 4 | `python scripts/run_selfcheck.py` | `失败 0 项` | 缺包 → 回第 1 步 |

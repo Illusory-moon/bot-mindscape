@@ -1,5 +1,9 @@
 # bot-mindscape 运行依赖
 #
+# 装之前先自检：python scripts/check_deps.py
+#   —— 它会打印【当前解释器路径】和每个包装没装；pip 必须装到那个解释器里 ✓
+#   —— AstrBot 跑在 Docker 里时，宿主机装它看不到：docker exec -it <容器> pip install ...
+#
 # 说明：若把 plugins/ 装进 AstrBot 等框架，框架通常已自带这些库。
 #
 # 插件运行依赖：
