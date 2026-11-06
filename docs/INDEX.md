@@ -6,9 +6,19 @@
 
 | 文档 | 一句话 |
 |---|---|
-| [部署指南](deploy.md) | **装进 AstrBot 的完整步骤**（构建单文件 → 放插件目录 → 重启 → 看日志），含前置条件与补丁说明 |
+| [QUICKSTART](../QUICKSTART.md) | **5 分钟跑到「它在群里回你一句」**（三条路径 + 三步验收）|
+| [INSTALL](../INSTALL.md) | 机器友好的分步清单（每步一条命令 + 期望输出）|
+| [DEPLOY-WITH-AI](../DEPLOY-WITH-AI.md) | **把这一页粘给 AI**，让它替你装（写死默认路径，别反问）|
+| [部署指南](deploy.md) | 完整的部署说明：构建单文件 → 放插件目录 → 配置 → API Key → 补丁 |
 | [配置：核心项](config.md) | 记忆 / 摘要 / 风格 这几块最容易配错的字段 |
 | [../config/config.example.yaml](../config/config.example.yaml) | **完整配置**，每个字段都有注释 |
+| [../config/config.minimal.yaml](../config/config.minimal.yaml) | **最小可用配置**，先跑起来用 |
+
+## 卡住了
+
+| 文档 | 一句话 |
+|---|---|
+| [常见问题对照表](troubleshooting.md) | 模块不加载 / 不回复 / 配置读不到 / 报错漏进群 / 管理台 / 依赖装不上 |
 
 ## 想弄懂它
 
@@ -37,9 +47,14 @@
 
 ---
 
-## 运行环境（摘要）
+## 兼容与运行环境
 
-- **Python 3.11+**（`scripts/check_live.py` 用了 `hashlib.file_digest`）
-- 依赖：`requirements.txt`（PyYAML / httpx / Pillow / paramiko 等）
-- 一个 OpenAI 兼容的 LLM 接口（日记提炼 / 视觉判断 / 选图）
-- bot 框架的消息库可读（SQLite）
+| 项 | 要求 | 备注 |
+|---|---|---|
+| **Python** | **3.11+** | `scripts/check_live.py` 用了 `hashlib.file_digest`，3.11 才有 |
+| **AstrBot** | **4.x** | 插件以 4.x 的插件目录与 DB（`data_v4.db`）为准；更早版本未验证 |
+| **依赖** | `PyYAML` / `httpx` / `Pillow` / `paramiko` | 见 `requirements.txt`；**装到 AstrBot 用的那个解释器里** ✗ |
+| **LLM 接口** | OpenAI 兼容 | 日记提炼 / 视觉判断 / 选图需要；只跑记忆+表达+沉浸不需要模型 |
+| **消息库** | 可读的 SQLite | 生成日记用 `diary.source.db`；会话清理用 `janitor.db`（4.x 是 `data_v4.db`）|
+| **管理台** | 不需要 AstrBot 网页界面 ✓ | 桌面 `scripts/config_gui.py` / 网页 `scripts/web_ui.py`（默认只听 127.0.0.1）|
+| **补丁** | 可选 | 只有「唤醒策略 / 自主冒泡 / groupctx」需要改 AstrBot 本体 |

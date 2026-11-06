@@ -16,6 +16,14 @@
 
 ---
 
+> ### 🧭 它有**自己的管理台**，不用碰 AstrBot 的网页界面
+>
+> 配置、图库、记忆都在**我们自己的界面**里看和改 —— 桌面版 `python scripts/config_gui.py`，
+> 网页版 `python scripts/web_ui.py`（或双击 `open_dashboard.bat`，只监听本机，端口 8777–8787 自动挑）。
+> AstrBot 的 web UI 只用来**装插件、绑人格**，不必在那里找本项目的配置 ✓
+>
+> **第一次装** → [QUICKSTART](QUICKSTART.md)（5 分钟，三条路径任选）· 让 AI 替你装 → [DEPLOY-WITH-AI](DEPLOY-WITH-AI.md) · 卡住了 → [常见问题](docs/troubleshooting.md)
+
 ## 快速开始
 
 ```bash

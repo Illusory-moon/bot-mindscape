@@ -1,0 +1,62 @@
+# 配置 · 最小可用版
+#
+# 目的：**先跑起来**。只保留认知层必需的东西，其余整段不写 = 对应功能不生效 ✓
+# 想要完整字段 → config.example.yaml（每个键都有注释）
+#
+# 用法：
+#   cp config/config.minimal.yaml config/config.yaml
+#   # 改下面带 ← 的几处：self_id / name / 数据文件路径
+#
+# ⚠️ 多 bot 共用同一个容器时：stickers / vision 段留空 targets 会**作用于全部 bot**，
+#    要精确控制就显式写 targets（见 config.example.yaml）✓
+
+memory:
+  max_chars: 2500            # 每轮注入的记忆字数上限
+  min_chars: 50
+  digest_chars: 400          # 摘要层上限（没生成摘要就为空）
+  notes_chars: 800           # 账本层上限（bot 自己写的）
+  bots:
+    - self_id: "20000000"                        # ← 你的 bot 账号
+      name: "bot-name"                           # 只用于日志
+      diary: "./data/bot-name.md"                # 原文层（事件逐条）
+      people: "./data/bot-name.people.md"        # 人物画像（可留空）
+      notes: "./data/bot-name.notes.md"          # 账本层（工具 save_note 维护）
+      people_chars: 800
+      # rules:                                   # 这个 bot 自己的行为规矩，随记忆一起注入
+      #   - "被点名时必须回复"
+
+# ── 认知层 · 自动生成日记（不写这段 = 不自动生成，只靠手工写也行）──
+diary:
+  source:
+    db: "./data/messages.db"                     # ← 消息库（AstrBot 的消息库，或自建）
+    table: "messages"
+    where: "event_name='group_message'"
+    fields:
+      time: "timestamp"
+  targets:
+    - self_id: "20000000"                        # ← 与上面 bots[].self_id 一致
+      name: "bot-name"
+      output: "./data/bot-name.md"
+      state: "./data/bot-name.state.json"
+      # groups: ["20000001"]                     # 只记这些群（留空 = 全部）
+  llm:
+    api_base: "https://api.example.com/v1"       # ← OpenAI 兼容接口
+    model: "your-model"
+    # api_key 走环境变量 MINDSCAPE_API_KEY（别写进文件）✓
+
+# ── 表达层 · 最轻的一层（纯文本处理，不需要模型）──
+format:
+  targets: ["20000000"]                          # ← 你的 bot 账号
+  no_period: true            # 句尾不用「。」
+  # join_with: "，"          # 多段压平时的连接符
+
+# ── 沉浸层 · 兜底（建议开：服务器炸了也别让群里看到报错）──
+guard:
+  enabled: true
+
+# ── 运维层 · 会话膨胀清理（独立脚本跑，不在插件里）──
+janitor:
+  db: "./data/conversations.db"                  # AstrBot 4.x 实际是 <数据目录>/data_v4.db
+  table: "conversations"
+  column: "content"
+  max_mb: 2.0

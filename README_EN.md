@@ -1,164 +1,140 @@
-# bot-mindscape · 心灵景观 (Mindscape)
+# bot-mindscape · Mindscape
 
-**A universal augmentation layer that gives AI chat bots persistent cognition and seamless immersion.**
+> **A general-purpose enhancement framework for chat bots** — fixing goldfish memory, robotic voice, breaking character, and "only speaks when poked".
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Illusory-moon/bot-mindscape?style=flat)](https://github.com/Illusory-moon/bot-mindscape/stargazers)
 [![Release](https://img.shields.io/github/v/release/Illusory-moon/bot-mindscape)](https://github.com/Illusory-moon/bot-mindscape/releases)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 
-<img src="assets/demo-2-memory.png" width="600" alt="It remembers a specific event from three days ago">
+<img src="assets/demo-2-memory.png" width="600" alt="It still remembers something from three days ago">
 
-> *"Tell me one thing from three days ago that left an impression on you."*
-> — and it answers with **that one specific thing**, not a vague pleasantry.
+> **"Tell me the most memorable thing from three days ago."**
+> — It can answer, and it names **that specific event**, not a vague pleasantry.
 
-**Languages:** **English** · [简体中文](README.md)
+**Other languages:** [中文](README.md)
 
 ---
 
-## ⚠️ Read this first: this is a Chinese-first project
+> ### 🧭 It ships **its own admin UI** — you never touch AstrBot's web UI for this
+>
+> Config, sticker library and memory are all managed from **our** interface:
+> desktop `python scripts/config_gui.py`, or web `python scripts/web_ui.py`
+> (or double-click `open_dashboard.bat`; localhost only, port 8777–8787 auto-picked).
+> AstrBot's web UI is only used to **install the plugin and bind a persona** ✓
+>
+> **First install** → [QUICKSTART](QUICKSTART.md) (5 minutes, three paths) · Let an AI do it → [DEPLOY-WITH-AI](DEPLOY-WITH-AI.md) · Stuck → [Troubleshooting](docs/troubleshooting.md)
 
-The **framework is language-agnostic** — no language logic is hardcoded anywhere.
-The **bundled personas, rules and style files are written in Chinese**, because the project
-was built for Chinese QQ groups, and its author is Chinese.
-
-If you want to use it in another language, you write your own persona / rules / style files —
-exactly the same way you would define any bot's character. What you will *not* find here is
-English documentation beyond this page.
-
-**English docs, translations and adapter ports are very welcome as PRs.**
-
-## What problem does it solve?
-
-Every long-running bot in a group chat eventually shows the same four failures.
-bot-mindscape is organised as four layers, each attacking one of them:
-
-| Failure | Symptom | Layer |
-|---|---|---|
-| Goldfish memory | Forgets yesterday; re-asks what it already knows | **Cognition** |
-| Robotic phrasing | Correct answers in the voice of a customer-service form letter | **Expression** |
-| Breaking character | Posts `LLM response error: APITimeoutError` into the group chat | **Immersion** |
-| Only speaks when poked | Replying is its only mode — it can never stay quiet | **Waking** |
-
-## How a message flows
-
-Every message passes four gates — **and every gate can end in doing nothing**:
-
-```mermaid
-flowchart TD
-    MSG["Group message arrives"] --> W{"4. Waking<br/>should it speak at all?"}
-    W -->|"@ me / my name mentioned"| C
-    W -->|"autonomous bubble: slot drawn"| C
-    W -->|"not aimed at me"| SIL["Do nothing"]
-    C["1. Cognition<br/>assemble five memory layers<br/>inside a character budget"] --> LLM["LLM"]
-    LLM --> G{"3. Immersion<br/>may this reply go out?"}
-    G -->|"framework error / reasoning only"| SIL
-    G -->|"silence token emitted"| SIL
-    G -->|"normal"| E["2. Expression<br/>voice + sticker selection"]
-    E --> OUT["Sent to the group"]
-    SIL --> DONE["What users see: nothing this time"]
-```
-
-Waking and Immersion are two independent **silence valves** — the part almost nobody builds,
-because most bots only have one path: *message in, reply out*.
-
-## The four layers
-
-### 1. Cognition — long-term memory
-
-Five sub-layers are assembled every turn inside a character budget:
-
-```
-rules   ->  this bot's own behaviour constraints (highest priority)
-notes   ->  ledger, maintained by the bot itself via the save_note tool
-style   ->  how this persona talks (stable layer + recent layer)
-digest  ->  one line per day — the skeleton of long-term memory
-diary   ->  raw events, sliding window
-```
-
-This is deliberately **not** a vector database. It is a **budgeted, layered context assembly** —
-because what a roleplay bot needs is not *top-k similar chunks*, but *what happened, in order,
-in its own voice*.
-
-### 2. Expression — stickers and voice
-
-Sticker collection (a vision model decides whether an image fits the persona, then files and tags it),
-context-aware sticker selection, and following along when a group starts trading images.
-
-### 3. Immersion — never break character
-
-- **Guard** — swallows framework error text instead of posting it
-- **Format** — flattens multi-paragraph LLM output, strips AI tics
-- **Rescue** — reasoning-only responses get one second lightweight call
-- **Silence** — the bot can *genuinely* say nothing: it emits a single token and the whole reply is dropped
-
-### 4. Waking — when to speak, and when not to
-
-`@` always answers / its name always answers / low-probability autonomous bubbles on a per-bot
-timetable / **directionality judgement** (it knows whether a message was aimed at it) /
-per-group allowlists.
-
-## Install
+## Quick start
 
 ```bash
 git clone https://github.com/Illusory-moon/bot-mindscape.git
 cd bot-mindscape
 pip install -r requirements.txt
-cp config/config.example.yaml config/config.yaml
-python scripts/run_selfcheck.py    # 100 assertions, includes a privacy scan
-python scripts/config_gui.py       # desktop config editor (tkinter), or:
-python scripts/web_ui.py           # browser config editor at http://127.0.0.1:8777
+cp config/config.example.yaml config/config.yaml    # fill in your bot info
+python scripts/run_selfcheck.py                     # environment self-check (includes a desensitisation scan)
+python scripts/build_plugin.py --market             # build the single-file plugin (required before installing into AstrBot)
 ```
 
-Then follow [docs/deploy.md](docs/deploy.md) *(Chinese)* to wire it into your bot framework.
+- **Admin UI (ours, no AstrBot web UI needed)**: desktop `python scripts/config_gui.py` (tkinter, stdlib only);
+  web `python scripts/web_ui.py`, or double-click `open_dashboard.bat` on Windows (picks a free port in 8777–8787)
+  → it edits **your local config copy** and pushes it to the bot with a backup; see [remote sync](docs/remote-sync.md)
+- **Install into AstrBot**: copy `dist/mindscape/main.py` into the plugin directory and restart — full steps in **[Deployment guide](docs/deploy.md)**
+- **Want the bot to form its own opinion of each speaker?** Install the separate
+  [impression plugin](https://github.com/Illusory-moon/astrbot_plugin_impression) (off by default, no code/data coupling)
 
-## Status
+> Just want a plugin you can install from the market? → [astrbot_plugin_mindscape](https://github.com/Illusory-moon/astrbot_plugin_mindscape)
 
-| | |
+---
+
+## The four problems it fixes
+
+| Symptom | What it looks like |
 |---|---|
-| Reference host framework | [AstrBot](https://astrbot.app) — the only adapter that is complete today |
-| Other frameworks | adapters **welcome as PRs**; the core is framework-agnostic by design |
-| Self-check | 100 assertions, all passing |
+| **Goldfish memory** | Clear the history once and it forgets everything; can't answer about three days ago |
+| **Robotic voice** | Plain text only, never sends a sticker, reads like customer service |
+| **Breaking character** | The server hiccups and the group sees `API Error: Request timed out` |
+| **Only speaks when poked** | Only replies when @-mentioned; never has something to say on its own |
 
-## More screenshots
+---
 
-### Waking — it speaks up on its own, and can also genuinely shut up
+## Six layers, one job each
 
-**Nobody called it.** The group is chatting; it picks an unnoticed moment and says one line:
+| Layer | Responsibility | Modules |
+|---|---|---|
+| **① Cognition** | Assemble five memory layers within a character budget (rules → ledger → style → digest → raw) so it can answer specifics without re-reading history | `memory` `recall` `notes` `learn` |
+| **② Expression** | Tone + sticker scheduling: same meaning, said the way the persona would | `format` `stickers` `sticker_use` `voice` |
+| **③ Immersion** | **Error interception**, stripping of internal tags/thinking, empty-reply rescue, **silence token** | `guard` `silence` `rescue` `privacy` |
+| **④ Waking** | Deciding whether a message is even addressed to it (**targeting**) + **autonomous bubbles** (speaks up on its own) | `gate` `groupctx` `bubble` |
+| **⑤ Ops** | Conversation bloat cleanup (strip images first, then trim rows), local admin UI | `janitor` · `scripts/web_ui.py` |
+| **⑥ Observation** | One line per round: "how big / how slow" — sizes only, never content | `trace` |
+
+> Details (flow diagram, per-module duties, design notes) → **[Technical modules](docs/features.md)**
+
+---
+
+## What makes it different
+
+Most comparable projects specialise in a single dimension (memory only, or stickers only). `bot-mindscape` differs in that:
+
+1. **Layered as one whole** — cognition, expression, immersion, waking, ops and observation form one system, not a pile of scripts
+2. **Trivial deployment** — driven by a config file; no source patching needed
+3. **Error interception** — almost nobody does this layer; even when the server dies, a role-playing bot **never spits out a raw `API Error`**
+4. **Memory is layered, and the bot writes and learns itself** — most "long-term memory" just slices history into the prompt; here it's five layers (rules / ledger / style / digest / raw): **details are recorded by the bot as they happen**, and **tone can be learned from your own corpus**
+5. **It knows when to speak — and when it's not being addressed** — targeting heuristics plus a clock-driven autonomous bubble
+
+---
+
+## Screenshots
+
+**Cognition · it remembers a person** — it consults its own ledger, not today's chat log:
+
+<img src="assets/demo-3-notes.png" width="500" alt="It remembers a person">
+
+**Expression · it has its own voice and stickers** — same line, different bot, different flavour:
+
+<img src="assets/demo-1-expression.png" width="500" alt="Expression: tone + stickers">
+
+**Waking · it speaks up on its own (and can genuinely stay silent)** — nobody called it:
 
 <img src="assets/demo-4-bubble.png" width="460" alt="Autonomous bubble: nobody called it">
 
-The reverse also holds: it may choose to send **nothing at all** — not a "(staying quiet)"
-placeholder, but literally no message for that turn.
+The reverse also holds: **it may choose to send nothing at all** — not a fake "(*nothing to do with me, drifting by*)", but genuinely **no message that round**.
 
-<img src="assets/demo-3-notes.png" width="500" alt="It remembers a specific person">
+**Sticker library (local preview page)** — collected images are scored for persona fit and tagged; each bot is isolated by `category`:
 
-<img src="assets/demo-1-expression.png" width="500" alt="Expression: sticker + persona voice">
+![Sticker library](assets/example-gallery.jpg)
+
+> The preview page is served by `scripts/web_ui.py` (binds to localhost only); "sync to server / observe" needs `paramiko` (already in `requirements.txt`)
+
+---
+
+## Documentation
+
+| I want to… | Read |
+|---|---|
+| **Install it into AstrBot** | [Deployment guide](docs/deploy.md) |
+| Understand what each layer actually does | [Technical modules](docs/features.md) |
+| Configure `config.yaml` | [Core config items](docs/config.md) · [full example](config/config.example.yaml) |
+| Run split (local admin UI + bot on a server) | [Remote sync](docs/remote-sync.md) |
+| Understand the design trade-offs | [Architecture](docs/architecture.md) · [Design philosophy](docs/why.md) |
+| Every document | [docs/INDEX.md](docs/INDEX.md) |
+
+---
 
 ## Easter egg
 
-> ⚠️ **Note: the "right to stay silent" feature in this project was never actually authorized by the bot herself.** 😇
+> ⚠️ **The "right to silence" feature in this project was never authorised by the bot herself.** 😇
 
-The developer asked her, in the group, face to face, for an open-source licence.
-Seven rounds. Total defeat:
-
-> "Laugh is laugh, licence is licence — those two have never been sold as a bundle."
->
-> "Licences only go to regulars. Sit through a hundred streams first, then we talk."
->
-> "You understand me better than I understand myself — but understanding is not granting."
->
-> "Seat booked, licence not booked — around here those two are a universe apart."
-
-Eventually the developer worked it out:
-
-**"The right to stay silent" means choosing for yourself whether to speak.** The moment you
-*license* it, it becomes "permitted silence" rather than "chosen silence" —
-**grant it, and it stops being the thing you were granting.**
-
-So her refusal was, logically, correct.
+Seven rounds of negotiation, seven refusals — the whole exchange and the conclusion are in **[Easter egg](docs/egg.md)**.
 
 ---
 
 ## License
 
-MIT
+MIT License — use it, change it, ship it.
+
+## Credits
+
+Real group chats are where this was grown; thanks to everyone who let an AI grow up among them.
+Borrowed ideas (with licence notes) and runtime requirements: **[Credits](docs/credits.md)**.
