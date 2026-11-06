@@ -320,6 +320,59 @@ def is_inside(child, parent):
         return False
 
 
+# 第三方依赖 → (import 名, 缺了会怎样)。**只用于启动时提示，不做任何 import** ✗
+_MS_DEP_HINTS = [
+    ("yaml", "PyYAML", "所有配置读写都会失败（这个是真的必需）"),
+    ("httpx", "httpx", "表情包视觉判定 / 选图请求 / 空回复救援 会失效"),
+    ("PIL", "Pillow", "大图与动图预览会失效（超大图可能直接把请求撑爆）"),
+    ("paramiko", "paramiko", "管理台的「同步到服务器 / 观测」不可用（跑 bot 不需要它）"),
+]
+
+
+def ms_warn_missing_deps():
+    """启动时检查第三方依赖，缺了就**打一行 WARN** —— 而不是让功能安静地不工作 ✗
+
+    为什么需要它：本插件的第三方 import 大多写在**函数内部**（延迟 import），
+    缺包时启动**不会报错**，表现是「某个功能莫名其妙不生效」✗ 现场最难查的就是这个。
+    这里只做 `find_spec`，不真的 import、不抛异常、缺什么都不影响插件加载 ✓
+    """
+    try:
+        import importlib.util as _ilu
+    except Exception:
+        return []
+    # logger 在函数内取：core 也会被独立脚本导入（那时没有 astrbot）✓
+    # ⚠️ 不能直接写 `logger` —— 那是别的模块从 astrbot 拿的全局名 ✗（自检 R17 会抓）
+    try:
+        from astrbot.api import logger as _log
+    except Exception:
+        import logging as _logging
+        _log = _logging.getLogger("mindscape")
+    missing = []
+    for imp, pkg, effect in _MS_DEP_HINTS:
+        try:
+            ok = _ilu.find_spec(imp) is not None
+        except Exception:
+            ok = False
+        if not ok:
+            missing.append(pkg)
+            try:
+                _log.warning(
+                    "[mindscape] 缺少依赖 %s（import 名 %s）—— %s。"
+                    "装到**跑本插件的那个解释器**里：<该 python> -m pip install %s "
+                    "（容器内：docker exec -it <容器> pip install %s）",
+                    pkg, imp, effect, pkg, pkg)
+            except Exception:
+                pass
+    if missing:
+        try:
+            _log.warning("[mindscape] 依赖自检：缺 %d 项（%s）；"
+                           "其余功能不受影响 ✓ 详见 docs/troubleshooting.md",
+                           len(missing), " / ".join(missing))
+        except Exception:
+            pass
+    return missing
+
+
 class IndexLock:
     """最简跨进程锁：串行化「读索引 → 合并 → 写索引」。
 

@@ -244,6 +244,10 @@ def main(exclude=()):
         main_head.extend(setups.split(chr(10)))
     else:
         main_head.append("        pass")
+    main_head.append("        try:")
+    main_head.append("            ms_warn_missing_deps()")
+    main_head.append("        except Exception:")
+    main_head.append("            pass")
     main_head.append("        logger.info(\"[mindscape] 插件已加载（" + str(len(mixins)) + " 个模块）\")")
     main_cls = chr(10).join(main_head)
     imp_lines = sorted(set(all_imports.values()),
