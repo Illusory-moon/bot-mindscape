@@ -465,3 +465,16 @@ ui:
 # vision:
 #   enabled: true
 #   targets: ["<bot 的 QQ 号>"]
+
+# ── 真自主开口：她自己约「下次什么时候醒」（2026-11-06）──
+# 她调一次工具，写下「多久之后 + 一句理由」；到点由**一次性**定时任务叫醒她，
+# 醒来**说不说仍由她决定**（可以什么都不发）。细节见 canon/_42。
+selfwake:
+  enabled: false            # ← 默认关：先用白名单小范围灰测
+  max_hours: 24             # 单条预约上限（小时）；防她写"半年后"
+  max_items: 5              # 每个会话最多挂几条（保护她，不是限制）
+  targets:                  # 白名单：只有列出来的 bot + 会话才允许用 ✗
+    - self_id: "20000000"                     # 哪个 bot
+      allow:                                  # 会话后缀匹配（只开私聊就只写 FriendMessage）
+        - "FriendMessage:20000002"
+        # - "GroupMessage:20000001"
