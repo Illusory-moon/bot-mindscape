@@ -3803,6 +3803,81 @@ def su_abs(path):
     return abs_path(path, os.path.dirname(cfg.config_path()))
 
 
+def st_tokens(want):
+    """把「得意、看好戏」这类查询切成词（顿号/逗号/斜杠/空格都算分隔）。"""
+    raw = str(want or "").replace("，", "、").replace(",", "、").replace("/", "、")
+    raw = raw.replace("；", "、").replace(";", "、")
+    out = []
+    for x in raw.replace(" ", "、").split("、"):
+        x = x.strip()
+        if len(x) >= 2 and x not in out:      # 单字太容易乱撞，不要
+            out.append(x)
+    return out
+
+
+def st_hit(item, tokens):
+    """这条图有没有被查询词**词级**命中（名字 / 标签 / 描述里包含某个词）。
+
+    为什么要词级（2026-11-07）：
+    原来只用 `match_score` 的**逐字**重叠加分 ⇒「橡木蛋糕」跟「得意」这种查询拿到的分
+    差不多，于是「发一张差不多的」和「库里根本没有」分不开 ✗
+    词级命中能干净地二分：命中⇒发，不命中⇒**回清单让她自己挑**（她能借此"查库"）✓
+    """
+    hay = " ".join([
+        str(item.get("name", "")),
+        " ".join(str(x) for x in (item.get("tags") or [])),
+        str(item.get("desc", "")),
+    ]).lower()
+
+    def one(tok):
+        tok = tok.lower()
+        if tok in hay:
+            return True
+        # 容错：整词对不上时看 **2 字片段覆盖率** ——
+        # 实测需要它：「两头猪互拱」要能对上库里的「两只粉猪互拱」（2 字片段 2/4 = 50%）✓
+        # 而「那个粉色的猪在拱」对不上任何一张（覆盖率 0）⇒ 该回清单 ✓
+        grams = [tok[i:i + 2] for i in range(len(tok) - 1)]
+        if not grams:
+            return False
+        hit = sum(1 for g in grams if g in hay)
+        return hit / len(grams) >= 0.5
+
+    return any(one(tok) for tok in tokens)
+
+
+def st_candidates(pool, tokens, limit=4):
+    """候选清单（给模型看的一行行文字，**不发到群里** ✗）。
+
+    排序用「2 字片段覆盖率」——跟命中判定同一把尺子，免得给出一堆完全无关的图 ✗
+    全都不沾边时返回一句实话（比硬凑四张更有用 ✓）。
+    """
+    def cover(it):
+        hay = " ".join([str(it.get("name", "")),
+                        " ".join(str(x) for x in (it.get("tags") or [])),
+                        str(it.get("desc", ""))]).lower()
+        best = 0.0
+        for tok in tokens:
+            tok = tok.lower()
+            grams = [tok[i:i + 2] for i in range(len(tok) - 1)]
+            if not grams:
+                continue
+            c = sum(1 for g in grams if g in hay) / len(grams)
+            best = max(best, c)
+        return best
+
+    ranked = sorted(pool, key=lambda it: -cover(it))
+    if not ranked or cover(ranked[0]) <= 0:
+        return ["（库里没有沾边的）"]
+    rows = []
+    for it in ranked[:limit]:
+        if cover(it) <= 0:
+            break
+        nm = str(it.get("name") or it.get("file") or "")
+        tg = "/".join(str(x) for x in (it.get("tags") or [])[:3])
+        rows.append("%s（%s）" % (nm, tg) if tg else nm)
+    return rows
+
+
 def pick_image(comps, image_cls, reply_cls, depth=0, max_depth=3):
     """在组件链里找第一张图，**会往被引用消息里钻**。
 
@@ -6024,7 +6099,9 @@ class StickerUseMixin:
         当对方要求你「发个表情包/发图」，或你觉得此刻甩一张图最合适时，调用这个工具。
 
         Args:
-            want(string): 你想要的图的感觉或用途，例如：无语、开心、发呆、得意、撒娇。留空则随机挑一张。
+            want(string): 你想要的图的感觉或用途，例如：无语、开心、发呆、得意、撒娇；
+                也可以是**某张图的名字或大家给它起的外号**（你记不清名字就先用感觉问 ✓）。
+                留空则随机挑一张。
         """
         want = str(kwargs.get("want") or "").strip()
         svc = getattr(self, "context", None)
@@ -6045,13 +6122,28 @@ class StickerUseMixin:
         if not pool:
             return "图库还是空的，先攒几张再发"
 
-        best, best_score = None, -1.0
-        for item in pool:
-            sc = match_score(item, want)
-            if sc > best_score:
-                best_score, best = sc, item
-        if best is None:
-            best = pool[0]
+        tokens = st_tokens(want)
+        if tokens:
+            # ⭐ 词级命中才算"她说的是库里真有的东西" ⇒ 发 ✓
+            hits = [it for it in pool if st_hit(it, tokens)]
+            if not hits:
+                # 库里没有对得上的 ⇒ **不发图**，回清单让她自己挑 ✓
+                # （以前这里会硬发一张"最不像错的"，结果她会自信地说「我库里没这种节目」✗）
+                cands = st_candidates(pool, tokens)
+                logger.info("[mindscape_sticker_use] 词级未命中 | want=%s | 回清单 %d 条",
+                            want[:24], len(cands))
+                return ("库里没有对得上「%s」的图。沾边的候选：%s。"
+                        "要发哪张直接说名字；确实没有就别硬发（可以不配图，或者等有人发了再收）✓"
+                        % (want[:20], "；".join(cands) or "（库里没有沾边的）"))
+            best = max(hits, key=lambda it: match_score(it, want))
+        else:
+            best, best_score = None, -1.0
+            for item in pool:
+                sc = match_score(item, want)
+                if sc > best_score:
+                    best_score, best = sc, item
+            if best is None:
+                best = pool[0]
         fn = safe_name(best.get("file", ""))
         path = os.path.join(self.dir, fn)
         if not fn or not os.path.exists(path) or not is_inside(path, self.dir):
@@ -7208,6 +7300,13 @@ class SelfwakeMixin:
                 except Exception as e:
                     logger.warning("[mindscape_selfwake] 排期失败 %s: %s", minute, str(e)[:100])
                     return False
+            # ⚠️ 排成功之后就把这些条目从状态里摘掉 ✓
+            #    它们已经交给一次性定时任务了；留着的话，重启时 `_sw_resync` 会把
+            #    "已过点"的旧预约当成迟到再叫一次 ✗（2026-11-07 灰测当场发现的坑）
+            keep = [x for x in items if str(x.get("wake_at") or "") not in
+                    {str(it.get("wake_at") or "") for g in groups.values() for it in g}]
+            state[key] = keep
+            sw_save(state)
             return True
         except Exception as e:
             logger.warning("[mindscape_selfwake] 排期异常: %s", str(e)[:120])

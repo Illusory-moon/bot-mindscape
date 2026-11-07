@@ -319,6 +319,13 @@ class SelfwakeMixin:
                 except Exception as e:
                     logger.warning("[mindscape_selfwake] 排期失败 %s: %s", minute, str(e)[:100])
                     return False
+            # ⚠️ 排成功之后就把这些条目从状态里摘掉 ✓
+            #    它们已经交给一次性定时任务了；留着的话，重启时 `_sw_resync` 会把
+            #    "已过点"的旧预约当成迟到再叫一次 ✗（2026-11-07 灰测当场发现的坑）
+            keep = [x for x in items if str(x.get("wake_at") or "") not in
+                    {str(it.get("wake_at") or "") for g in groups.values() for it in g}]
+            state[key] = keep
+            sw_save(state)
             return True
         except Exception as e:
             logger.warning("[mindscape_selfwake] 排期异常: %s", str(e)[:120])
