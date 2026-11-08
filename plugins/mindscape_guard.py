@@ -84,6 +84,12 @@ def has_tool_leak(text):
 _MS_TAG_NAMES = ("impression_update", "wish_mood", "wish_grant", "wish_check",
                  "mood", "impression", "mindscape_meta")
 
+# 框架署名尾巴：**只剥末尾** ✓（正文中间出现 "Powered by AstrBot" 属于正常讨论，不动它 ✗）
+# 2026-11-09 真事故：她给运营的回复末尾自己写了「…比整理完十页PV强，Powered by AstrBot」✗
+#   —— 代码里没有任何地方往文本追加它（框架只在 t2i 图片页脚画这个字）⇒ **是模型自己写的**
+#   （大概把页脚当成了"署名"习惯）⇒ 按「能用代码保证的别指望提示词」在出站统一剥掉 ✓
+_MS_SIGN_TAIL = re.compile(r"[\s,，、:：]*Powered\s+by\s+AstrBot[\s。.!！~～]*$", re.I)
+
 _BT = chr(96)          # 反引号
 
 # ⚠️ **每个正则必须写成一个字面量、一行写完** ✗ —— 别换行、别用相邻字面量拼 ✓
@@ -260,6 +266,10 @@ def normalize_outbound(text):
     hits += _n2
     out, _n3 = strip_json_junk(out)
     hits += _n3
+    _m = _MS_SIGN_TAIL.search(out)
+    if _m:
+        out = out[:_m.start()] + out[_m.end():]
+        hits += 1
     if "|" in out:                       # 孤立竖线：先只观测（可能是 ||| 被吃掉两个剩的）
         logger.warning("[mindscape_guard] 出站仍有孤立竖线 %d 个（只观测不改）：%r",
                        out.count("|"), out[:60])

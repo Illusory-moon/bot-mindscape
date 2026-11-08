@@ -1107,6 +1107,9 @@ _MS_TAG_NAMES = ("impression_update", "wish_mood", "wish_grant", "wish_check",
                  "mood", "impression", "mindscape_meta")
 
 
+_MS_SIGN_TAIL = re.compile(r"[\s,，、:：]*Powered\s+by\s+AstrBot[\s。.!！~～]*$", re.I)
+
+
 _BT = chr(96)          # 反引号
 
 
@@ -1272,6 +1275,10 @@ def normalize_outbound(text):
     hits += _n2
     out, _n3 = strip_json_junk(out)
     hits += _n3
+    _m = _MS_SIGN_TAIL.search(out)
+    if _m:
+        out = out[:_m.start()] + out[_m.end():]
+        hits += 1
     if "|" in out:                       # 孤立竖线：先只观测（可能是 ||| 被吃掉两个剩的）
         logger.warning("[mindscape_guard] 出站仍有孤立竖线 %d 个（只观测不改）：%r",
                        out.count("|"), out[:60])
