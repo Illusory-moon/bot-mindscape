@@ -1265,6 +1265,18 @@ def strip_json_junk(text):
     return out.rstrip(), n
 
 
+def ms_tilde_ids():
+    """哪些 bot 走「每句补 ~」——**写在 config 的 `tilde.targets`** ✓ 默认空 = 谁都不补。
+
+    ⚠️ 解耦铁律：这是**某个 bot 的口癖**，不是框架行为 ⇒ id 不许硬编码在代码里 ✗
+    """
+    try:
+        sec = cfg.section("tilde") or {}
+        return {str(x) for x in (sec.get("targets") or [])}
+    except Exception:
+        return set()
+
+
 def ensure_tilde(text):
     """每句收尾带一个「~」（有且只有一个）。主人 2026-11-09 定 ✓
 
@@ -1594,8 +1606,17 @@ def store_fmt(msgs, context, kwargs):
                 except Exception as exc:
                     logger.warning("[mindscape_guard] 出站整形失败（原样放行）: %s", str(exc)[:80])
         out.append(m)
-    # ⭐ 每句一个「~」（主人 2026-11-09）：工具直发路也要，否则语音/气泡那几条没有软尾 ✗
-    for _i, _m in enumerate(out):
+    # ⭐ 每句一个「~」（主人 2026-11-09）：**只有白名单里的 bot**（`tilde.targets`）✓
+    _do_tilde = False
+    try:
+        _sid = ""
+        _ev = getattr(getattr(context, "context", None), "event", None)
+        if _ev is not None:
+            _sid = str(_ev.get_self_id())
+        _do_tilde = _sid in ms_tilde_ids()
+    except Exception:
+        _do_tilde = False
+    for _i, _m in (enumerate(out) if _do_tilde else []):
         if (isinstance(_m, dict) and str(_m.get("type")) == "plain"
                 and isinstance(_m.get("text"), str)):
             _t2, _h2 = ensure_tilde(_m["text"])
@@ -5282,10 +5303,11 @@ class GuardMixin:
             #   **所有插件的最终出站都要从它下面过** ⇒ 是唯一能兜住"新插件忘了清"的位置 ✓
             #   ⚠️ 策略：**扒掉标记、留下她真正要说的话** ✓ 不是整条丢掉 ✗
             _cleaned, _hits = normalize_outbound(txt)
-            _t3, _h3 = ensure_tilde(_cleaned)     # ⭐ 每句一个「~」（主人 2026-11-09）
-            if _h3:
-                _cleaned = _t3
-                _hits += _h3
+            if str(event.get_self_id()) in ms_tilde_ids():   # ⭐ 只有白名单 bot 补「~」✓
+                _t3, _h3 = ensure_tilde(_cleaned)
+                if _h3:
+                    _cleaned = _t3
+                    _hits += _h3
             if _hits:
                 logger.warning("[mindscape_guard] 出站整理: %s", redact(txt))
                 put_plain_text(result, _cleaned)
