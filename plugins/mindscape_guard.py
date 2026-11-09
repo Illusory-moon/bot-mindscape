@@ -90,6 +90,11 @@ _MS_TAG_NAMES = ("impression_update", "wish_mood", "wish_grant", "wish_check",
 #   （大概把页脚当成了"署名"习惯）⇒ 按「能用代码保证的别指望提示词」在出站统一剥掉 ✓
 _MS_SIGN_TAIL = re.compile(r"[\s,，、:：]*Powered\s+by\s+AstrBot[\s。.!！~～]*$", re.I)
 
+# 同会话「逐字重复」抑制：key = self_id|会话 → (归一化文本, 时间戳)
+# 只挡**完全相同**的正文（跨秒数窗口），不做相似度 ✗
+_MS_LAST_SENT = {}
+_MS_DUP_WINDOW = 90.0
+
 _BT = chr(96)          # 反引号
 
 # ⚠️ **每个正则必须写成一个字面量、一行写完** ✗ —— 别换行、别用相邻字面量拼 ✓
@@ -713,6 +718,26 @@ class GuardMixin:
                     event.clear_result()
                     event.stop_event()
                     return
+            # ⭐ 逐字重复兜底（2026-11-09）：同一会话里几秒内发出**一字不差**的正文 ⇒ 第二条不发
+            #   真事故：她误把标签名当工具调（impression_update）⇒ 框架"跳过"⇒ 模型继续生成
+            #   ⇒ 同一句话又发了一遍 ✗
+            try:
+                import time as _t
+                _key = str(event.get_self_id()) + "|" + str(getattr(event, "unified_msg_origin", "") or "")
+                _norm = re.sub(r"\s+", "", txt)
+                _prev = _MS_LAST_SENT.get(_key)
+                _now = _t.time()
+                if _prev and _prev[0] == _norm and (_now - _prev[1]) <= _MS_DUP_WINDOW:
+                    logger.warning("[mindscape_guard] 同会话逐字重复 ⇒ 抑制第二条（%.1f 秒前刚发过）: %s",
+                                   _now - _prev[1], redact(txt)[:60])
+                    event.clear_result()
+                    self.blocked += 1
+                    return
+                _MS_LAST_SENT[_key] = (_norm, _now)
+                if len(_MS_LAST_SENT) > 64:
+                    _MS_LAST_SENT.clear()
+            except Exception as _e:
+                logger.warning("[mindscape_guard] 重复判定异常（不影响发送）: %s", str(_e)[:80])
             leak = has_tool_leak(txt)
             # ⭐ 登记「本轮已经把正文发出去了」—— 给救援模块用 ✓
             #   为什么在这儿：本钩子 **priority=999** ⇒ 真有字要发时一定会走到这一步 ✓
