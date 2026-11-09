@@ -1217,7 +1217,7 @@ def check_regressions():
             result = _aio.run(inst.save_sticker_impl(_Event(), {"name": "测试图"}))
             saved = _su.load_index(inst.index_path) or []
             ack_ok = (result is None and len(sent) == 1
-                      and sent[0][0].text == "这张收好啦~" and len(saved) == 1)
+                      and sent[0][0].text == "嘻，这张有意思~" and len(saved) == 1)
             (ok if ack_ok else bad)("R23b 保存表情直接确认", str(ack_ok))
     except Exception as e:
         bad("R23b 保存表情直接确认", str(e)[:140])
