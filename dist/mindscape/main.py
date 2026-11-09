@@ -4662,6 +4662,27 @@ def vc_cache_path(conf, text):
     return os.path.join(d, h + ".mp3")
 
 
+_V_PERIOD_MID = re.compile(r"(?<=[^\s。])。(?=\S)")
+
+
+_V_PERIOD_END = re.compile(r"[。.]+\s*(?=[」』\"'”]?$)")
+
+
+_V_TAGS = re.compile(r"(?:\[\[|\[|<)/?(?:impression_update|wish_mood|wish_grant|wish_check|mood|impression|mindscape_meta)[^>\]]*(?:\]\]|\]|>)")
+
+
+def vc_prep_text(text):
+    """把要念的那句话整理成 TTS 友好的样子（只影响语音，不改她的正文 ✓）。"""
+    s = str(text or "")
+    s = s.replace("|||", "，")          # 气泡分隔符不能念出来
+    s = _V_TAGS.sub("", s)
+    s = re.sub(r"\*\*|__|`", "", s)      # markdown 标记
+    s = _V_PERIOD_MID.sub("，", s)        # 句中句号 → 逗号（保留停顿）
+    s = _V_PERIOD_END.sub("", s)          # 句尾句号 → 去掉（靠语气词/波浪号收）
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def vc_synth(conf, text):
     """调云端 TTS 合成 → 存 mp3 → 返回路径（失败返回 None）。
 
@@ -4677,6 +4698,9 @@ def vc_synth(conf, text):
         key = open(kf, encoding="utf-8").read().strip()
     except Exception as e:
         logger.warning("[mindscape_voice] 读不到 key 文件: %s", str(e)[:80])
+        return None
+    text = vc_prep_text(text)          # ⭐ TTS 友好化（去句号 / 去标记）—— 缓存键也随之变化 ✓
+    if not text:
         return None
     out = vc_cache_path(conf, text)
     if os.path.exists(out) and os.path.getsize(out) > 1024:
