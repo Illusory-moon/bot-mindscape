@@ -3671,12 +3671,13 @@ def main():
         _keep = (_got_b == "留着句号。")
 
         # guard 侧：单条 plain 也要过整形（不是只有连发才过 ✓）
+        # ⚠️ 2026-11-09 起：store_fmt 末尾会给每句补一个「~」（主人定：每句有且只有一个）
         class _M81:
             name = "send_message_to_user"
         _msgs81 = [{"type": "plain", "text": "一句。\n\n两句。"}]
         _out81 = _GD81.store_fmt(_msgs81, _Ctx81(), {})
 
-        _good81 = _registered and _same and _keep and _out81[0]["text"] == "一句，两句"
+        _good81 = _registered and _same and _keep and _out81[0]["text"] == "一句，两句~"
         (ok if _good81 else bad)(
             "R81 工具发话通道也走去句号（登记 / 同口径 / 不误伤 / 单条也过）",
             "登记=%s 同口径=%s(%r) 不误伤=%s(%r) 单条=%r"

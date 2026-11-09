@@ -92,6 +92,11 @@ _MS_SIGN_TAIL = re.compile(r"[\s,，、:：]*Powered\s+by\s+AstrBot[\s。.!！~�
 
 # 同会话「逐字重复」抑制：key = self_id|会话 → (归一化文本, 时间戳)
 # 只挡**完全相同**的正文（跨秒数窗口），不做相似度 ✗
+# 坏字符：替换符（U+FFFD）+ BOM + 零宽/方向控制符 —— 2026-11-09 现场蹦出来过 ✗
+_MS_BADCH = re.compile("[\ufffd\ufeff\u200b-\u200f\u202a-\u202e]")
+# 句末标点（拿来切句）：只有这些算"这句说完了"，逗号不算 ✓
+_MS_SENT_END = re.compile("([！？!?…。]+[」』\"”]?)")
+
 _MS_LAST_SENT = {}
 _MS_DUP_WINDOW = 90.0
 
@@ -249,6 +254,55 @@ def strip_json_junk(text):
     return out.rstrip(), n
 
 
+def ensure_tilde(text):
+    """每句收尾带一个「~」（有且只有一个）。主人 2026-11-09 定 ✓
+
+    为什么（不是审美）：语音模块会把标点读成语调 —— 「~」是那句上扬的软尾；
+    没有它，每句都落在平调上，就不像"把一切都当玩"的那个她了 ✗
+
+    规则（改到第三版 ✓ 前两版各踩一个 ✗）：
+      ① 以 ！ ？ …… 收的句子 ⇒ **一个字都不动**（那是抬音量 / 真在问；在它们前面插 ~ 会把语气读歪 ✗）
+      ② 以「，」「、」收的（话没说完）⇒ 不动 ✗
+      ③ 「。」算句子边界，直接**换成「~」**（我们本来就不用句号 ✓）
+      ④ 其余（陈述句、无标点）⇒ 句末补一个「~」；连着的两个以上 ~ 折叠成一个 ✓
+    """
+    if not isinstance(text, str) or not text.strip():
+        return text, 0
+    parts = _MS_SENT_END.split(text)
+    hits = 0
+    out = []
+    for i, seg in enumerate(parts):
+        if not seg:
+            continue
+        if _MS_SENT_END.fullmatch(seg):        # 纯标点片段
+            if "。" in seg:                     # 我们不用句号 ⇒ 丢掉（前面的正文会拿到 ~）
+                hits += 1
+                continue
+            out.append(seg)
+            continue
+        # 正文片段：看它后面跟的是什么，决定要不要补 ~
+        nxt = parts[i + 1] if i + 1 < len(parts) else ""
+        followed_by_sentence_end = bool(_MS_SENT_END.fullmatch(nxt or "x")) and ("。" not in (nxt or ""))
+        lead = seg[: len(seg) - len(seg.lstrip())]
+        s = seg.strip()
+        tail = ""
+        m = re.search(r"[」』\"”]$", s)        # 收尾引号先摘下来
+        if m:
+            tail, s = m.group(0), s[:-1]
+        s2 = re.sub(r"[~～]{2,}", "~", s)       # 折叠重复波浪号
+        if s2 != s:
+            s, hits = s2, hits + 1
+        if followed_by_sentence_end:            # 后面已经是 ！？…… ⇒ 不动
+            out.append(lead + s + tail)
+            continue
+        if s.endswith(("~", "～")) or s.endswith(("，", ",", "、", "：", ":", "；", ";", "…")):
+            out.append(lead + s + tail)
+            continue
+        out.append(lead + s + "~" + tail)
+        hits += 1
+    return "".join(out), hits
+
+
 def normalize_outbound(text):
     """出站总整理：**私有标签/思考** → **`|||` 去掉** → **markdown 标记扒掉** ✓
 
@@ -257,7 +311,12 @@ def normalize_outbound(text):
     if not isinstance(text, str) or not text:
         return text, 0
     hits = 0
-    out, _n1 = strip_private_tags(text)
+    out = text
+    _b = _MS_BADCH.search(out)
+    if _b:                                  # 坏字符先清掉（U+FFFD 之类）
+        out = _MS_BADCH.sub("", out)
+        hits += 1
+    out, _n1 = strip_private_tags(out)
     hits += _n1
     if _SEP3 in out:
         # ⚠️ 口径（2026-10-17 第二次修正 ✓）：`|||` 是**句间分隔** ⇒
@@ -567,6 +626,15 @@ def store_fmt(msgs, context, kwargs):
                 except Exception as exc:
                     logger.warning("[mindscape_guard] 出站整形失败（原样放行）: %s", str(exc)[:80])
         out.append(m)
+    # ⭐ 每句一个「~」（主人 2026-11-09）：工具直发路也要，否则语音/气泡那几条没有软尾 ✗
+    for _i, _m in enumerate(out):
+        if (isinstance(_m, dict) and str(_m.get("type")) == "plain"
+                and isinstance(_m.get("text"), str)):
+            _t2, _h2 = ensure_tilde(_m["text"])
+            if _h2:
+                _m = dict(_m)
+                _m["text"] = _t2
+                out[_i] = _m
     return out
 
 def ms_patch_send_tool():
@@ -707,6 +775,10 @@ class GuardMixin:
             #   **所有插件的最终出站都要从它下面过** ⇒ 是唯一能兜住"新插件忘了清"的位置 ✓
             #   ⚠️ 策略：**扒掉标记、留下她真正要说的话** ✓ 不是整条丢掉 ✗
             _cleaned, _hits = normalize_outbound(txt)
+            _t3, _h3 = ensure_tilde(_cleaned)     # ⭐ 每句一个「~」（主人 2026-11-09）
+            if _h3:
+                _cleaned = _t3
+                _hits += _h3
             if _hits:
                 logger.warning("[mindscape_guard] 出站整理: %s", redact(txt))
                 put_plain_text(result, _cleaned)
