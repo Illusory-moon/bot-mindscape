@@ -4957,10 +4957,75 @@ def sw_limits():
     return (max(1.0, min(mh, 24.0 * 30)), max(1, min(mi, 50)))
 
 
+_ABS_TIME = re.compile(r"(?:(\d{4})[-/年])?(?:(\d{1,2})[-/月](\d{1,2})[日号]?)?\s*(\d{1,2})[:：点](\d{2})?")
+
+
+_ABS_DAY = re.compile(r"(今天|今晚|明天|明晚|后天|大后天)")
+
+
+def sw_parse_abs(text, now=None):
+    """把绝对时间说成秒数（相对现在）。解析不出来返回 None（**不猜** ✗）。
+
+    支持：`明天13:14` `今晚 8:30` `今天20:00` `13:14` `11-11 13:14` `2026-11-11 13:14`
+    口径：**只给时:分** ⇒ 取最近的那个（已经过了就顺延到明天）；只有时间没日期同理。
+    """
+    if not text or not isinstance(text, str):
+        return None
+    import datetime as _dt
+    s = text.strip()
+    m = _ABS_TIME.search(s)
+    if not m:
+        return None
+    y, mo, d, hh, mm = m.groups()
+    if not hh:
+        return None
+    try:
+        hh = int(hh)
+        mi = int(mm or 0)
+    except Exception:
+        return None
+    if not (0 <= hh <= 23 and 0 <= mi <= 59):
+        return None
+    base = now or _dt.datetime.now()
+    day = None
+    w = _ABS_DAY.search(s)
+    if y and mo and d:                              # 完整年月日
+        try:
+            day = _dt.datetime(int(y), int(mo), int(d), hh, mi)
+        except Exception:
+            return None
+    elif mo and d:                                  # 月-日：按今年；已过就明年
+        try:
+            day = _dt.datetime(base.year, int(mo), int(d), hh, mi)
+        except Exception:
+            return None
+        if day < base:
+            try:
+                day = day.replace(year=base.year + 1)
+            except Exception:
+                return None
+    else:                                           # 只有时:分（+ 可能的"明天/今晚"）
+        cand = base.replace(hour=hh, minute=mi, second=0, microsecond=0)
+        off = 0
+        if w:
+            off = {"今天": 0, "今晚": 0, "明天": 1, "明晚": 1, "后天": 2, "大后天": 3}[w.group(1)]
+        cand = cand + _dt.timedelta(days=off)
+        if not w and cand <= base:                  # 没写哪天、且已过 ⇒ 明天
+            cand = cand + _dt.timedelta(days=1)
+        elif w and off == 0 and cand <= base:       # 「今天」但已过 ⇒ 不猜，交给相对写法
+            return None
+        day = cand
+    secs = (day - base).total_seconds()
+    return int(secs) if secs > 0 else None
+
+
 def sw_parse_delay(text):
     """把「40 分钟 / 1.5 小时 / 两天」解析成秒。解析不出来返回 None（**不猜** ✗）。"""
     if not text or not isinstance(text, str):
         return None
+    _abs = sw_parse_abs(text)          # ⭐ 绝对时间优先（「明天13:14」这类）
+    if _abs:
+        return _abs
     m = _DELAY_RE.search(text.strip())
     if not m:
         return None
@@ -7336,7 +7401,9 @@ class SelfwakeMixin:
         别怕约得太近也别怕太远：1 分钟和 8 小时都可以；不想醒就别调这个工具。
 
         Args:
-            delay(string): 多久之后，例如 "40 分钟"、"1.5 小时"、"8 小时"、"1 天"
+            delay(string): 什么时候醒 —— **可以直接写时间**，例如 "明天13:14"、"今晚 8:30"、"11-11 13:14"；
+                也可以写"多久之后"，例如 "40 分钟"、"1.5 小时"、"8 小时"、"1 天"。
+                （能写几点就写几点，别自己换算成小时数 ✗）
             reason(string): 一小句理由，写给**未来的自己**看（醒来时你会读到它），要具体
         """
         ev = None
