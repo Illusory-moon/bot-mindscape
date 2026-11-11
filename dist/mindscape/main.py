@@ -7515,7 +7515,9 @@ class SelfwakeMixin:
                         description="她自己约的醒（selfwake）",
                         run_once=True,
                         run_at=due,
-                        persistent=False,
+                        # ⚠️ 必须 True（2026-11-11 真事故）：False ⇒ 容器重启就丢，
+                        #    而 state 里的条目排完就摘了 ⇒ 两边都没有 ⇒ **静默丢失** ✗
+                        persistent=True,
                     )
                     logger.info("[mindscape_selfwake] 排期 | %s | %s | 条目=%d",
                                 sid, due.strftime("%m-%d %H:%M"), len(group))
