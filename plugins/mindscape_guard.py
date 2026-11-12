@@ -501,6 +501,33 @@ def ms_chain_clean_plain(message):
     return message, total
 
 
+def ms_chain_tilde(message):
+    """把 MessageChain 里每个**文本组件**过一遍 ensure_tilde（就地改，返回改了几处）。
+
+    ⚠️ 为什么要这一层（2026-11-11 真事故）：愿力经济那类插件是**自己 `ev.send()`**，
+       既有出口（store_fmt / block_error）都看不到它 ⇒ 那一轮的句子**没有软尾** ✗
+    ⚠️ 只碰 Plain；At / Image 一律不动 ✗   ⚠️ 走 `tilde.targets` 白名单（谁的口癖谁自己开 ✓）
+    """
+    if isinstance(message, str):
+        return ensure_tilde(message)
+    total = 0
+    for c in (getattr(message, "chain", None) or []):
+        txt = getattr(c, "text", None)
+        if not isinstance(txt, str) or not txt:
+            continue
+        try:
+            new, n = ensure_tilde(txt)
+        except Exception:
+            continue
+        if n and new != txt:
+            try:
+                c.text = new
+                total += n
+            except Exception:
+                pass
+    return message, total
+
+
 def ms_install_send_guard(check):
     """给平台事件类的 send 包一层，返回这次包了几个类（幂等）。"""
     try:
@@ -555,6 +582,15 @@ def ms_install_send_guard(check):
                                 self.get_self_id(), _n_clean)
             except Exception as _e:
                 logger.warning("[mindscape_guard] 直发整理失败: %s", str(_e)[:100])
+            # ⭐ 每句一个「~」（2026-11-11 补）：这条路以前漏了 —— 愿力经济那类自己 ev.send() 的轮没有软尾 ✗
+            try:
+                if str(self.get_self_id()) in ms_tilde_ids():
+                    message, _n_t = ms_chain_tilde(message)
+                    if _n_t:
+                        logger.info("[mindscape_guard] 直发补软尾 self=%s 改了 %d 句",
+                                    self.get_self_id(), _n_t)
+            except Exception as _e:
+                logger.warning("[mindscape_guard] 直发补软尾失败: %s", str(_e)[:100])
             sent = await _orig(self, message, **kw)
             if txt.strip() and private_code:
                 pg_audit("given", self.get_self_id(), self.get_sender_id() or "")
