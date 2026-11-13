@@ -240,7 +240,7 @@ MN_PENDING = {}
 # 「这一轮她已经连发过了」：同样是模块级（钩子与工具拿到的 event 不一定同源 ✓）。
 # 用途：say_lines 成功的这一轮**抑制正文** —— 不然她会同一轮答两遍（连发一次 + 正文一次），
 # 读起来割裂 ✗（实测 2026-10-06 19:33：3 条讲配装 + 1 条另起话头「货币战争？all in芳芳…」）。
-MN_SAID = {}            # key = "self_id|群" → (发了什么, 时间, event_id, message_id) ✓
+MN_SAID = {}            # key = "self_id|群" → (发了什么, 时间, event_id(仅留档不用来判), message_id) ✓
 MN_SAID_TTL = 300       # 状态在表里最多留多久（清理用 ✓）
 # ⚠️ 2026-10-08：原先这里还有个 MN_SAID_WINDOW=40 的**时间窗口** ✗ —— 实测它会误伤新一轮 ✗
 # （同一群 40 秒内开新轮 → 正文被当重复抑制 ✗）→ **已删除** ✓ 改按 message_id 判「同一轮」✓。
@@ -284,11 +284,13 @@ async def mn_attach_hook(*args, **kwargs):
         #    **新消息进来 = 新一轮 → 绝不抑制** ✓。
         said = MN_SAID.get(key) if MN_SAID else None
         if said:
-            _same_turn = (len(said) > 2 and said[2] == id(event))
-            _same_msg = (len(said) > 3 and said[3]
-                         and str(said[3]) == str(getattr(
-                             getattr(event, "message_obj", None), "message_id", "") or ""))
-            if not (_same_turn or _same_msg):
+            # ⚠️ 2026-11-12 真事故：原先还用 `id(event)` 判同一轮 ✗
+            #    Python 对象回收后地址会复用 ⇒ 新 event 撞上旧地址 ⇒ 误判同一轮
+            #    ⇒ 新一轮的正文被当成"上一轮已发过"吞掉 ✗（群里表现为"她不回"）
+            #  ⇒ **只认 message_id** ✓ 拿不到 mid 就不算同一轮（宁可不抑制，绝不吞新回复 ✗）
+            _cur_mid = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
+            _same_msg = bool(said[3]) and bool(_cur_mid) and str(said[3]) == _cur_mid
+            if not _same_msg:
                 logger.info("[mindscape_mention] 上一条连发状态属于【别的消息】→ 不抑制正文 ✓")
                 said = None
                 MN_SAID.pop(key, None)

@@ -93,6 +93,7 @@ _MS_SIGN_TAIL = re.compile(r"[\s,，、:：]*Powered\s+by\s+AstrBot[\s。.!！~�
 # 同会话「逐字重复」抑制：key = self_id|会话 → (归一化文本, 时间戳)
 # 只挡**完全相同**的正文（跨秒数窗口），不做相似度 ✗
 # 坏字符：替换符（U+FFFD）+ BOM + 零宽/方向控制符 —— 2026-11-09 现场蹦出来过 ✗
+_MS_TILDE_COMMA = re.compile("[~～][，、]")
 _MS_BADCH = re.compile("[\ufffd\ufeff\u200b-\u200f\u202a-\u202e]")
 # 句末标点（拿来切句）：只有这些算"这句说完了"，逗号不算 ✓
 _MS_SENT_END = re.compile("([！？!?…。]+[」』\"”]?)")
@@ -345,6 +346,11 @@ def normalize_outbound(text):
     _m = _MS_SIGN_TAIL.search(out)
     if _m:
         out = out[:_m.start()] + out[_m.end():]
+        hits += 1
+    # ⭐ 「~，」这种软尾后挂逗号：把逗号吃掉（2026-11-12 真事故：`|||`→「，」造成）
+    _tc = _MS_TILDE_COMMA.search(out)
+    if _tc:
+        out = _MS_TILDE_COMMA.sub(lambda m: m.group(0)[0], out)
         hits += 1
     if "|" in out:                       # 孤立竖线：先只观测（可能是 ||| 被吃掉两个剩的）
         logger.warning("[mindscape_guard] 出站仍有孤立竖线 %d 个（只观测不改）：%r",

@@ -1110,6 +1110,9 @@ _MS_TAG_NAMES = ("impression_update", "wish_mood", "wish_grant", "wish_check",
 _MS_SIGN_TAIL = re.compile(r"[\s,，、:：]*Powered\s+by\s+AstrBot[\s。.!！~～]*$", re.I)
 
 
+_MS_TILDE_COMMA = re.compile("[~～][，、]")
+
+
 _MS_BADCH = re.compile("[\ufffd\ufeff\u200b-\u200f\u202a-\u202e]")
 
 
@@ -1356,6 +1359,11 @@ def normalize_outbound(text):
     _m = _MS_SIGN_TAIL.search(out)
     if _m:
         out = out[:_m.start()] + out[_m.end():]
+        hits += 1
+    # ⭐ 「~，」这种软尾后挂逗号：把逗号吃掉（2026-11-12 真事故：`|||`→「，」造成）
+    _tc = _MS_TILDE_COMMA.search(out)
+    if _tc:
+        out = _MS_TILDE_COMMA.sub(lambda m: m.group(0)[0], out)
         hits += 1
     if "|" in out:                       # 孤立竖线：先只观测（可能是 ||| 被吃掉两个剩的）
         logger.warning("[mindscape_guard] 出站仍有孤立竖线 %d 个（只观测不改）：%r",
@@ -4527,7 +4535,7 @@ def mn_take_pending(pending, key, now, ttl=MN_PENDING_TTL):
 MN_PENDING = {}
 
 
-MN_SAID = {}            # key = "self_id|群" → (发了什么, 时间, event_id, message_id) ✓
+MN_SAID = {}            # key = "self_id|群" → (发了什么, 时间, event_id(仅留档不用来判), message_id) ✓
 
 
 MN_SAID_TTL = 300       # 状态在表里最多留多久（清理用 ✓）
@@ -4569,11 +4577,13 @@ async def mn_attach_hook(*args, **kwargs):
         #    **新消息进来 = 新一轮 → 绝不抑制** ✓。
         said = MN_SAID.get(key) if MN_SAID else None
         if said:
-            _same_turn = (len(said) > 2 and said[2] == id(event))
-            _same_msg = (len(said) > 3 and said[3]
-                         and str(said[3]) == str(getattr(
-                             getattr(event, "message_obj", None), "message_id", "") or ""))
-            if not (_same_turn or _same_msg):
+            # ⚠️ 2026-11-12 真事故：原先还用 `id(event)` 判同一轮 ✗
+            #    Python 对象回收后地址会复用 ⇒ 新 event 撞上旧地址 ⇒ 误判同一轮
+            #    ⇒ 新一轮的正文被当成"上一轮已发过"吞掉 ✗（群里表现为"她不回"）
+            #  ⇒ **只认 message_id** ✓ 拿不到 mid 就不算同一轮（宁可不抑制，绝不吞新回复 ✗）
+            _cur_mid = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
+            _same_msg = bool(said[3]) and bool(_cur_mid) and str(said[3]) == _cur_mid
+            if not _same_msg:
                 logger.info("[mindscape_mention] 上一条连发状态属于【别的消息】→ 不抑制正文 ✓")
                 said = None
                 MN_SAID.pop(key, None)
