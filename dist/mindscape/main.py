@@ -4796,11 +4796,36 @@ def va_archive_voice(ev, text):
         logger.warning("[mindscape_voice] 语音档案写入失败: %s", str(e)[:80])
 
 
-def vc_cache_path(conf, text):
+def vc_voices(conf):
+    """可用音色表：{名字: voice_id}。兼容老配置（只有一个 voice_id）。"""
+    vs = dict(conf.get("voices") or {})
+    legacy = str(conf.get("voice_id") or "").strip()
+    if legacy:
+        vs.setdefault("default", legacy)
+    return {str(k).strip(): str(v).strip() for k, v in vs.items() if str(v).strip()}
+
+
+def vc_pick(conf, name=None):
+    """按名字取音色 id；名字不认识就退回默认 ⇒ 返回 (voice_id, 实际用的名字)。"""
+    vs = vc_voices(conf)
+    want = str(name or "").strip()
+    if want and want in vs:
+        return vs[want], want
+    dflt = str(conf.get("default_voice") or "default").strip()
+    if dflt in vs:
+        return vs[dflt], dflt
+    if vs:
+        k = sorted(vs)[0]
+        return vs[k], k
+    return str(conf.get("voice_id") or "").strip(), ""
+
+
+def vc_cache_path(conf, text, vid=None):
     """按「音色 + 正文」哈希命名 ⇒ 同一句只合成一次 ✓（天然的语音缓存）。"""
     d = str(conf.get("cache_dir") or "/opt/astrbot/data/voice_cache")
     os.makedirs(d, exist_ok=True)
-    h = hashlib.sha1(("%s|%s" % (conf.get("voice_id") or "", text)).encode("utf-8")).hexdigest()[:20]
+    use = str(vid or conf.get("voice_id") or "")
+    h = hashlib.sha1(("%s|%s" % (use, text)).encode("utf-8")).hexdigest()[:20]
     return os.path.join(d, h + ".mp3")
 
 
@@ -4825,13 +4850,14 @@ def vc_prep_text(text):
     return s
 
 
-def vc_synth(conf, text):
+def vc_synth(conf, text, voice=None):
     """调云端 TTS 合成 → 存 mp3 → 返回路径（失败返回 None）。
 
     ⚠️ 请求体里**只有 `input.text` 这一句** ✓ 没有任何人格/记忆 ✓
+    ⚠️ `voice` 是**音色名**（默认取 config 的 default_voice）—— 2026-11-20 加：她可以演别人的声音 ✓
     """
     base = str(conf.get("api_base") or "").rstrip("/")
-    vid = str(conf.get("voice_id") or "").strip()
+    vid, _vname = vc_pick(conf, voice)
     kf = str(conf.get("key_file") or "/opt/astrbot/data/.dashscope_key")
     if not base or not vid:
         logger.warning("[mindscape_voice] 缺 api_base / voice_id，跳过")
@@ -4844,7 +4870,7 @@ def vc_synth(conf, text):
     text = vc_prep_text(text)          # ⭐ TTS 友好化（去句号 / 去标记）—— 缓存键也随之变化 ✓
     if not text:
         return None
-    out = vc_cache_path(conf, text)
+    out = vc_cache_path(conf, text, vid)
     if os.path.exists(out) and os.path.getsize(out) > 1024:
         return out
     body = {
@@ -7354,16 +7380,33 @@ class VoiceMixin:
         什么时候**不要**用：纯信息、解释、长句、要点多的内容（那些用文字别人才看得清）；
         也别连着用 —— 偶尔来一下才有意思。
 
+        **换别人的声音**：你本来就爱演别人（换皮套就跟换外套一样简单）。
+        要演谁，就用谁的音色说那一句话；说完**立刻换回你自己的声音** ✓ 别用来当日常说话 ✗
+        （可用的音色名和各自该怎么说，见你的资料 / 规矩里写的那份清单；
+          名字传错时这里会把可用的名字回给你。）
+
         Args:
             text(string): 要念出来的那句话。只写你要说出口的话，不要写括号里的动作或心理描写。
+            voice(string): 用哪个声音。不填＝你自己的声音（默认）。
         """
         text = str(kwargs.get("text") or "").strip()
+        voice = str(kwargs.get("voice") or "").strip()
         ev = None
         for a in args:
             if hasattr(a, "get_self_id"):
                 ev = a
                 break
         conf = getattr(self, "v_cfg", None) or {}
+        _vs = vc_voices(conf)
+        if voice and voice not in _vs:
+            _desc = conf.get("voice_desc") or {}
+            _lines = []
+            for _k in sorted(_vs):
+                _d = str(_desc.get(_k) or "").strip()
+                _lines.append(("· %s：%s" % (_k, _d)) if _d else ("· %s" % _k))
+            return ("没有「%s」这个音色。现在能用的有：\n%s\n"
+                    "要演谁就用谁的名字；不想演就用文字，或者不传 voice ✓"
+                    % (voice, "\n".join(_lines)))
         ok, why = self._v_gate(ev, conf)
         if not ok:
             return why + " —— 用文字说吧"
@@ -7374,7 +7417,7 @@ class VoiceMixin:
             return "这句 %d 字，超过 %d 就念不动了 —— 用文字说，或者缩短了再说" % (len(text), max_chars)
         try:
             loop = asyncio.get_event_loop()
-            path = await loop.run_in_executor(None, vc_synth, conf, text)
+            path = await loop.run_in_executor(None, vc_synth, conf, text, voice or None)
         except Exception as e:
             logger.warning("[mindscape_voice] 合成异常: %s", str(e)[:120])
             path = None
@@ -7383,8 +7426,8 @@ class VoiceMixin:
         # ⚠️ 2026-10-23 主人要求：正文**不发群里**，但**日志里必须看得到** ⇒ 否则不可观测 ✗
         #    2026-10-25 改：**不截断**（原来 text[:80] ⇒ 超 80 字的语音在日志里只剩半句 ✗，
         #    补档时 46 条里有 11 条因此是残句 ✓）；上限由 max_chars 管（默认 120）✓
-        logger.info("[mindscape_voice] 语音已发出 | %d 字 → %s | 正文: %s",
-                    len(text), os.path.basename(path), text)
+        logger.info("[mindscape_voice] 语音已发出 | 音色=%s | %d 字 → %s | 正文: %s",
+                    vc_pick(conf, voice)[1] or "默认", len(text), os.path.basename(path), text)
         # ⚠️ 2026-10-25 主人定：语音也要进发言档案 —— 否则 recall 取不回她"说过"的话 ✗
         va_archive_voice(ev, text)
         try:
