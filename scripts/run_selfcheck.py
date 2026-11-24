@@ -3760,6 +3760,12 @@ def main():
              '「火花大会」？前几期？门票钱进谁兜了~'),
             ('上午还念叨着火爻真虚，下午就喊我菜~[[wish_mood]]{"delta":0,"reason":"x"}，嗯，标签要放对位置，让我把 wish_mood 写完整',
              '上午还念叨着火爻真虚，下午就喊我菜~'),
+            # ⭐ 工具调用协议标签（2026-11-20 真事故：她把这串当正文说出来了 ✗）
+            ('行，那到时候排队领我的时候，记得给你自己留个前排～</｜｜DSML｜｜ parameter>，'
+             '</｜｜DSML｜｜ invoke>，</｜｜DSML｜｜ calls>~',
+             '行，那到时候排队领我的时候，记得给你自己留个前排～'),
+            # ⭐ 标注符号（我们写资料的勾叉，她读了会学 ✗ 2026-11-24 主人抓到「√」）
+            ('这题 √ 对了 × 不对呀~', '这题 对了 不对呀~'),
             # ⭐ markdown 标记也扒（2026-10-17 主人点名 ✓ 那 5 条真事故 ✓）
             ('火花花验了——**做了**，结了，信誉分加五分', '火花花验了——做了，结了，信誉分加五分'),
             ('是**今**晚刚发生的事', '是今晚刚发生的事'),
@@ -3774,6 +3780,9 @@ def main():
             # ⚠️ 不误伤：她正常用星号（乘法）/ 下划线昵称 ✓
             '2*3 等于 6 呀~',
             '芳芳_2026 也在榜上呀',
+            # ⚠️ 不误伤：尖括号/比较符都不是标签
+            '2<3 呀~',
+            '这台 <机器> 不错呀~',
         ]
         _bad83 = []
         for _t83, _want83 in _leaks83:
@@ -3792,6 +3801,33 @@ def main():
             % (len(_names83), len(_leaks83), len(_keep83), "; ".join(_bad83)[:110] or "全部通过 ✓"))
     except Exception as e:
         bad("R83 私有标签/思考残句的总兜底", "%s: %s" % (type(e).__name__, str(e)[:140]))
+
+    # R89: **人格与资料里不许出现标注符号**（2026-11-24 主人抓的 ✓）
+    #   真事故：她发了一句含「√」的话 ⇒ 源头是我们写资料时到处打 ✓/✗ ✗
+    #   判据：人格 + 知识库 + 风格层里 **0 个** [√✓✔×✗✘❌✕]
+    try:
+        import glob as _gl89
+        import os as _os89
+        _root89 = _os89.path.dirname(_os89.path.dirname(_os89.path.abspath(__file__)))
+        _cand89 = ([_os89.path.join(_root89, "..", "persona", "sparxie-qq.md")]
+                   + sorted(_gl89.glob(_os89.path.join(
+                       _root89, "..", "open-source", "sparxie-persona", "knowledge", "*.md"))))
+        _files89 = [p for p in _cand89 if _os89.path.exists(p)]
+        if not _files89:
+            ok("R89 人格/资料里的标注符号（✓✗√×）", "没找到人格或资料目录 —— 跳过（不是通过）")
+        else:
+            _hit89 = []
+            for _p89 in _files89:
+                _s89 = open(_p89, encoding="utf-8", errors="replace").read()
+                _c89 = len([c for c in _s89 if c in "√✓✔×✗✘❌✕"])
+                if _c89:
+                    _hit89.append("%s:%d" % (_os89.path.basename(_p89), _c89))
+            (ok if not _hit89 else bad)(
+                "R89 人格/资料里的标注符号（✓✗√× 一律不许有）",
+                ("扫了 %d 个文件，全是干净的" % len(_files89)) if not _hit89
+                else "还有 %d 个文件带标注符号：%s" % (len(_hit89), ", ".join(_hit89[:8])))
+    except Exception as e:
+        bad("R89 人格/资料里的标注符号", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
     # R84: **气泡分隔符 `|||` 的总兜底**（2026-10-17 真事故 ✓）
     #   事故：烩面群里收到 `…我陪你三个小时|||谁先扛不住谁输…` ✗

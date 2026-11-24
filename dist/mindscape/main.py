@@ -1113,6 +1113,18 @@ _MS_SIGN_TAIL = re.compile(r"[\s,，、:：]*Powered\s+by\s+AstrBot[\s。.!！~�
 _MS_TILDE_COMMA = re.compile("[~～][，、]")
 
 
+_MS_DSML_TAG = re.compile(r"<\s*[/／]?\s*[|｜]{1,3}\s*DSML[^<>]{0,80}>", re.I)
+
+
+_MS_DSML_LOOSE = re.compile(r"[|｜]{2}\s*/?\s*DSML[^<>]{0,80}>?", re.I)
+
+
+_MS_DANGLE_COMMA = re.compile(r"[，,、]{2,}|^[，,、\s]+|[，,、\s]+$")
+
+
+_MS_MARKS = re.compile("[√✓✔×✗✘❌✕]")
+
+
 _MS_BADCH = re.compile("[\ufffd\ufeff\u200b-\u200f\u202a-\u202e]")
 
 
@@ -1183,6 +1195,10 @@ def strip_private_tags(text):
         before = out
         out = PRIV_TAG_FULL.sub("", out)
         out = PRIV_TAG_TRUNC.sub("", out)
+        out = _MS_DSML_TAG.sub("", out)     # 工具调用协议标签 ✗
+        out = _MS_DSML_LOOSE.sub("", out)   # 残留的｜｜DSML… 也行 ✗
+        if out != before:
+            n += 1
         out = PRIV_TAG_OPENJSON.sub("", out)
         out = PRIV_TAG_CLOSE.sub("", out)
         # 思考残句：**只在扒完还剩 ≥2 字时才扒** ✓（否则它把整句吃了 ⇒ 不扒 ✗）
@@ -1364,6 +1380,25 @@ def normalize_outbound(text):
     _tc = _MS_TILDE_COMMA.search(out)
     if _tc:
         out = _MS_TILDE_COMMA.sub(lambda m: m.group(0)[0], out)
+        hits += 1
+    # ⑦ 标注符号（✓ ✗ √ × …）：我们写资料时的勾叉，不该从她嘴里出来 ✗
+    if _MS_MARKS.search(out):
+        out = _MS_MARKS.sub("", out)
+        hits += 1
+    # ⑥b 扒完 DSML 会留下「，，」这种孤立逗号 —— 收一下（只动逗号/顿号，不碰正文 ✗）
+    if _MS_DANGLE_COMMA.search(out):
+        # ⚠️ 只合并**连续**逗号（2 个以上 → 1 个）；**不动句尾单个逗号** ✗
+        #   （2026-11-24 第一版连句尾都吃了 ⇒ 自检里的旧用例当场红 ✓）
+        _nf = re.sub(r"[，,、]{2,}", "，", out)
+        if _nf != out:
+            out = _nf
+            hits += 1
+    # ⑥c 收尾再擦一遍（扒完标签常留「～，~」这种组合）—— 只动波浪号与空格 ✗
+    _before_c = out
+    out = _MS_TILDE_COMMA.sub(lambda m: m.group(0)[0], out)
+    out = re.sub(r"[~～]{2,}", lambda m: m.group(0)[0], out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    if out != _before_c:
         hits += 1
     if "|" in out:                       # 孤立竖线：先只观测（可能是 ||| 被吃掉两个剩的）
         logger.warning("[mindscape_guard] 出站仍有孤立竖线 %d 个（只观测不改）：%r",
