@@ -72,7 +72,7 @@ def tr_hist(request):
 
     ⚠️ 框架在 `on_llm_request` 这一刻**可能还没把历史并进 `contexts`**
     （实测两个字段都是 0/空）—— 所以只用 `contexts` 当体积指标会一直是 0。
-    拿不到就返回 (0, 0)：量到 0 不代表没有历史，只代表此刻它还不在手上。
+ 拿不到就返回 (0, 0)：量到 0 不代表没有历史，只代表此刻它还不在手上。
     """
     conv = getattr(request, "conversation", None)
     raw = getattr(conv, "history", None) if conv is not None else None
@@ -86,11 +86,11 @@ def tr_hist(request):
 
 
 def tr_fp(text):
-    """system 前缀的指纹（头 120 字 / 尾 120 字 / 全文）—— 只记哈希、不记正文 ✓。
+    """system 前缀的指纹（头 120 字 / 尾 120 字 / 全文）—— 只记哈希、不记正文 。
 
-    为什么要有它：2026-10-09 见过「前缀首变=0(system)、sys 字数却一样」的断点 ✗ ——
-    等长不同内容时，只比字数看不出来；头/尾各一个哈希就能一眼分清「是人格段变了」
-    还是「尾部的注入块变了」✓（动态块都拼在 system 末尾）。
+ 为什么要有它：2026-10-09 见过「前缀首变=0(system)、sys 字数却一样」的断点  ——
+ 等长不同内容时，只比字数看不出来；头/尾各一个哈希就能一眼分清「是人格段变了」
+ 还是「尾部的注入块变了」（动态块都拼在 system 末尾）。
     """
     try:
         import hashlib

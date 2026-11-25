@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """mindscape_toolscope —— 工具箱按 bot 隔离（2026-10-07）。
 
-问题：AstrBot 的 `@llm_tool` 是**全局注册**的 ✗ —— 属于某个 bot 的工具，
-另一个 bot 也能看到、也能调 ✗（`soul_memory` 那个插件的 docstring 里早就记着这个坑 ✓）。
+问题：AstrBot 的 `@llm_tool` 是**全局注册**的  —— 属于某个 bot 的工具，
+另一个 bot 也能看到、也能调 （`soul_memory` 那个插件的 docstring 里早就记着这个坑 ）。
 
-实测代价（2026-10-07 22:51）：有个 bot 看到一个**不属于它**的工具 → 调了 ✗ → 被拒 ✗ →
-它把那条报错**读成了「对方那句话不属于我」**✗ → 在群里自言自语冒出一句 ✗。
+实测代价（2026-10-07 22:51）：有个 bot 看到一个**不属于它**的工具 → 调了  → 被拒  →
+它把那条报错**读成了「对方那句话不属于我」** → 在群里自言自语冒出一句 。
 
-做法：在 `on_llm_request` 的**最后一棒**（priority 很低 ✓）按 `self_id` 把不该给她的
-工具从 `request.func_tool` 里摘掉 ✓。规则进配置 ✓：代码里没有 bot 号、也没有具体工具名 ——
-`tool_scope.allow` 是一张「工具名 → 允许的 self_id 列表」表 ✓（不在表里的工具对所有 bot 可见 ✓）。
+做法：在 `on_llm_request` 的**最后一棒**（priority 很低 ）按 `self_id` 把不该给她的
+工具从 `request.func_tool` 里摘掉 。规则进配置 ：代码里没有 bot 号、也没有具体工具名 ——
+`tool_scope.allow` 是一张「工具名 → 允许的 self_id 列表」表 （不在表里的工具对所有 bot 可见 ）。
 """
 import re
 
@@ -27,7 +27,7 @@ def ts_ids(raw):
 
 
 def ts_removed_for(allow, self_id):
-    """返回「这个 bot 不该看到的工具名」列表（纯函数 ✓ 好测 ✓）。"""
+    """返回「这个 bot 不该看到的工具名」列表（纯函数 好测 ）。"""
     sid = str(self_id or "")
     out = []
     for name, allowed in (allow or {}).items():

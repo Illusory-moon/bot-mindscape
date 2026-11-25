@@ -2,12 +2,12 @@
 """mindscape_janitor —— 运维层：会话历史防膨胀
 
 问题：不少 bot 框架会把聊天里的图片以 base64 形式存进会话历史。
-      攒到几十 MB 后，每轮请求都要把这坨东西发给模型 ——
-      上传超时 → bot 看起来「卡死」，但日志里一句报错都没有。
+ 攒到几十 MB 后，每轮请求都要把这坨东西发给模型 ——
+ 上传超时 → bot 看起来「卡死」，但日志里一句报错都没有。
 
 方案：**先脱图，再删行** ——
   1. 含内联图片（`data:image/…;base64,…`）的记录：把那坨数据**就地换成「[图片]」**，
-     会话上下文原样保留（只丢那张历史图的像素，模型本来也用不上）。
+ 会话上下文原样保留（只丢那张历史图的像素，模型本来也用不上）。
   2. 改不动的行（不是 JSON）或仍然超大的整行（> max_mb）：删掉兜底。
 记忆的职责交给 diary/memory（独立文件），不会因此失忆。
 
@@ -76,8 +76,8 @@ def _strip_parts(msgs):
 
     ⚠️ 关键：`image_url` 段不能只把 url 换掉 —— 那样 provider 会直接 400
     （`Unsupported image_url format`），整个会话从此每轮都失败、她一句话都说不出来。
-    实测踩过（2026-10-02：线上群会话被旧版正则改坏，她静默了两轮）。
-    所以**整段换成文字段**，同时顺手修掉历史上已经被改坏的段。
+ 实测踩过（2026-10-02：线上群会话被旧版正则改坏，她静默了两轮）。
+ 所以**整段换成文字段**，同时顺手修掉历史上已经被改坏的段。
     """
     n = 0
     for m in (msgs or []):
@@ -116,11 +116,11 @@ def _strip_parts(msgs):
 def strip_media(con, table, column):
     """把记录里内联的 base64 图片换成占位符（保住会话上下文）。
 
-    返回 (改了几行, 替换几处, 砍掉几字)。
-    改完必须仍是合法 JSON —— 坏 JSON 比不改更糟，所以解析失败就跳过、留给删行兜底。
+ 返回 (改了几行, 替换几处, 砍掉几字)。
+ 改完必须仍是合法 JSON —— 坏 JSON 比不改更糟，所以解析失败就跳过、留给删行兜底。
 
-    顺手**自愈**历史上被改坏的段（那种行里已经没有 `data:image` 了，只挑了占位符），
-    所以筛选条件除了内联图，还包括「占位符当 url」的行。
+ 顺手**自愈**历史上被改坏的段（那种行里已经没有 `data:image` 了，只挑了占位符），
+ 所以筛选条件除了内联图，还包括「占位符当 url」的行。
     """
     mark = "%" + PLACEHOLDER + "%"
     rows = list(con.execute(
@@ -223,9 +223,9 @@ IDLE_BEFORE_TRIM = 300      # 秒：会话静默超过这么久才搬 ✓（5 �
 
 
 def session_idle_seconds(cur, table, rid, now=None):
-    """这个会话静默了多少秒 ✓（取 conversations.updated_at ✓ —— 它就是「上次有人说话」的时间 ✓）。
+    """这个会话静默了多少秒 （取 conversations.updated_at  —— 它就是「上次有人说话」的时间 ）。
 
-    取不到就返回 None ✓（调用方按「不静默」保守跳过 ✗ —— 宁可不搬，也不要废缓存 ✓）。
+ 取不到就返回 None （调用方按「不静默」保守跳过  —— 宁可不搬，也不要废缓存 ）。
     """
     try:
         row = cur.execute("SELECT updated_at FROM %s WHERE rowid=?" % table, (rid,)).fetchone()
@@ -233,7 +233,7 @@ def session_idle_seconds(cur, table, rid, now=None):
             return None
         s = str(row[0]).strip()[:19]
         # ⚠️ 2026-10-08 本鱼第一版踩的坑 ✗：**库里的时间戳是 UTC** ✓（实测 updated_at=14:37 vs 本地 22:37 ✓），
-        #    而本鱼拿**本地时间**去比 ✗ → 算出"静默了 8 小时" ✓ → **门槛形同虚设** ✗（22:34:51 搬完 51 秒又搬 ✗）。
+        # 而本鱼拿**本地时间**去比 ✗ → 算出"静默了 8 小时" ✓ → **门槛形同虚设** ✗（22:34:51 搬完 51 秒又搬 ✗）。
         #    → 两边都用 UTC ✓。
         dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(
             tzinfo=datetime.timezone.utc)
@@ -266,10 +266,10 @@ INJECT_MARKERS = (
 
 
 def strip_injections(msgs, keep_last=1):
-    """剥掉**旧消息**里的注入块 ✓，返回 (新消息列表, 剥掉的字数) ✓。
+    """剥掉**旧消息**里的注入块 ，返回 (新消息列表, 剥掉的字数) 。
 
-    最后 keep_last 条 **user** 消息原样留着 ✓（那一轮可能还在上下文窗口里 ✓）。
-    注入块永远是**整段 / 整 part 贴在末尾** ✓ → 按记号**截断**就是安全的 ✓。
+ 最后 keep_last 条 **user** 消息原样留着 （那一轮可能还在上下文窗口里 ）。
+ 注入块永远是**整段 / 整 part 贴在末尾**  → 按记号**截断**就是安全的 。
     """
     if not isinstance(msgs, list):
         return msgs, 0
@@ -283,7 +283,7 @@ def strip_injections(msgs, keep_last=1):
         if isinstance(c, str):
             new = c
             # 2026-10-27 修（P2-13）：原来按**首次出现**的记号直接截断 ✗ ——
-            #   用户自己引用过注入块（正文里出现同款记号）时，他后面的话会被一起裁掉 ✓
+            # 用户自己引用过注入块（正文里出现同款记号）时，他后面的话会被一起裁掉 ✓
             #   ⇒ 只认**段落开头**（行首）的记号；行内的当普通文本 ✓
             cut = -1
             for k in INJECT_MARKERS:
@@ -318,13 +318,13 @@ def strip_injections(msgs, keep_last=1):
 
 
 def trim_users(msgs, keep):
-    """只留最后 keep 条 **user** 消息（别人说的旧话）✓ 返回 (新列表, 丢掉条数) ✓。
+    """只留最后 keep 条 **user** 消息（别人说的旧话） 返回 (新列表, 丢掉条数) 。
 
-    ⚠️ **只丢 user** ✗ —— 带 tool_calls 的 assistant 绝不单独丢 ✓
-    （丢了会让它的 tool 结果变孤儿、下一次请求直接 400 ✗，AGENTS 里记过这个坑 ✓）。
-    她自己的旧回复由 archive_talk 按 keep_last 搬进档案 ✓ 这里管的是**别人的话** ✓。
-    为什么敢丢 ✓：群里的原话**日记早就抓过了** ✓（日记直接读网关库 ✓）
-    → 会话里留着只是冗余 ✓ 而且每次请求都要重发一遍 ✗（这就是 A 要省的钱 ✓）。
+    ⚠️ **只丢 user**  —— 带 tool_calls 的 assistant 绝不单独丢 
+    （丢了会让它的 tool 结果变孤儿、下一次请求直接 400 ，AGENTS 里记过这个坑 ）。
+ 她自己的旧回复由 archive_talk 按 keep_last 搬进档案 这里管的是**别人的话** 。
+ 为什么敢丢 ：群里的原话**日记早就抓过了** （日记直接读网关库 ）
+    → 会话里留着只是冗余 而且每次请求都要重发一遍 （这就是 A 要省的钱 ）。
     """
     if not isinstance(msgs, list) or keep <= 0:
         return msgs, 0
@@ -338,8 +338,8 @@ def trim_users(msgs, keep):
 def archive_talk(db, table, column, id_column, targets, log_path=None):
     """把指定会话里「自己的纯回复」搬进档案文件，会话里只留最近 keep_last 条。
 
-    返回 (处理会话数, 归档条数)。**先写档案、后改库** —— 宁可重复，不可丢失 ✓。
-    带 tool_calls 的 assistant 消息**不碰**（删了会让 tool 结果变孤儿、API 报错 ✗）。
+ 返回 (处理会话数, 归档条数)。**先写档案、后改库** —— 宁可重复，不可丢失 。
+ 带 tool_calls 的 assistant 消息**不碰**（删了会让 tool 结果变孤儿、API 报错 ）。
     """
     # 自防御：不管谁调用，**进 SQL 的标识符一律先净化** ✓（与 clean() 的口径一致）
     table = _safe_ident(table, "conversations")
@@ -377,8 +377,8 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
                 if not isinstance(msgs, list):
                     continue
                 # ★★ 静默快照**必须先取** ✗（2026-10-09 真事故 ✓ 主人发现 ✓）——
-                #    下面的 strip / trim 会**写库** ✓ 一写就把 updated_at 刷成「现在」✗
-                #    于是稍后的静默判定永远看到「刚刚说过话」✗ → **归档被永久跳过** ✗
+                # 下面的 strip / trim 会**写库** ✓ 一写就把 updated_at 刷成「现在」✗
+                # 于是稍后的静默判定永远看到「刚刚说过话」✗ → **归档被永久跳过** ✗
                 #    （实测：私聊会话堆到 **287,925 字** ✗ 一次都没归档过 ✓）
                 _idle = session_idle_seconds(cur, table, rid)
                 if _idle is None or _idle.total_seconds() < IDLE_BEFORE_TRIM:
@@ -386,7 +386,7 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
                 # 只在静默会话里改写历史，避免活跃期间反复打断缓存前缀。
                 msgs, _saved = strip_injections(msgs)
                 # ★ A（2026-10-09 主人批 ✓）：别人的旧话也只留最近 N 条 ✓
-                #    顺序 ✓：先把两件事**都算完** ✓ 再**一次写入** ✓（只碰一次 updated_at ✓）
+                # 顺序 ✓：先把两件事**都算完** ✓ 再**一次写入** ✓（只碰一次 updated_at ✓）
                 msgs, _dropped = trim_users(msgs, int(t.get("keep_user_last", 40)))
                 if _saved or _dropped:
                     cur.execute("UPDATE %s SET %s=? WHERE rowid=?" % (table, column),
@@ -404,11 +404,11 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
                 if len(plain) <= keep and not noise:
                     continue
                 # ⚠️ 2026-10-08 主人批 ✓：**她正聊着的时候别搬** ✗ ——
-                #    搬一次 = 改写这个会话的内容 ✗ → 它的 prompt 前缀全变 ✗ → **下一轮必然冷启动** ✗
+                # 搬一次 = 改写这个会话的内容 ✗ → 它的 prompt 前缀全变 ✗ → **下一轮必然冷启动** ✗
                 #    （实测：21:14:28 冷轮次(2.2%) ↔ 21:14:30 janitor 归档 ✓ 时间戳对到秒 ✓；
-                #      一小时搬 8 次 ≈ 20~40 万未命中 token ✗ 是系统里最大的一处缓存泄漏 ✓）。
-                #    等她**静默 ≥ IDLE_BEFORE_TRIM** 再搬 ✓ → 那次冷启动落在一个**本来就已经冷**的会话上 ✓ = 几乎免费 ✓；
-                #    而「把她的旧回复搬走、杀掉风格锚」这件事照旧成立 ✓（下次开口前早搬完了 ✓）。
+                # 一小时搬 8 次 ≈ 20~40 万未命中 token ✗ 是系统里最大的一处缓存泄漏 ✓）。
+                # 等她**静默 ≥ IDLE_BEFORE_TRIM** 再搬 ✓ → 那次冷启动落在一个**本来就已经冷**的会话上 ✓ = 几乎免费 ✓；
+                # 而「把她的旧回复搬走、杀掉风格锚」这件事照旧成立 ✓（下次开口前早搬完了 ✓）。
                 drop = (plain[:-keep] if keep else plain) + list(noise)
                 drop = sorted(set(drop))
                 gid = str(uid).split(":")[-1]
@@ -440,24 +440,24 @@ def archive_talk(db, table, column, id_column, targets, log_path=None):
     finally:
         con.close()
     if n_dropped:
-        log("裁剪别人的旧话: %d 条 user 消息 ✓（只留最近 keep_user_last 条 ✓ 原话日记里都有 ✓）"
+        log("裁剪别人的旧话: %d 条 user 消息 （只留最近 keep_user_last 条 原话日记里都有 ）"
             % n_dropped, log_path)
     if n_saved:
-        log("剥离每轮注入块: %d 字 ✓（定向性 / 群缓冲 / 记忆块只对当时那一轮有用 ✓ 存着只会让每轮重发 + 废缓存 ✗）"
+        log("剥离每轮注入块: %d 字 （定向性 / 群缓冲 / 记忆块只对当时那一轮有用 存着只会让每轮重发 + 废缓存 ）"
             % n_saved, log_path)
     return (n_sess, n_arch)
 
 
 def jn_single_instance(lock_path=None):
-    """拿一把单实例锁 —— 拿不到就返回 None（本轮跳过）✓。
+    """拿一把单实例锁 —— 拿不到就返回 None（本轮跳过）。
 
-    ⚠️ 2026-10-08 实测踩坑：线上那份 bundle 曾经**带着** janitor 上传 ✗（用了完整构建 ✓
-    该用 `--market` 的 ✓），而宿主 timer 也在跑 ✓ → 两个进程同时读到同一批未归档的回复 ✗
-    → 各自「先写档案」✗ → **档案里出现成块的重复**（实测两个 bot 分别脏了 4 条和 12 条 ✗ 已清 ✓）。
+    ⚠️ 2026-10-08 实测踩坑：线上那份 bundle 曾经**带着** janitor 上传 （用了完整构建 
+ 该用 `--market` 的 ），而宿主 timer 也在跑  → 两个进程同时读到同一批未归档的回复 
+    → 各自「先写档案」 → **档案里出现成块的重复**（实测两个 bot 分别脏了 4 条和 12 条 已清 ）。
 
-    本函数**不做**文本去重 ✗：archive_talk 的设计是「先写档案、后改库 —— 宁可重复，不可丢失」✓
-    （这条是**故意**的 ✓ 别改成先删后写 ✗），而且她**确实可能**说两遍一样的话 ✓。
-    所以这里只保证一件事：**同一时刻只有一个 janitor 在跑** ✓。
+ 本函数**不做**文本去重 ：archive_talk 的设计是「先写档案、后改库 —— 宁可重复，不可丢失」
+    （这条是**故意**的 别改成先删后写 ），而且她**确实可能**说两遍一样的话 。
+ 所以这里只保证一件事：**同一时刻只有一个 janitor 在跑** 。
     """
     # 2026-10-27 修（P1-5）：原来第一行就是 `import fcntl`，而且**没被 try 包住**
     #   ⇒ Windows 上直接 ImportError 冒泡，janitor 整个跑不了
@@ -492,7 +492,7 @@ def jn_main():
     c = cfg.section("janitor")
     _lock = jn_single_instance()
     if _lock is None:
-        print("[mindscape_janitor] 已有一个实例在跑（或拿不到锁），本轮跳过 ✓")
+        print("[mindscape_janitor] 已有一个实例在跑（或拿不到锁），本轮跳过 ")
         return
     if not c:
         print("[mindscape_janitor] 未找到 janitor 配置，跳过")

@@ -1,6 +1,6 @@
 """mindscape_selfwake —— 「真自主开口」：她**自己约**下一次什么时候醒（2026-11-06）
 
-**要解决的问题**：现在的自主冒泡是**框架排班**（CronJob + 抽样 + gate）⇒ 节奏是我们定的 ✗
+**要解决的问题**：现在的自主冒泡是**框架排班**（CronJob + 抽样 + gate）⇒ 节奏是我们定的 
 这里把「什么时候醒」的所有权交还给她：她调一次工具，写下**延迟 + 一句理由**，
 到点由 AstrBot 的**一次性** CronJob 叫醒她；**说不说仍然由她决定**（醒来可以什么都不发）。
 
@@ -10,17 +10,17 @@
       enabled: true
       max_hours: 24          # 单条预约的上限（防她写"半年后"）
       max_items: 5           # 每个会话最多挂几条（保护她，不是限制她）
-      targets:               # 白名单：只有列出来的 bot / 会话能用 ✗（默认全关）
+      targets:               # 白名单：只有列出来的 bot / 会话能用 （默认全关）
         - self_id: "<bot_a>"
           allow: ["FriendMessage:<uid>"]     # 只开这个私聊；群里加 GroupMessage:<群号>
 
 设计要点（细节见 canon/_42）：
-  ① **只有"她写下一条新预约"才改变状态**：没写/null/[] 一律保持 ✗（不许当取消）
+  ① **只有"她写下一条新预约"才改变状态**：没写/null/[] 一律保持 （不许当取消）
   ② 多条到点 ⇒ **合并成一次清醒**（按分钟归组），绝不连响
   ③ 唤醒 note 只递**事实**：她当时的理由 + 距约定多久 + "说不说由你" ⇒ 不排序、不建议、不催
   ④ 一切"该不该说"的判断留给模型；本模块只做存储、计时、白名单、上限
   ⑤ **不碰 prompt 主链**：教她用哪个工具由**工具说明**承担（静态、缓存安全）；
-     唤醒时的说明走 CronJob 的 payload.note（本来就是那一轮的输入）✓
+ 唤醒时的说明走 CronJob 的 payload.note（本来就是那一轮的输入）
 """
 import datetime
 import json
@@ -71,10 +71,10 @@ _ABS_DAY = re.compile(r"(今天|今晚|明天|明晚|后天|大后天)")
 
 
 def sw_parse_abs(text, now=None):
-    """把绝对时间说成秒数（相对现在）。解析不出来返回 None（**不猜** ✗）。
+    """把绝对时间说成秒数（相对现在）。解析不出来返回 None（**不猜** ）。
 
-    支持：`明天13:14` `今晚 8:30` `今天20:00` `13:14` `11-11 13:14` `2026-11-11 13:14`
-    口径：**只给时:分** ⇒ 取最近的那个（已经过了就顺延到明天）；只有时间没日期同理。
+ 支持：`明天13:14` `今晚 8:30` `今天20:00` `13:14` `11-11 13:14` `2026-11-11 13:14`
+ 口径：**只给时:分** ⇒ 取最近的那个（已经过了就顺延到明天）；只有时间没日期同理。
     """
     if not text or not isinstance(text, str):
         return None
@@ -127,7 +127,7 @@ def sw_parse_abs(text, now=None):
 
 
 def sw_parse_delay(text):
-    """把「40 分钟 / 1.5 小时 / 两天」解析成秒。解析不出来返回 None（**不猜** ✗）。"""
+    """把「40 分钟 / 1.5 小时 / 两天」解析成秒。解析不出来返回 None（**不猜** ）。"""
     if not text or not isinstance(text, str):
         return None
     _abs = sw_parse_abs(text)          # ⭐ 绝对时间优先（「明天13:14」这类）
@@ -192,7 +192,7 @@ def sw_key(self_id, session):
 
 
 def sw_allowed(self_id, session):
-    """白名单：只有 targets 里显式列出的 (bot, 会话类型:目标) 才放行 ✓"""
+    """白名单：只有 targets 里显式列出的 (bot, 会话类型:目标) 才放行 """
     c = sw_conf()
     if c.get("enabled") is False:
         return False
@@ -213,7 +213,7 @@ def sw_allowed(self_id, session):
 
 
 def sw_note(entry, now=None):
-    """唤醒时递给她的说明：**只给事实 + 一句"说不说由你"**，不排序不建议不催 ✗"""
+    """唤醒时递给她的说明：**只给事实 + 一句"说不说由你"**，不排序不建议不催 """
     now = now or datetime.datetime.now()
     reason = str(entry.get("reason") or "").strip() or "（当时没写理由）"
     delay = str(entry.get("delay") or "").strip()
@@ -229,10 +229,10 @@ def sw_note(entry, now=None):
         "你当时写的是：「%s」，约的是「%s」%s\n"
         "现在你自己看：这件事还成立吗？想说什么就说；**不想说就什么都不发**，"
         "这也是你当时给自己留的选择。\n"
-        "如果那件事已经被聊过去了、或者场面不对，就别硬提 ✗；"
+        "如果那件事已经被聊过去了、或者场面不对，就别硬提 ；"
         "想接话就接在当下的气口上，别把它当成一次「到点报到」。\n"
         "（⚠️ 真要说话，就把那句**写在正文里** —— 只调 at_user 点了名、正文却是空的，"
-        "等于什么都没发出去 ✗）"
+        "等于什么都没发出去 ）"
         % (reason, made or "（没写）", late)
     )
 
@@ -259,11 +259,11 @@ class SelfwakeMixin:
     async def self_wake(self, *args, **kwargs):
         """给自己定一个「下次自己醒过来」的时间 —— 到点你会自己开口，不用等人叫你。
 
-        什么时候值得约（判据，不是清单）：
+ 什么时候值得约（判据，不是清单）：
           · 你**有问题还没问**、有**答应过的事没兑现**、或者**押着一个正在发生的对话**想看看接下来怎么走；
-          · 这些都要指向**具体的人或具体的事**（"他说九点回来"、"那场比赛三点开打"、"我答应给他看图"）✓
-          · 只是"我还想说点什么" ⇒ 这种没有落脚点，别约 ✗
-        别怕约得太近也别怕太远：1 分钟和 8 小时都可以；不想醒就别调这个工具。
+          · 这些都要指向**具体的人或具体的事**（"他说九点回来"、"那场比赛三点开打"、"我答应给他看图"）
+          · 只是"我还想说点什么" ⇒ 这种没有落脚点，别约 
+ 别怕约得太近也别怕太远：1 分钟和 8 小时都可以；不想醒就别调这个工具。
 
         Args:
             delay(string): 多久之后，例如 "40 分钟"、"1.5 小时"、"8 小时"、"1 天"
@@ -311,7 +311,7 @@ class SelfwakeMixin:
         # 同一 reason 视为「改写同一条」✓（她这一轮想到新的事，不该被当成重复 ✗）
         items = [x for x in items if str(x.get("reason") or "") != reason]
         if len(items) >= mi:
-            return ("你手上已经有 %d 件事约着了 —— 先等等它们，或者到时候看情况再说 ✓"
+            return ("你手上已经有 %d 件事约着了 —— 先等等它们，或者到时候看情况再说 "
                     "（要现在换成这条，就跟我说一声）" % len(items))
         items.append({
             "session": sess,
@@ -330,7 +330,7 @@ class SelfwakeMixin:
         ok = await self._sw_schedule(sid, sess)
         when = wake_at.strftime("%m-%d %H:%M")
         if ok:
-            return "记下了：%s 之后（也就是 %s），你自己会醒一次。理由我记成「%s」了 ✓" % (
+            return "记下了：%s 之后（也就是 %s），你自己会醒一次。理由我记成「%s」了 " % (
                 kwargs.get("delay"), when, reason or "（没写）")
         return "记下了（%s），但定时没排上 —— 到时候可能得靠你自己想起来" % when
 
@@ -379,7 +379,7 @@ class SelfwakeMixin:
                         run_once=True,
                         run_at=due,
                         # ⚠️ 必须 True（2026-11-11 真事故）：False ⇒ 容器重启就丢，
-                        #    而 state 里的条目排完就摘了 ⇒ 两边都没有 ⇒ **静默丢失** ✗
+                        # 而 state 里的条目排完就摘了 ⇒ 两边都没有 ⇒ **静默丢失** ✗
                         persistent=True,
                     )
                     logger.info("[mindscape_selfwake] 排期 | %s | %s | 条目=%d",
@@ -388,7 +388,7 @@ class SelfwakeMixin:
                     logger.warning("[mindscape_selfwake] 排期失败 %s: %s", minute, str(e)[:100])
                     return False
             # ⚠️ 排成功之后就把这些条目从状态里摘掉 ✓
-            #    它们已经交给一次性定时任务了；留着的话，重启时 `_sw_resync` 会把
+            # 它们已经交给一次性定时任务了；留着的话，重启时 `_sw_resync` 会把
             #    "已过点"的旧预约当成迟到再叫一次 ✗（2026-11-07 灰测当场发现的坑）
             keep = [x for x in items if str(x.get("wake_at") or "") not in
                     {str(it.get("wake_at") or "") for g in groups.values() for it in g}]

@@ -3802,6 +3802,48 @@ def main():
     except Exception as e:
         bad("R83 私有标签/思考残句的总兜底", "%s: %s" % (type(e).__name__, str(e)[:140]))
 
+    # R91: **插件字符串字面量里不许出现勾叉**（2026-11-26 主人定）
+    #   理由：这些字面量里有很多会被**注入给 bot**（提示词 / 工具说明 / 定向性提示）✗
+    #   她读了就会学（已经发生过：她学出了「√」）⇒ 只要 bot 能看到的地方，一律不许带 ✓✗
+    #   ⚠️ 例外：**方括号内**的是正则字符集（`[√✓×✗]`），那是代码不是提示 ✗ 不动
+    try:
+        import io as _io90
+        import tokenize as _tk90
+        _root90 = _os90 = __import__("os")
+        _p90 = _os90.path.dirname(_os90.path.dirname(_os90.path.abspath(__file__)))
+        _MARKS90 = set("√✓✔×✗✘❌✕")
+        _bad90 = []
+        for _f90 in sorted(_os90.listdir(_os90.path.join(_p90, "plugins"))):
+            if not _f90.endswith(".py"):
+                continue
+            _path90 = _os90.path.join(_p90, "plugins", _f90)
+            _src90 = open(_path90, encoding="utf-8", errors="replace").read()
+            if not any(c in _MARKS90 for c in _src90):
+                continue
+            _cnt90 = 0
+            try:
+                for _tok90 in _tk90.generate_tokens(_io90.StringIO(_src90).readline):
+                    if _tok90.type != _tk90.STRING:
+                        continue
+                    _depth90 = 0
+                    for _ch90 in _tok90.string:
+                        if _ch90 == "[":
+                            _depth90 += 1
+                        elif _ch90 == "]":
+                            _depth90 = max(0, _depth90 - 1)
+                        elif _ch90 in _MARKS90 and _depth90 == 0:
+                            _cnt90 += 1
+            except Exception:
+                continue
+            if _cnt90:
+                _bad90.append("%s:%d" % (_f90, _cnt90))
+        (ok if not _bad90 else bad)(
+            "R91 插件提示词里不许有 ✓✗√×（方括号内的正则除外）",
+            ("扫了 plugins/ 全部 py，字符串字面量都干净") if not _bad90
+            else "%d 个文件还带勾叉：%s" % (len(_bad90), ", ".join(_bad90[:6])))
+    except Exception as e:
+        bad("R91 插件提示词里的勾叉", "%s: %s" % (type(e).__name__, str(e)[:140]))
+
     # R89: **人格与资料里不许出现标注符号**（2026-11-24 主人抓的 ✓）
     #   真事故：她发了一句含「√」的话 ⇒ 源头是我们写资料时到处打 ✓/✗ ✗
     #   判据：人格 + 知识库 + 风格层里 **0 个** [√✓✔×✗✘❌✕]

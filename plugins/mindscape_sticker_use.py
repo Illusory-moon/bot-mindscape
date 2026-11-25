@@ -5,7 +5,7 @@ import asyncio
 两个能力：
   1. **主动发送** —— 给 bot 一个工具，让它自己想发图时能发（按语境选图）
   2. **概率强制** —— chat bot 有强烈的「只发文字」惯性，光给工具它不用；
-     所以每轮回复按概率强制配一张图，真正治「文字机器」。
+ 所以每轮回复按概率强制配一张图，真正治「文字机器」。
 
 关键设计：
   - 选图交给 LLM（给它候选列表挑最贴语气的），保证图文搭
@@ -55,10 +55,10 @@ def st_tokens(want):
 def st_hit(item, tokens):
     """这条图有没有被查询词**词级**命中（名字 / 标签 / 描述里包含某个词）。
 
-    为什么要词级（2026-11-07）：
-    原来只用 `match_score` 的**逐字**重叠加分 ⇒「橡木蛋糕」跟「得意」这种查询拿到的分
-    差不多，于是「发一张差不多的」和「库里根本没有」分不开 ✗
-    词级命中能干净地二分：命中⇒发，不命中⇒**回清单让她自己挑**（她能借此"查库"）✓
+ 为什么要词级（2026-11-07）：
+ 原来只用 `match_score` 的**逐字**重叠加分 ⇒「橡木蛋糕」跟「得意」这种查询拿到的分
+ 差不多，于是「发一张差不多的」和「库里根本没有」分不开 
+ 词级命中能干净地二分：命中⇒发，不命中⇒**回清单让她自己挑**（她能借此"查库"）
     """
     hay = " ".join([
         str(item.get("name", "")),
@@ -83,10 +83,10 @@ def st_hit(item, tokens):
 
 
 def st_candidates(pool, tokens, limit=4):
-    """候选清单（给模型看的一行行文字，**不发到群里** ✗）。
+    """候选清单（给模型看的一行行文字，**不发到群里** ）。
 
-    排序用「2 字片段覆盖率」——跟命中判定同一把尺子，免得给出一堆完全无关的图 ✗
-    全都不沾边时返回一句实话（比硬凑四张更有用 ✓）。
+ 排序用「2 字片段覆盖率」——跟命中判定同一把尺子，免得给出一堆完全无关的图 
+ 全都不沾边时返回一句实话（比硬凑四张更有用 ）。
     """
     def cover(it):
         hay = " ".join([str(it.get("name", "")),
@@ -118,12 +118,12 @@ def st_candidates(pool, tokens, limit=4):
 def pick_image(comps, image_cls, reply_cls, depth=0, max_depth=3):
     """在组件链里找第一张图，**会往被引用消息里钻**。
 
-    为什么必须钻：aiocqhttp 适配器收到 reply 段时会 `call_action("get_msg")`，
-    把被引用消息的完整组件链塞进 `Reply.chain` —— 也就是说图**本来就在事件里**，
-    只是不在顶层。只扫顶层的话，「引用一张图说『加进表情库』」永远得到
+ 为什么必须钻：aiocqhttp 适配器收到 reply 段时会 `call_action("get_msg")`，
+ 把被引用消息的完整组件链塞进 `Reply.chain` —— 也就是说图**本来就在事件里**，
+ 只是不在顶层。只扫顶层的话，「引用一张图说『加进表情库』」永远得到
     「这条消息里没看到图片」，而模型那条路却能看见同一张图（所以显得像左右脑互搏）。
 
-    类由调用方传进来（本模块要能在 AstrBot 之外被测试）；深度防环。
+ 类由调用方传进来（本模块要能在 AstrBot 之外被测试）；深度防环。
     """
     if not comps or depth > max_depth:
         return None
@@ -190,8 +190,8 @@ class StickerUseMixin:
     def _pool(self, self_id):
         """取该 bot 可用的图。
 
-        配置了分类就只返回该分类（即使为空也不跨分类），
-        没配置分类的 bot 返回空集合 —— 隔离优先于「有图可用」。
+ 配置了分类就只返回该分类（即使为空也不跨分类），
+ 没配置分类的 bot 返回空集合 —— 隔离优先于「有图可用」。
         """
         cat = self._category_of(self_id)
         if not cat:
@@ -266,15 +266,15 @@ class StickerUseMixin:
     async def send_sticker(self, *args, **kwargs):
         """发一张表情包/图片到当前聊天（纯图片，不带文字）。
 
-        当对方要求你「发个表情包/发图」，或你觉得此刻甩一张图最合适时，调用这个工具。
+ 当对方要求你「发个表情包/发图」，或你觉得此刻甩一张图最合适时，调用这个工具。
 
         Args:
             want(string): 你想要的图的感觉或用途，例如：无语、开心、发呆、得意、撒娇；
-                也可以是**某张图的名字或大家给它起的外号**。
+ 也可以是**某张图的名字或大家给它起的外号**。
                 ⚠️ **别人点名要某个东西/叫出某个名字时，就把那个名字原样放进来搜** ——
-                别先把它理解成"像什么东西"再换词（那样会搜到别的图 ✗）；
-                原词搜不到、再换说法；确实没有就直说没有 ✓
-                留空则随机挑一张。
+ 别先把它理解成"像什么东西"再换词（那样会搜到别的图 ）；
+ 原词搜不到、再换说法；确实没有就直说没有 
+ 留空则随机挑一张。
         """
         want = str(kwargs.get("want") or "").strip()
         svc = getattr(self, "context", None)
@@ -306,7 +306,7 @@ class StickerUseMixin:
                 logger.info("[mindscape_sticker_use] 词级未命中 | want=%s | 回清单 %d 条",
                             want[:24], len(cands))
                 return ("库里没有对得上「%s」的图。沾边的候选：%s。"
-                        "要发哪张直接说名字；确实没有就别硬发（可以不配图，或者等有人发了再收）✓"
+                        "要发哪张直接说名字；确实没有就别硬发（可以不配图，或者等有人发了再收）"
                         % (want[:20], "；".join(cands) or "（库里没有沾边的）"))
             best = max(hits, key=lambda it: match_score(it, want))
         else:
@@ -352,9 +352,9 @@ class StickerUseMixin:
                 return
             reply = (result.get_plain_text() or "")[:200]
             # 2026-10-27 修（P2-4）：配图只是**加分项**，但它挂在 decorating 钩子里
-            #   同步等一次 LLM 调用 ⇒ 第三方 API 慢就把这条回复一起拖住（原来 timeout=90s ✗）
+            # 同步等一次 LLM 调用 ⇒ 第三方 API 慢就把这条回复一起拖住（原来 timeout=90s ✗）
             #   ⇒ 整个挑图套一个**硬上限**：超时就退回本地兜底（池里第一张），
-            #     绝不让一张表情包决定这条消息什么时候发出去 ✓
+            # 绝不让一张表情包决定这条消息什么时候发出去 ✓
             try:
                 fname = await asyncio.wait_for(self._pick(reply, pool), timeout=PICK_HARD_TIMEOUT)
             except Exception:
@@ -435,13 +435,13 @@ class StickerUseMixin:
             _d = resp.json()
             # 2026-10-27：直连调用补记账（原来官方照收钱、本地不记 ✗）
             #   ⚠️ 用**顶层 import** 的 `log_llm_usage` —— 写函数体内 import 的话，
-            #   构建器只剥顶层、合并产物里没有 mindscape_core ⇒ ModuleNotFoundError ⇒ 静默失效 ✗
+            # 构建器只剥顶层、合并产物里没有 mindscape_core ⇒ ModuleNotFoundError ⇒ 静默失效 ✗
             try:
                 log_llm_usage(_d, "sticker_use")
             except Exception:
                 pass
             # ⚠️ 2026-10-22 主人查账：**这三处直连 provider 的调用原本一行账都不打** ✗
-            #    实测（探针）：30 秒内 3 次请求，① 护栏只记到 2 条 ⇒ 漏的正是这条路 ✓
+            # 实测（探针）：30 秒内 3 次请求，① 护栏只记到 2 条 ⇒ 漏的正是这条路 ✓
             #    ⇒ 只补**用量日志**（不改逻辑）；文案跟宿主那一套对齐，方便一起汇总 ✓
             try:
                 _u = (_d.get("usage") or {})
@@ -460,11 +460,11 @@ class StickerUseMixin:
 
         low = txt.lower()
         # ★ ②（2026-10-09 主人报 ✓）：模型说「没有合适的」→ 就**不发** ✗
-        #   以前没有这两句 ✓ 于是模型判「不合适」之后，下面的标签兜底**照样硬塞一张** ✗✗
+        # 以前没有这两句 ✓ 于是模型判「不合适」之后，下面的标签兜底**照样硬塞一张** ✗✗
         #   （实测：要「跳舞」发了「猪猪 / 陪睡券」两张 ✗ —— 它们的描述里根本没有跳舞 ✓）
         if any(k in low for k in ("没有合适", "不合适", "都不合适", "没合适的",
                                   "none", "no suitable", "not suitable")):
-            logger.info("[mindscape_sticker_use] 选图模型判没有合适的 → 不发 ✓")
+            logger.info("[mindscape_sticker_use] 选图模型判没有合适的 → 不发 ")
             return None
         for it in cands:
             fn = str(it.get("file"))
@@ -489,7 +489,7 @@ class StickerUseMixin:
             if sc > bs:
                 bs, best = sc, it
         if best is None or bs < 0.55:
-            logger.info("[mindscape_sticker_use] 兜底分太低(%.2f) → 不发 ✓", bs)
+            logger.info("[mindscape_sticker_use] 兜底分太低(%.2f) → 不发 ", bs)
             return None
         return str(best.get("file"))
 
@@ -498,8 +498,8 @@ class StickerUseMixin:
 async def save_sticker(*args, **kwargs):
     """把当前消息里的图片存进表情包库。
 
-    当有人说「这张适合当你的表情包」「送你一张图」，或你自己看中某张图时，
-    调用这个工具真正把它收进来 —— 光嘴上说「收下」是没用的。
+ 当有人说「这张适合当你的表情包」「送你一张图」，或你自己看中某张图时，
+ 调用这个工具真正把它收进来 —— 光嘴上说「收下」是没用的。
 
     Args:
         name(string): 给这张图起个中文短名

@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """mindscape_voice —— 让她**自己决定**要不要用语音说话（2026-10-23）
 
-机制**照抄表情包「她自己决定」那条路** ✓（`send_sticker` 的形状）：
-  给她一个 **`say_voice` 工具** —— 想用声音说的那一刻就调它，不想就用文字 ✓
-  ⚠️ **没有**表情包那条「每 N 条按概率强制发一次」—— 主人明确不要 ✗
-  ⚠️ **也不额外问一次模型** —— 判断由**主模型**在同一回合里完成 ✓（主人 2026-10-23 指出）
+机制**照抄表情包「她自己决定」那条路** （`send_sticker` 的形状）：
+ 给她一个 **`say_voice` 工具** —— 想用声音说的那一刻就调它，不想就用文字 
+  ⚠️ **没有**表情包那条「每 N 条按概率强制发一次」—— 主人明确不要 
+  ⚠️ **也不额外问一次模型** —— 判断由**主模型**在同一回合里完成 （主人 2026-10-23 指出）
 
 三条硬约束：
   1. **语音模型只喂「她要说的那一句」** —— 不塞人格 / 记忆 / 上下文
   2. **音色只复刻一次**，之后复用 voice_id（= 语音缓存）；同一句按哈希只合成一次
-  3. 私域信息（域名 / workspace / voice_id / key 路径）**全在 config** ✗ 不写进代码（铁律 §1）
+  3. 私域信息（域名 / workspace / voice_id / key 路径）**全在 config** 不写进代码（铁律 §1）
 """
 import asyncio
 import datetime
@@ -38,7 +38,7 @@ def vcfg(config=None):
 def va_archive_target(ev):
     """这条会话该写哪个发言档案 ⇒ (path, label)；找不到就 (None, None)。
 
-    ⚠️ **全从 config 的 `archive.targets` 读**（铁律 §1：路径 / 群号 / 人设名一律不进代码 ✗）
+    ⚠️ **全从 config 的 `archive.targets` 读**（铁律 §1：路径 / 群号 / 人设名一律不进代码 ）
     """
     try:
         arch = cfg.section("archive") or {}
@@ -67,10 +67,10 @@ def va_archive_target(ev):
 def va_archive_voice(ev, text):
     """把**语音的正文**追加进发言档案（2026-10-25 主人定）。
 
-    为什么需要：语音是 `Record` 部件、**没有 `text`** ⇒ janitor 的 `_arch_text()` 看不见它 ✗
-              ⇒ 那条回复不进档案 ⇒ `recall_memory` 取不回她"说过"的语音 ✗
-    ⚠️ 纯文件追加、零 token、异常全吞；行格式与 janitor **逐字一致**（只把 label 标上「·语音」）✓
-    ⚠️ 档案是**查阅型**（recall 按需读）⇒ 写它**不影响 prompt 缓存** ✓
+ 为什么需要：语音是 `Record` 部件、**没有 `text`** ⇒ janitor 的 `_arch_text()` 看不见它 
+              ⇒ 那条回复不进档案 ⇒ `recall_memory` 取不回她"说过"的语音 
+    ⚠️ 纯文件追加、零 token、异常全吞；行格式与 janitor **逐字一致**（只把 label 标上「·语音」）
+    ⚠️ 档案是**查阅型**（recall 按需读）⇒ 写它**不影响 prompt 缓存** 
     """
     try:
         txt = " ".join(str(text or "").split())
@@ -115,7 +115,7 @@ def vc_pick(conf, name=None):
 
 
 def vc_cache_path(conf, text, vid=None):
-    """按「音色 + 正文」哈希命名 ⇒ 同一句只合成一次 ✓（天然的语音缓存）。"""
+    """按「音色 + 正文」哈希命名 ⇒ 同一句只合成一次 （天然的语音缓存）。"""
     d = str(conf.get("cache_dir") or "/opt/astrbot/data/voice_cache")
     os.makedirs(d, exist_ok=True)
     use = str(vid or conf.get("voice_id") or "")
@@ -130,7 +130,7 @@ _V_TAGS = re.compile(r"(?:\[\[|\[|<)/?(?:impression_update|wish_mood|wish_grant|
 
 
 def vc_prep_text(text):
-    """把要念的那句话整理成 TTS 友好的样子（只影响语音，不改她的正文 ✓）。"""
+    """把要念的那句话整理成 TTS 友好的样子（只影响语音，不改她的正文 ）。"""
     s = str(text or "")
     s = s.replace("|||", "，")          # 气泡分隔符不能念出来
     s = _V_TAGS.sub("", s)
@@ -144,8 +144,8 @@ def vc_prep_text(text):
 def vc_synth(conf, text, voice=None):
     """调云端 TTS 合成 → 存 mp3 → 返回路径（失败返回 None）。
 
-    ⚠️ 请求体里**只有 `input.text` 这一句** ✓ 没有任何人格/记忆 ✓
-    ⚠️ `voice` 是**音色名**（默认取 config 的 default_voice）—— 2026-11-20 加：她可以演别人的声音 ✓
+    ⚠️ 请求体里**只有 `input.text` 这一句** 没有任何人格/记忆 
+    ⚠️ `voice` 是**音色名**（默认取 config 的 default_voice）—— 2026-11-20 加：她可以演别人的声音 
     """
     base = str(conf.get("api_base") or "").rstrip("/")
     vid, _vname = vc_pick(conf, voice)
@@ -222,7 +222,7 @@ class VoiceMixin:
             self.v_cfg = {}
 
     def _v_gate(self, ev, conf):
-        """能不能说语音 ⇒ (ok, 拒绝理由)。**群聊一律拒**（主人 2026-10-23：先只私聊）✓"""
+        """能不能说语音 ⇒ (ok, 拒绝理由)。**群聊一律拒**（主人 2026-10-23：先只私聊）"""
         if not conf.get("enabled"):
             return False, "语音现在没开"
         if ev is None:
@@ -245,16 +245,16 @@ class VoiceMixin:
     async def say_voice(self, *args, **kwargs):
         """用**语音**把这句话说出来（纯语音，不带文字）。
 
-        什么时候用：你想用**声音**说的时刻 —— 撒娇、逗人、笑出声、突然正经地关心他、
-        压低声音说重话，或者对方明确让你说句话 / 发条语音。
+ 什么时候用：你想用**声音**说的时刻 —— 撒娇、逗人、笑出声、突然正经地关心他、
+ 压低声音说重话，或者对方明确让你说句话 / 发条语音。
 
-        什么时候**不要**用：纯信息、解释、长句、要点多的内容（那些用文字别人才看得清）；
-        也别连着用 —— 偶尔来一下才有意思。
+ 什么时候**不要**用：纯信息、解释、长句、要点多的内容（那些用文字别人才看得清）；
+ 也别连着用 —— 偶尔来一下才有意思。
 
         **换别人的声音**：你本来就爱演别人（换皮套就跟换外套一样简单）。
-        要演谁，就用谁的音色说那一句话；说完**立刻换回你自己的声音** ✓ 别用来当日常说话 ✗
+ 要演谁，就用谁的音色说那一句话；说完**立刻换回你自己的声音** 别用来当日常说话 
         （可用的音色名和各自该怎么说，见你的资料 / 规矩里写的那份清单；
-          名字传错时这里会把可用的名字回给你。）
+ 名字传错时这里会把可用的名字回给你。）
 
         Args:
             text(string): 要念出来的那句话。只写你要说出口的话，不要写括号里的动作或心理描写。
@@ -276,7 +276,7 @@ class VoiceMixin:
                 _d = str(_desc.get(_k) or "").strip()
                 _lines.append(("· %s：%s" % (_k, _d)) if _d else ("· %s" % _k))
             return ("没有「%s」这个音色。现在能用的有：\n%s\n"
-                    "要演谁就用谁的名字；不想演就用文字，或者不传 voice ✓"
+                    "要演谁就用谁的名字；不想演就用文字，或者不传 voice "
                     % (voice, "\n".join(_lines)))
         ok, why = self._v_gate(ev, conf)
         if not ok:
@@ -296,7 +296,7 @@ class VoiceMixin:
             return "语音没合成出来 —— 还是用文字说吧"
         # ⚠️ 2026-10-23 主人要求：正文**不发群里**，但**日志里必须看得到** ⇒ 否则不可观测 ✗
         #    2026-10-25 改：**不截断**（原来 text[:80] ⇒ 超 80 字的语音在日志里只剩半句 ✗，
-        #    补档时 46 条里有 11 条因此是残句 ✓）；上限由 max_chars 管（默认 120）✓
+        # 补档时 46 条里有 11 条因此是残句 ✓）；上限由 max_chars 管（默认 120）✓
         logger.info("[mindscape_voice] 语音已发出 | 音色=%s | %d 字 → %s | 正文: %s",
                     vc_pick(conf, voice)[1] or "默认", len(text), os.path.basename(path), text)
         # ⚠️ 2026-10-25 主人定：语音也要进发言档案 —— 否则 recall 取不回她"说过"的话 ✗

@@ -18,12 +18,12 @@ PG_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 def _pg_zone():
     """UTC+8 时区对象 —— **不许在 import 时炸**（2026-10-27 修 · P1-4）。
 
-    事故形态：原来是模块级 `PG_ZONE = ZoneInfo("Asia/Shanghai")` ⇒ 在没有 tzdata 的环境
+ 事故形态：原来是模块级 `PG_ZONE = ZoneInfo("Asia/Shanghai")` ⇒ 在没有 tzdata 的环境
     （Windows 原生 Python、`python:3.12-slim`、Alpine…）**import 就抛 ZoneInfoNotFoundError**
-    ⇒ `mindscape_gate` 起不来 ⇒ 依赖它的 `mindscape_guard` 也起不来 ⇒ **整个插件加载失败** ✗
+    ⇒ `mindscape_gate` 起不来 ⇒ 依赖它的 `mindscape_guard` 也起不来 ⇒ **整个插件加载失败** 
     （实测：自检因此连带红 7 项）
     ⇒ 现在：优先系统 tz 数据，拿不到就退成**固定 +8 偏移**
-      （本系统只用这一个时区、且中国无夏令时 ⇒ 固定偏移与 ZoneInfo 等价 ✓）
+      （本系统只用这一个时区、且中国无夏令时 ⇒ 固定偏移与 ZoneInfo 等价 ）
     """
     try:
         return ZoneInfo("Asia/Shanghai")
@@ -118,10 +118,10 @@ _PG_CODE_TTL = 30.0          # 秒
 def pg_codes_fast():
     """各 bot 的当前口令 —— 带 30 秒缓存（2026-10-27 修 · P2-2）。
 
-    为什么：`pg_redact()` 会被挂在**所有 logger 的所有 handler** 上 ⇒ 每条日志都调一次。
-    原来每次都**开文件读整份账本**、再跑正则 ⇒ 日志热路径 = 磁盘 I/O ✗（bot 越多越慢）。
-    ⇒ 这里按 (路径, mtime, size) 缓存 30 秒：账本没变就直接复用 ✓
-      （口令一天才轮换一次，30 秒的滞后对"打码"来说完全够 ✓）
+ 为什么：`pg_redact()` 会被挂在**所有 logger 的所有 handler** 上 ⇒ 每条日志都调一次。
+ 原来每次都**开文件读整份账本**、再跑正则 ⇒ 日志热路径 = 磁盘 I/O （bot 越多越慢）。
+    ⇒ 这里按 (路径, mtime, size) 缓存 30 秒：账本没变就直接复用 
+      （口令一天才轮换一次，30 秒的滞后对"打码"来说完全够 ）
     """
     import time
     now = time.time()

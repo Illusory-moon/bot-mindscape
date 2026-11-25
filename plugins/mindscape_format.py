@@ -14,7 +14,7 @@ from mindscape_core import scope_hit, scope_warn
 
 # 合并段落时「前段以这些结尾 ⇒ 直接拼上，不必再加连接符」✓
 # ⚠️ 2026-10-19 真事故（主人报「像在说 3 句不同的话」）：
-#   这个集合原来还包含 `~` ✗ ⇒ 前段以「…的~」结尾时，后段被拼成「…的~真不够…」
+# 这个集合原来还包含 `~` ✗ ⇒ 前段以「…的~」结尾时，后段被拼成「…的~真不够…」
 #   —— **中间零分隔地粘住** ✗ 读起来像一句不连贯的长话 ✓
 #   ⇒ `~` 是**语气尾**（上扬/撒娇），**不是句末** ⇒ 必须补连接符 ✓
 #   ⇒ `…` 是**停顿**、本身就带分隔意味 ⇒ 保持直接拼 ✓
@@ -34,10 +34,10 @@ CLOSERS = "」』）)】》〉”’" + chr(34) + chr(39)
 
 
 def _hoist_trailing_period(text):
-    """把「…XX。）」末尾的句号提到括号外、并按句尾删掉 ✓
+    """把「…XX。）」末尾的句号提到括号外、并按句尾删掉 
 
-    返回 True 表示改过。只在"末尾是一串右括号/右引号、且紧挨着句号"时才动 ——
-    范围极窄，不会误伤正文 ✗
+ 返回 True 表示改过。只在"末尾是一串右括号/右引号、且紧挨着句号"时才动 ——
+ 范围极窄，不会误伤正文 
     """
     i = len(text) - 1
     tail = ""
@@ -56,9 +56,9 @@ def _hoist_trailing_period(text):
 def drop_period(text):
     """句尾不点标点：末尾的「。」去掉（留空），句中的「。」换成「，」。
 
-    为什么不是一律换成「~」：有些沉重的句子拿波浪号收尾会变味 ——
-    规矩是**不用句号表示「说完了」**，不是每句都要卖萌。所以末尾留空，
-    中间用逗号接着往下走（和本模块压平多段时的连接符一致）。
+ 为什么不是一律换成「~」：有些沉重的句子拿波浪号收尾会变味 ——
+ 规矩是**不用句号表示「说完了」**，不是每句都要卖萌。所以末尾留空，
+ 中间用逗号接着往下走（和本模块压平多段时的连接符一致）。
     """
     if not text:
         return text
@@ -102,14 +102,14 @@ class FormatMixin:
         scope_warn(logger, "mindscape_format", self.targets)
 
         # ⭐ 把出站整形登记给 guard 的内置发送工具补丁 ✓
-        #   为什么必须做：`send_message_to_user` **直接发消息**，不经过 on_decorating_result
+        # 为什么必须做：`send_message_to_user` **直接发消息**，不经过 on_decorating_result
         #   ⇒ 下面那个 flatten_result 看不到它 ⇒ 句号照发 ✗
         #   （2026-10-16 实测：她 13 次调用里 2 条带句尾句号 ✓）
         #   ⚠️ 取法是三元兜底（照本仓通用写法 ✓）：**构建产物是单一大文件**，
-        #      跨模块 import 已被 build_plugin 剥掉 ⇒ 合并后它就是个模块级函数，
-        #      直接查 globals() 即可；开发态（源码树里逐模块加载）才走 import ✓
+        # 跨模块 import 已被 build_plugin 剥掉 ⇒ 合并后它就是个模块级函数，
+        # 直接查 globals() 即可；开发态（源码树里逐模块加载）才走 import ✓
         #   ⚠️ 登记的是「取实例的函数」，不是 self —— 补丁可能在 setup 之前就装好，
-        #      存 self 会拿到 None；存函数每次现取 ⇒ 不会陈旧 ✓
+        # 存 self 会拿到 None；存函数每次现取 ⇒ 不会陈旧 ✓
         try:
             _ms_reg = globals().get("ms_set_text_formatter")
             if _ms_reg is None:
@@ -135,8 +135,8 @@ class FormatMixin:
             logger.warning("[mindscape_format] 登记出站整形失败: %s", str(e)[:100])
 
         # ⭐ 把「句尾去句号」的作用域也登记成模块级**单一真值** ✓
-        #   给那些**没有 self 的模块级钩子**用（mention 的 ||| 拆分 ✓）——
-        #   否则它只能自己再读一遍配置，口径早晚漂移 ✗
+        # 给那些**没有 self 的模块级钩子**用（mention 的 ||| 拆分 ✓）——
+        # 否则它只能自己再读一遍配置，口径早晚漂移 ✗
         try:
             if "MS_FORMAT_NP" in globals():
                 globals()["MS_FORMAT_NP"] = list(self.f_np)
@@ -147,8 +147,8 @@ class FormatMixin:
     def ms_format_text(self, context, text, kwargs):
         """给「工具直接发话」那条路用的整形：压平 +（作用域内）去掉句尾句号。
 
-        ⚠️ 与 flatten_result **同源同规矩** ✓ —— 两个通道必须一套口径，
-        否则同一句话走哪条路结果不一样（2026-10-16 就是这么漏的 ✗）。
+        ⚠️ 与 flatten_result **同源同规矩**  —— 两个通道必须一套口径，
+ 否则同一句话走哪条路结果不一样（2026-10-16 就是这么漏的 ）。
         """
         if not isinstance(text, str) or not text.strip():
             return text
@@ -174,7 +174,7 @@ class FormatMixin:
                 return
             result = event.get_result()
             # （2026-10-27 已删：一次性诊断 [msdiag] —— 它把**每条出站正文前 200 字**写进日志 ✗
-            #   与 trace.py「只记尺寸与耗时、不记正文」的承诺冲突；排查期已过，按原计划撤掉 ✓）
+            # 与 trace.py「只记尺寸与耗时、不记正文」的承诺冲突；排查期已过，按原计划撤掉 ✓）
             if result is None or not result.is_llm_result():
                 return
             chain = getattr(result, "chain", None)

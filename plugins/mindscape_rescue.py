@@ -3,22 +3,22 @@
 
 背景：推理模型（如 deepseek-flash）有时把全部输出放在 reasoning_content 里，
       content 为空；若这一次又没有 tool_calls，框架就会得到一条完全空的回复，
-      然后静默 skip —— 用户看到的是「bot 没反应」。
+ 然后静默 skip —— 用户看到的是「bot 没反应」。
 
 本模块在「回复成形之前」检测这种完全空回复，用一次极轻量的调用补一句话，
 避免出现「叫了不理」的观感。代价：仅在空回复时多一次请求。
 
 设计上有意为之（未经深思不要「修」）：
-    救援补话时是带着这个 bot 本轮真实的人设 / 记忆 / 风格去问的，
-    所以它**允许**回答沉默令牌 —— 「这一轮到底该不该说话」这个判断，
-    最终仍然由 bot 自己拿主意，救援只负责「别让它卡成一条空回复」。
-    实测过：模型空正文 → 救援读完快照 → 回 [[silence]] → 沉默插件照常吞掉，
-    并且在日志里留下「真静默（第 N 次）」。链路是通的，不要改成强制补话。
+ 救援补话时是带着这个 bot 本轮真实的人设 / 记忆 / 风格去问的，
+ 所以它**允许**回答沉默令牌 —— 「这一轮到底该不该说话」这个判断，
+ 最终仍然由 bot 自己拿主意，救援只负责「别让它卡成一条空回复」。
+ 实测过：模型空正文 → 救援读完快照 → 回 [[silence]] → 沉默插件照常吞掉，
+ 并且在日志里留下「真静默（第 N 次）」。链路是通的，不要改成强制补话。
 
 ⚠️ 为什么挂 on_llm_response 而不是 on_decorating_result：
-   后者所在的 result_decorate/stage.py 开头就是
+ 后者所在的 result_decorate/stage.py 开头就是
        if result is None or not result.chain: return
-   而空回复恰恰没有 chain —— 装饰钩子根本不会被调用，挂在那里等于永远不触发。
+ 而空回复恰恰没有 chain —— 装饰钩子根本不会被调用，挂在那里等于永远不触发。
    on_llm_response 由 agent 的 on_agent_done 派发（tool_loop_agent_runner 的
    _complete_with_assistant_response，即「无工具调用的终止步」），此时
    final_llm_resp 就是同一个对象，改写 completion_text 会被
@@ -53,7 +53,7 @@ RC_SENT_TTL = 180
 
 # ── 「本轮已经**发出过正文**」的哨兵（2026-10-17 加 ✓ 修「精分」真事故）──────────
 # 事故（主人报「总感觉她两句之间有点精分」✓ 2026-10-17 凌晨）：
-#   她那一轮除了正常工具，还**把一个「标签」当工具调**了 ✗ ⇒ 框架「未找到指定的工具，将跳过」
+# 她那一轮除了正常工具，还**把一个「标签」当工具调**了 ✗ ⇒ 框架「未找到指定的工具，将跳过」
 #   ⇒ 那一步返回空 ⇒ 救援**以为她没说话**、**另问一次模型**生成一句 ✗
 #   ⇒ 群里出现**两个来源**的话（第 1 条 = 她的真实回答·温柔 ✓；第 2 条 = 救援产物·生硬 ✗）
 #   ⇒ 读起来就是「精分」✓
@@ -64,7 +64,7 @@ RC_TEXT_TTL = 180
 
 
 def rc_mark_text_sent(self_id, group_id, now=None):
-    """guard 在**真的有正文要发**时登记一笔 ✓（只在那一刻登记 ⇒ 零误报 ✓）。"""
+    """guard 在**真的有正文要发**时登记一笔 （只在那一刻登记 ⇒ 零误报 ）。"""
     try:
         import time as _t
         RC_TEXT_SENT["%s|%s" % (self_id, group_id)] = float(now if now is not None else _t.time())
@@ -73,7 +73,7 @@ def rc_mark_text_sent(self_id, group_id, now=None):
 
 
 def rc_text_sent_recent(event, now=None):
-    """本轮（近 RC_TEXT_TTL 秒）是不是**已经发出过正文** ✓。"""
+    """本轮（近 RC_TEXT_TTL 秒）是不是**已经发出过正文** 。"""
     try:
         key = "%s|%s" % (event.get_self_id(), event.get_group_id())
     except Exception:
@@ -135,14 +135,14 @@ class RescueMixin:
             # **完全不属于她人格**的话发进群 ✗（`tools_call_name` 在这一步还是空的 ✗ 判据形同虚设 ✓）。
             # 规矩：**本轮只要已经用「出站类工具」说过话，就不许补** ✓（跨钩子状态存模块级 ✓）。
             if rc_sent_recent(event):
-                logger.info("[mindscape_rescue] 本轮已用工具说过话 → 不补 ✓")
+                logger.info("[mindscape_rescue] 本轮已用工具说过话 → 不补 ")
                 return
             # ⭐ 2026-10-17 新增：**本轮已经发出过正文** ⇒ 更不许补 ✗
-            #   真事故（主人报「精分」）：她调了个**不存在的工具**（把标签当工具 ✗）
+            # 真事故（主人报「精分」）：她调了个**不存在的工具**（把标签当工具 ✗）
             #   ⇒ 那一步返回空 ⇒ 这里以为她没说话、另问一次模型 ⇒ 群里**两句不同来源** ✗
             #   （第 1 条是她的真实回答，第 2 条是救援产物 ✓）
             if rc_text_sent_recent(event):
-                logger.info("[mindscape_rescue] 本轮已发出过正文 → 不补（否则会精分 ✗）")
+                logger.info("[mindscape_rescue] 本轮已发出过正文 → 不补（否则会精分 ）")
                 return
             text = await self._ask_once(event)
             if not text:
@@ -150,7 +150,7 @@ class RescueMixin:
                 # 免得退化成一次静默的「叫它不理」✗。文案进配置 ✓（代码里不留人格措辞 ✓）。
                 text = str(self.r_cfg.get("fallback_line") or "").strip()
                 if text:
-                    logger.info("[mindscape_rescue] 补话不成，用兜底话术 ✓")
+                    logger.info("[mindscape_rescue] 补话不成，用兜底话术 ")
             if text:
                 response.completion_text = text
                 logger.info("[mindscape_rescue] 空回复已补（%s）: %s",
@@ -164,8 +164,8 @@ class RescueMixin:
         """抓一份「这一轮真实用到的」人设 + 记忆 + 风格快照。
 
         priority=-10 让它最后跑 —— 等 memory / silence 都往 system_prompt 里塞完了再取，
-        拿到的就是模型真正看到的那一段。救援补话时带上它，补出来才像这个 bot。
-        以前救援用的是配置里那句通用人设 —— 对味道重的人设来说补出来就是白开水。
+ 拿到的就是模型真正看到的那一段。救援补话时带上它，补出来才像这个 bot。
+ 以前救援用的是配置里那句通用人设 —— 对味道重的人设来说补出来就是白开水。
         """
         try:
             sp = getattr(request, "system_prompt", "") or ""
@@ -193,7 +193,7 @@ class RescueMixin:
 
     @filter.on_using_llm_tool()
     async def rc_capture_sent(self, event: AstrMessageEvent, tool, tool_args):
-        """记下这一轮真正发出去的话 —— 冒泡轮要用它替换任务黑话；顺便记「这轮已经出站过」✓。"""
+        """记下这一轮真正发出去的话 —— 冒泡轮要用它替换任务黑话；顺便记「这轮已经出站过」。"""
         try:
             _name = getattr(tool, "name", "")
             if _name in RC_OUTBOUND_TOOLS:
@@ -210,7 +210,7 @@ class RescueMixin:
             if parts:
                 event.set_extra("_ms_sent_text", " ".join(parts)[:300])
             # （2026-10-27 已删：一次性诊断 [msdiag] —— 它把**工具参数原文**写进日志 ✗
-            #   与「日志不记正文」的承诺冲突；排查期已过，按原计划撤掉 ✓
+            # 与「日志不记正文」的承诺冲突；排查期已过，按原计划撤掉 ✓
             #   ⚠️ 上面的 set_extra 是**功能**（抑制/去重用），不是日志，保留 ✓）
         except Exception:
             pass
@@ -220,14 +220,14 @@ class RescueMixin:
         """冒泡轮：把「任务黑话」的总结换成它真正说过的那句话。
 
         AstrBot 的 cron 提示词要求模型「总结并输出你的动作和结果」，于是对话历史里
-        会存下这种句子：
+ 会存下这种句子：
 
             [CronJob] bubble-xxx: 冒泡完成。动作：以<某人>身份在群里发了一句「…」，
-            没提任务/定时，没提问，没刷屏。
+ 没提任务/定时，没提问，没刷屏。
 
-        这些词（任务 / 定时 / 系统 / 身份）每轮都会被当作上下文喂回去，是出戏源头。
-        但它同时也是「我冒过泡、说了什么」的唯一留痕 —— 所以不是删掉，而是**改写成
-        第一人称**：人记住的是自己说过的话，不是「我完成了一个任务」。
+ 这些词（任务 / 定时 / 系统 / 身份）每轮都会被当作上下文喂回去，是出戏源头。
+ 但它同时也是「我冒过泡、说了什么」的唯一留痕 —— 所以不是删掉，而是**改写成
+ 第一人称**：人记住的是自己说过的话，不是「我完成了一个任务」。
         """
         try:
             if not event.get_extra("cron_job"):
@@ -303,7 +303,7 @@ class RescueMixin:
             except Exception:
                 pass
             # ⚠️ 2026-10-22 主人查账：**这三处直连 provider 的调用原本一行账都不打** ✗
-            #    实测（探针）：30 秒内 3 次请求，① 护栏只记到 2 条 ⇒ 漏的正是这条路 ✓
+            # 实测（探针）：30 秒内 3 次请求，① 护栏只记到 2 条 ⇒ 漏的正是这条路 ✓
             #    ⇒ 只补**用量日志**（不改逻辑）；文案跟宿主那一套对齐，方便一起汇总 ✓
             try:
                 _u = (_d.get("usage") or {})

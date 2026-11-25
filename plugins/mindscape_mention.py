@@ -39,8 +39,8 @@ def mn_load_config():
 def mn_match_member(who, members):
     """在成员表里找 who → (qq, 显示名)；找不到给 ("", "")。
 
-    顺序：纯数字当号 → 群名片/昵称精确 → 唯一的部分匹配（多个命中就不猜）。
-    纯函数，自检直接跑。"""
+ 顺序：纯数字当号 → 群名片/昵称精确 → 唯一的部分匹配（多个命中就不猜）。
+ 纯函数，自检直接跑。"""
     who = str(who or "").strip().lstrip("@").strip()
     if not who:
         return "", ""
@@ -71,25 +71,25 @@ def mn_match_member(who, members):
 # 行尾多余的 `|||`（她常常在最后一句后面也补一个 ✓）
 # ⚠️ 2026-10-13 P0 真事故：正文是「…都不肯呀|||」——`|||` **后面没有东西** ✗
 #   ⇒ 老逻辑 `split` 出来的空段被 `if x` 滤掉 ⇒ 只剩 1 段 ⇒ 判成"不拆" ⇒
-#     那个 `|||` **原样跟着正文发进群** ✗（主人报的就是这条 ✓）
+# 那个 `|||` **原样跟着正文发进群** ✗（主人报的就是这条 ✓）
 #   ⇒ 修：剥掉**行尾**的分隔符。留一个**内部分隔符**是有意的 ✗ ——
-#     让"只剩一段"仍能走到拆分分支，由 `mn_sep_fallback` 把内部的分隔符换成换行 ✓
+# 让"只剩一段"仍能走到拆分分支，由 `mn_sep_fallback` 把内部的分隔符换成换行 ✓
 MN_SEP_RE = re.compile(r"(?:[ \t]*\|{3,}[ \t]*)+$")
 
 
 def mn_trim_sep(text):
-    """剥掉行尾多余的 `|||`（**只动行尾** ✓ 正文一个字不删 ✓）"""
+    """剥掉行尾多余的 `|||`（**只动行尾** 正文一个字不删 ）"""
     if not text or LINE_SEP not in str(text):
         return text
     return MN_SEP_RE.sub("", str(text))
 
 
 def mn_split_lines(text, limit=None):
-    """把「几句 + |||」拆成气泡列表 ✓（纯函数 ✓ 便于自检 ✓）。
+    """把「几句 + |||」拆成气泡列表 （纯函数 便于自检 ）。
 
-    返回**空列表**表示「不拆」✓ —— 只有真的出现分隔符、且拆出来 ≥2 段才拆 ✓。
+ 返回**空列表**表示「不拆」 —— 只有真的出现分隔符、且拆出来 ≥2 段才拆 。
     ⚠️ 行尾那个多余的 `|||` 先剥掉；若剥完还剩 `|||`（= 内部有），
-       就把它**留一个**再走后面的兜底（换成换行 ✓），不让它漏进群 ✗
+ 就把它**留一个**再走后面的兜底（换成换行 ），不让它漏进群 
     """
     if not text or LINE_SEP not in str(text):
         return []
@@ -105,9 +105,9 @@ def mn_split_lines(text, limit=None):
 
 
 def mn_plain_text(chain):
-    """把 MessageChain 里的**纯文本**拼出来（只看 Plain / 有 text 的组件）✓。
+    """把 MessageChain 里的**纯文本**拼出来（只看 Plain / 有 text 的组件）。
 
-    用途：正文里可能被她写成「几句 + |||」✓ 我们要先**看到那段文本**才能拆 ✓。
+ 用途：正文里可能被她写成「几句 + |||」 我们要先**看到那段文本**才能拆 。
     """
     try:
         comps = getattr(chain, "chain", None) or []
@@ -125,11 +125,11 @@ def mn_plain_text(chain):
 
 
 def mn_sep_fallback(chain):
-    """兜底 ✓：万一拆分那条路没走成 ✗，也不能让群里看到明文分隔符 ✗。
+    """兜底 ：万一拆分那条路没走成 ，也不能让群里看到明文分隔符 。
 
-    把每个 Plain 里的 LINE_SEP 换成换行 ✓（读起来正常 ✓ 只是没能拆成多个气泡 ✓）。
-    返回替换处数 ✓。这个函数挂在**已经验证过能跑**的 mn_clean_chain 那条路上 ✓ ——
-    所以它是**最后一道保险** ✓（2026-10-09 真出过一次漏网 ✓）。
+ 把每个 Plain 里的 LINE_SEP 换成换行 （读起来正常 只是没能拆成多个气泡 ）。
+ 返回替换处数 。这个函数挂在**已经验证过能跑**的 mn_clean_chain 那条路上  ——
+ 所以它是**最后一道保险** （2026-10-09 真出过一次漏网 ）。
     """
     n = 0
     try:
@@ -155,16 +155,16 @@ LINE_SEP = "|||"
 LINE_SEP_MAX = 3          # 最多三条（跟规矩里写的一致 ✓）
 
 # ★ 2026-10-09 实测（12:23:56）：**decorating 钩子跑得太早** ✗ ——
-#   那一刻 result 的 chain 里正文是 **0 字** ✓（3 毫秒之后框架才把正文放进链 ✓）
+# 那一刻 result 的 chain 里正文是 **0 字** ✓（3 毫秒之后框架才把正文放进链 ✓）
 #   → 所以 D 的拆分**不能**从 chain 取文本 ✗ 必须在这里取 ✓（llm 响应里一定有 ✓）。
-#   跨钩子存**模块级**字典 ✓（AGENTS 铁律：extras 不可靠 ✓）。
+# 跨钩子存**模块级**字典 ✓（AGENTS 铁律：extras 不可靠 ✓）。
 MN_LAST_TEXT = {}         # key → (正文, 时间戳) ✓
 MN_LAST_TEXT_TTL = 30     # 秒：超过就别用了 ✓（防止串到下一轮 ✓）
 
 
 @filter.on_llm_response()
 async def mn_remember_response(self, event, response):
-    """记下这一轮 LLM 生成的正文 ✓（给 decorating 钩子里的 D 拆分用 ✓）。"""
+    """记下这一轮 LLM 生成的正文 （给 decorating 钩子里的 D 拆分用 ）。"""
     try:
         txt = getattr(response, "completion_text", None) or ""
         if not str(txt).strip():
@@ -179,13 +179,13 @@ async def mn_remember_response(self, event, response):
 
 
 def mn_line_chain(text, at=None):
-    """把一段纯文本包成 MessageChain（可选：在最前面塞一个**真 At** ✓）。
+    """把一段纯文本包成 MessageChain（可选：在最前面塞一个**真 At** ）。
 
     `event.send()` 的签名是 `send(message: MessageChain)` —— 传字符串会炸
     （实测 2026-10-06：她调 say_lines 三次，全都是 `'str' object has no attribute 'chain'`）。
-    路径随版本变，兜两层。
-    ⚠️ 2026-10-10：加 `at` 参数 —— 「@ 排队 + |||」同轮时，At 要挂**第一条气泡**上 ✓
-    （以前那条路不拆，分隔符就原样发进群了 ✗，见 mn_attach_hook 里的注释 ✓）。
+ 路径随版本变，兜两层。
+    ⚠️ 2026-10-10：加 `at` 参数 —— 「@ 排队 + |||」同轮时，At 要挂**第一条气泡**上 
+    （以前那条路不拆，分隔符就原样发进群了 ，见 mn_attach_hook 里的注释 ）。
     """
     for mod_path in ('astrbot.api.message_components', 'astrbot.core.message.components'):
         try:
@@ -201,10 +201,10 @@ def mn_line_chain(text, at=None):
 
 
 def mn_clean_chain(chain, qq=None, name=None):
-    """把正文里**手打的 @** 清掉（@ 已经由 At 组件负责 ✓）。
+    """把正文里**手打的 @** 清掉（@ 已经由 At 组件负责 ）。
 
-    两类都清：① `@昵称(123456)`（号会外泄 ✗）② 紧接着真 @ 的那份纯文本 `@昵称`
-    （否则名字出现两遍 ✗）。返回改动次数。
+ 两类都清：① `@昵称(123456)`（号会外泄 ）② 紧接着真 @ 的那份纯文本 `@昵称`
+    （否则名字出现两遍 ）。返回改动次数。
     """
     n = 0
     for comp in chain or []:
@@ -255,9 +255,9 @@ MN_AT_LITERAL = re.compile(r"@[^\s@()（）]{1,24}[（(]\d{5,12}[)）]")
 async def mn_attach_hook(*args, **kwargs):
     """把排队的 @ 插到这条回复的**最前面**；这轮没正文就单独发一个 @。
 
-    为什么用模块级钩子而不是类方法：类方法的 decorating 钩子在本部署里**没被调用**
+ 为什么用模块级钩子而不是类方法：类方法的 decorating 钩子在本部署里**没被调用**
     （同插件另外四个类方法钩子都跑得好好的，排查过 stop_event / 流式输出 / 注册行都在），
-    模块级注册是 AstrBot 最标准的那条路，先换过来把功能做通。
+ 模块级注册是 AstrBot 最标准的那条路，先换过来把功能做通。
     """
     try:
         event = None
@@ -270,17 +270,17 @@ async def mn_attach_hook(*args, **kwargs):
         key = "%s|%s" % (event.get_self_id(), event.get_group_id())
         item = mn_take_pending(MN_PENDING, key, time.time()) if MN_PENDING else None
         # ⚠️ 2026-10-07 实测踩坑：原先这里用 `.pop()` ✗ —— **取一次就没了** ✓，
-        #    而她 say_lines 之后还会继续调工具 ✓，工具循环会**再生成一次正文** ✗ →
-        #    第二次发送时 MN_SAID 已空 ✗ → 那句正文就漏进群了 ✗（群里看到「嗯，那本不属于我~…」✗）。
-        #    改成 `.get()` ✓ 并把**同一轮的 event id** 也记下 ✓；
-        #    只对「同一轮 ✓」或「40 秒内 ✓」生效，免得误伤同一群里**下一轮**的正文 ✗。
-        #    已知上限：同一群 40 秒内开新轮，其正文可能被误抑制 ✓（升级路：换成真正的 turn id ✓）。
+        # 而她 say_lines 之后还会继续调工具 ✓，工具循环会**再生成一次正文** ✗ →
+        # 第二次发送时 MN_SAID 已空 ✗ → 那句正文就漏进群了 ✗（群里看到「嗯，那本不属于我~…」✗）。
+        # 改成 `.get()` ✓ 并把**同一轮的 event id** 也记下 ✓；
+        # 只对「同一轮 ✓」或「40 秒内 ✓」生效，免得误伤同一群里**下一轮**的正文 ✗。
+        # 已知上限：同一群 40 秒内开新轮，其正文可能被误抑制 ✓（升级路：换成真正的 turn id ✓）。
         # ⚠️ 2026-10-08 **二次踩坑** ✗：**绝不能用时间窗口** ✗ ——
         #    20:00:42 她刚用 say_lines 说完 ✓ 20:00:57 群里来了**新问题**（「某某地名是哪里」✓）
-        #    只隔 **15 秒** ✓ → 上一轮的残留状态把**新一轮的正文**当成"重复"抑制掉了 ✗✗
+        # 只隔 **15 秒** ✓ → 上一轮的残留状态把**新一轮的正文**当成"重复"抑制掉了 ✗✗
         #    → 她那条回答**一个字都没发出去** ✗ 而会话历史里记着"已发出" ✗ → 她还以为讲过了 ✗
         #    （主人 20:02 报的「她说解释完了但我没看到」就是这个 ✓）。
-        #    正确口径 ✓：**按这一轮的那条消息判** ✓ —— 同一个 event 或同一条 message_id 才算"同一轮" ✓；
+        # 正确口径 ✓：**按这一轮的那条消息判** ✓ —— 同一个 event 或同一条 message_id 才算"同一轮" ✓；
         #    **新消息进来 = 新一轮 → 绝不抑制** ✓。
         said = MN_SAID.get(key) if MN_SAID else None
         if said:
@@ -291,7 +291,7 @@ async def mn_attach_hook(*args, **kwargs):
             _cur_mid = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
             _same_msg = bool(said[3]) and bool(_cur_mid) and str(said[3]) == _cur_mid
             if not _same_msg:
-                logger.info("[mindscape_mention] 上一条连发状态属于【别的消息】→ 不抑制正文 ✓")
+                logger.info("[mindscape_mention] 上一条连发状态属于【别的消息】→ 不抑制正文 ")
                 said = None
                 MN_SAID.pop(key, None)
         enabled, targets = mn_load_config()
@@ -305,14 +305,14 @@ async def mn_attach_hook(*args, **kwargs):
                     logger.info("[mindscape_mention] 清掉正文里手打的 @ %d 处", removed)
                 _fb = mn_sep_fallback(chain)      # ★ 兜底：漏网的分隔符一律换成换行 ✓
                 if _fb:
-                    logger.warning("[mindscape_mention] 兜底：正文里漏网的分隔符 %d 处 → 换成换行 ✓", _fb)
+                    logger.warning("[mindscape_mention] 兜底：正文里漏网的分隔符 %d 处 → 换成换行 ", _fb)
         # ★ D 方案（2026-10-09 主人批 ✓；2026-10-10 扩到「有 @ 排队」这条路 ✓）：
-        #   正文里带 ||| → 拆成多个气泡发 ✓；**第一条挂上排队的真 @** ✓。
+        # 正文里带 ||| → 拆成多个气泡发 ✓；**第一条挂上排队的真 @** ✓。
         #   ⚠️ 原先这里是 `if item is None:` ✗（注释写着「有 @ 怕把它弄丢，宁可走老路」✗）——
-        #   结果「@ + |||」同轮时整段走老路 → **分隔符原样发进群** ✗。
-        #   真事故（2026-10-10 22:44:56 ✓）：日志签名 = `[空消息] @某人` + 一条带 `|||` 的正文 ✓，
-        #   而且那一轮**没有 D 检查行** ✗（因为整块被跳过了 ✓）。
-        #   挂 @ 并不难：把 At 塞进第一条的 chain（mn_line_chain 的 at 参数 ✓）就行 —— 别再用
+        # 结果「@ + |||」同轮时整段走老路 → **分隔符原样发进群** ✗。
+        # 真事故（2026-10-10 22:44:56 ✓）：日志签名 = `[空消息] @某人` + 一条带 `|||` 的正文 ✓，
+        # 而且那一轮**没有 D 检查行** ✗（因为整块被跳过了 ✓）。
+        # 挂 @ 并不难：把 At 塞进第一条的 chain（mn_line_chain 的 at 参数 ✓）就行 —— 别再用
         #   「少数情况」当借口 ✗。
         _res0 = event.get_result()
         _chain0 = getattr(_res0, "chain", None) if _res0 is not None else None
@@ -342,9 +342,9 @@ async def mn_attach_hook(*args, **kwargs):
                         len(_txt), LINE_SEP in _txt, bool(_chain), _src == "llm")
             _parts = mn_split_lines(_txt)
             # ⭐ 2026-10-16 修：拆出来的**每一段**都要过一遍「句尾去句号」✗
-            #   事故：`_txt = MN_LAST_TEXT`（原始 llm 正文）⇒ **绕过了 flatten_result** ✗，
-            #        而这里 `event.send()` 是**直接发**、不走 respond 管线 ⇒
-            #        群里看到 12/47 条带句尾句号（「…替你打拍子。」✗）。
+            # 事故：`_txt = MN_LAST_TEXT`（原始 llm 正文）⇒ **绕过了 flatten_result** ✗，
+            # 而这里 `event.send()` 是**直接发**、不走 respond 管线 ⇒
+            # 群里看到 12/47 条带句尾句号（「…替你打拍子。」✗）。
             #   ⚠️ 与 say_lines 用**同一套口径**（模块级 flatten/drop_period + self.f_np 作用域）✓
             #   ⚠️ flatten_result 先跑会把 ||| 抹掉 ⇒ 这里必然走 llm 缓存那份 ⇒ 必须自己补这一步 ✓
             if _parts:
@@ -365,7 +365,7 @@ async def mn_attach_hook(*args, **kwargs):
                     _parts = _fixed
             if _parts:
                 # ⚠️ 顺序很关键：**第一条真的发出去之后**才抑制正文 ✓
-                #   否则一旦发送失败，她就一个字都发不出去（本鱼第一版就是这个顺序，已改）。
+                # 否则一旦发送失败，她就一个字都发不出去（本鱼第一版就是这个顺序，已改）。
                 _sent = 0
                 _at0 = At(qq=item[0], name=item[1]) if item else None
                 if item:
@@ -391,7 +391,7 @@ async def mn_attach_hook(*args, **kwargs):
         if item is None and said is None:
             return
         # ① 她这一轮用 say_lines 说过了 → 不再另发正文（要补就该写进 lines 里 ✓）。
-        #    有 @ 排队时不抑制 —— @ 是挂在正文前面的，抑制会把它一起吞掉 ✗。
+        # 有 @ 排队时不抑制 —— @ 是挂在正文前面的，抑制会把它一起吞掉 ✗。
         if said is not None and item is None:
             event.clear_result()
             logger.info("[mindscape_mention] 本轮已连发 %d 条 → 抑制正文 self=%s",
@@ -472,12 +472,12 @@ class MentionMixin:
         """真的 @ 一个人（发出去是**会响的提醒**，不是正文里打「@某某」四个字符）。
 
         **@ 会自动加在你这条回复的最前面** —— 所以紧接着把想说的话写出来就行（「@某某 你说的那句话…」）；
-        不想说别的也可以，那就只发一个 @。
+ 不想说别的也可以，那就只发一个 @。
 
-        什么时候用：有人明确让你「@ 一下 / 艾特一下 / 点名」某人，或者你自己真想喊谁过来看。
+ 什么时候用：有人明确让你「@ 一下 / 艾特一下 / 点名」某人，或者你自己真想喊谁过来看。
         ⚠️ 点了名之后，**别再在正文里手打「@某人」**（更不要写「@某人(QQ号)」）——
-        @ 会自动挂在你这条回复的最前面 ✓，正文里直接写你要说的话就行。
-        什么时候别用：只是嘴上提到某人、群里闲聊 —— 那种直接用嘴说；一次只点一个人，别连点。
+        @ 会自动挂在你这条回复的最前面 ，正文里直接写你要说的话就行。
+ 什么时候别用：只是嘴上提到某人、群里闲聊 —— 那种直接用嘴说；一次只点一个人，别连点。
 
         Args:
             who(string): 要点的人 —— 群里的名字（昵称 / 群名片），或者直接给 QQ 号。
@@ -522,8 +522,8 @@ class MentionMixin:
     async def say_lines(self, *args, **kwargs):
         """一口气连发几条短消息 —— 每条单独成一个气泡（像真人想到一句打一句）。
 
-        一条一句、最多 3 条，按顺序发出去。想先丢一句、再补一句的时候就用它。
-        别用 send_message_to_user 连发：它会把好几条并成一条消息（实测过）。
+ 一条一句、最多 3 条，按顺序发出去。想先丢一句、再补一句的时候就用它。
+ 别用 send_message_to_user 连发：它会把好几条并成一条消息（实测过）。
 
         Args:
             lines(array): 要连发的短消息列表，一条一句。
@@ -611,11 +611,11 @@ class MentionMixin:
         sent, time.time(), id(ev),
         str(getattr(getattr(ev, "message_obj", None), "message_id", "") or ""))
         # ★ C（2026-10-09 主人批 ✓）：**全部发成功 → 返回 None** ✓
-        #   框架对此有**专门分支**（tool_loop_agent_runner:1268）：
+        # 框架对此有**专门分支**（tool_loop_agent_runner:1268）：
         #     `elif resp is None:` → 「Tool 直接请求发送消息给用户」→ `AgentState.DONE` → **直接结束本轮** ✓
-        #   以前返回字符串 ✗ → 框架还要**再问一次模型**才知道「还想不想调工具」✗
+        # 以前返回字符串 ✗ → 框架还要**再问一次模型**才知道「还想不想调工具」✗
         #   → 而那一轮要重发整段上下文、模型却只回空字（实测一天 122 次 ✗ ≈ 账单一半 ✓）。
         #   ⚠️ 必须放在**全部成功之后** ✓：失败时仍返回上面那两句话术 ✓（她才知道要补在正文里 ✓）。
         # 2026-10-27（P3）：原来这一行下面还有一条 `return ("发好了…")` —— **不可达死代码** ✗
-        #   已删。哪天真想让她看到"发好了"，把这个 None 换掉就行 ✓
+        # 已删。哪天真想让她看到"发好了"，把这个 None 换掉就行 ✓
         return None

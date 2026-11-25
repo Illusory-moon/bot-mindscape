@@ -2,24 +2,24 @@
 """mindscape_vision —— 表达层：有图时强制「先查再认」
 
 需求（2026-09-29）：
-  本 bot 对自己的识图**太自信**，认错概率很大。
-  实例：有人发了一张双人图问「她们是同事嘛？」，**它把其中一个角色认成了自己**。
+ 本 bot 对自己的识图**太自信**，认错概率很大。
+ 实例：有人发了一张双人图问「她们是同事嘛？」，**它把其中一个角色认成了自己**。
 
-  规则：认出图里是谁之前**必须先查资料库 + 联网搜**；
+ 规则：认出图里是谁之前**必须先查资料库 + 联网搜**；
   **查完还是不确定** → 用「画面太糊 / 看不清」这个**方向**糊过去。
-  主人原话：**糊弄 + 诚实承认 的效果 ＞ 瞎编**。
+ 主人原话：**糊弄 + 诚实承认 的效果 ＞ 瞎编**。
 
 两条刻意的设计：
   1. 触发点是「**查完还不确定**」，不是「查不到」—— 查到了但不足以确认，
-     和完全查不到，对模型来说都是**不该硬认**的状态，前者更常见。
+ 和完全查不到，对模型来说都是**不该硬认**的状态，前者更常见。
   2. **兜底那句话不写死**。只给方向（承认画面看不清），措辞交给她自己。
-     写死一句原文，模型会照抄 —— 这个坑在 mindscape_stickers 里已经踩过
+ 写死一句原文，模型会照抄 —— 这个坑在 mindscape_stickers 里已经踩过
      （prompt 里的示例被原样抄进产出）。也符合 canon/_05 原则五：不把话写死。
 
 为什么要有这个钩子，而不是只写进 rules：
-  项目自己的教训（canon/_10）——「**能用代码硬保证的，别指望提示词**」。
+ 项目自己的教训（canon/_10）——「**能用代码硬保证的，别指望提示词**」。
   rules 是常驻的，遇到图时不一定被想起来；这个钩子**只在真有图时**注入，
-  既省预算、也不容易被忽略。
+ 既省预算、也不容易被忽略。
 
 配置（config.yaml）：
     vision:
@@ -45,20 +45,20 @@ VS_LARGE_IMAGE_BYTES = 2_000_000
 VS_HINT = """## 这一轮的消息里带了图 —— 认人之前先查
 
 - 图里的人物 / 作品，**先用 lookup_knowledge 查，查完还不确定就联网搜**；
-  不要凭印象直接认。
+ 不要凭印象直接认。
 - **查完还是不确定**是谁，就用你自己的口吻糊过去 —— 大意是「画面太糊、看不清」，
   **具体怎么说按你平常的说话方式来，别照抄这句**。
-  糊弄 + 老实承认看不清，永远好过瞎编一个名字。
+ 糊弄 + 老实承认看不清，永远好过瞎编一个名字。
 - 没有依据之前，**绝不说**「这就是 XX」。认错一个人，比说不认识难看得多。
 """
 
 # ⚠️ 2026-10-10 主人报 ✓（原判 wontfix，当天改主意要修 ✓）：有人发**纯文本**
 #   `![这是一个带着小礼帽…的少女图片](img.png)`，她会**真以为自己看到了图** ✗。
-#   查过日志：那一轮管线里**没有任何图**（vs_has_image=False、image_urls 为空 ✓），
-#   是模型把「长得像附件标记的正文」当成了附件 ✗。
-#   修法（代码判定 + 一句明确标注 ✓）：本轮没图、但正文里出现像媒体/附件的字样时，
-#   由**代码**认出来并告诉她「那只是对方打的文字」—— 不改渲染、不改用户那条消息 ✗。
-#   位置：VS_PRIORITY=-4（群缓冲之后、人物之前）✓ 见 mindscape_memory 文件头的缓存契约。
+# 查过日志：那一轮管线里**没有任何图**（vs_has_image=False、image_urls 为空 ✓），
+# 是模型把「长得像附件标记的正文」当成了附件 ✗。
+# 修法（代码判定 + 一句明确标注 ✓）：本轮没图、但正文里出现像媒体/附件的字样时，
+# 由**代码**认出来并告诉她「那只是对方打的文字」—— 不改渲染、不改用户那条消息 ✗。
+# 位置：VS_PRIORITY=-4（群缓冲之后、人物之前）✓ 见 mindscape_memory 文件头的缓存契约。
 VS_PRIORITY = -4
 VS_TEXT_MARK = "（系统提示：正文里出现了像图片/附件的字样"
 # 覆盖面 = 各种「看起来是媒体」的写法（网关渲染 / 引用渲染 / 原始 CQ 码 / markdown / HTML / data URI）
@@ -72,8 +72,8 @@ VS_TEXT_HINT = (
 
 
 # ⚠️ B 层兜底（2026-10-14 真事故的第二道保险 ✓）：
-#   格式闸门（A 层）治根，但**万一**还有漏进来的（比如框架自己塞的引用图、
-#   或者 A 层读不动那个引用 ⇒ 剔干净了却仍然 400），就**去掉图重答一次** ✗
+# 格式闸门（A 层）治根，但**万一**还有漏进来的（比如框架自己塞的引用图、
+# 或者 A 层读不动那个引用 ⇒ 剔干净了却仍然 400），就**去掉图重答一次** ✗
 #   —— 宁可这一轮少看一张图，也不能让她**整轮哑掉、群里一个字都不出** ✓
 VS_IMAGE_ERROR_RE = re.compile(
     r"unsupported image|invalid image|image.*(?:format|invalid_request_error)", re.I)
@@ -81,14 +81,14 @@ VS_RETRY_FLAG = "_mindscape_vision_retried"
 
 
 def vs_is_image_error(text):
-    """这条报错是不是"图不合规"那一类（**只认这个特征**，别的报错不许乱重试 ✗）"""
+    """这条报错是不是"图不合规"那一类（**只认这个特征**，别的报错不许乱重试 ）"""
     return bool(VS_IMAGE_ERROR_RE.search(str(text or "")))
 
 
 async def vs_retry_without_image(star, event, response):
-    """把"图惹的祸"那一轮**去掉图重答一次** ⇒ 返回新的 completion_text ✓
+    """把"图惹的祸"那一轮**去掉图重答一次** ⇒ 返回新的 completion_text 
 
-    失败就原样返回（绝不吞掉她原本该有的输出路径 ✗）
+ 失败就原样返回（绝不吞掉她原本该有的输出路径 ）
     """
     try:
         umo = ""
@@ -113,9 +113,9 @@ async def vs_retry_without_image(star, event, response):
                                         request_max_retries=1)
         text = str(getattr(again, "completion_text", "") or "")
         if text:
-            logger.warning("[mindscape_vision] 图不合规 ⇒ 已去掉图重答一次（%d 字）✓", len(text))
+            logger.warning("[mindscape_vision] 图不合规 ⇒ 已去掉图重答一次（%d 字）", len(text))
         else:
-            logger.warning("[mindscape_vision] 去图重答没有拿到内容 ✗")
+            logger.warning("[mindscape_vision] 去图重答没有拿到内容 ")
         return text
     except Exception as e:                 # noqa: BLE001 —— 兜底失败也不能影响主流程
         logger.warning("[mindscape_vision] 去图重答失败: %s", str(e)[:120])
@@ -148,7 +148,7 @@ def vs_has_image(event):
 #   （`MediaResolver(..., media_type="image").to_base64_data()`）——
 #   **它不看真实格式** ✗ ⇒ 只要那个 URL 指向的不是真图（QQ 偶尔给的就是这种），必 400 ✓
 # ⇒ 修：**下发前验魔术字节**，认不出是 jpeg/png/gif/webp 的一律**剔掉**，
-#   并留下日志（这样"她突然不回"以后一眼能查到原因 ✓）。
+# 并留下日志（这样"她突然不回"以后一眼能查到原因 ✓）。
 VS_OK_MAGIC = (
     (b"\xff\xd8\xff", "jpeg"),
     (b"\x89PNG\r\n\x1a\n", "png"),
@@ -158,7 +158,7 @@ VS_OK_MAGIC = (
 
 
 def vs_sniff_image(raw):
-    """认 magic bytes ⇒ 返回 'jpeg'/'png'/'gif'/'webp'；认不出返回 ''（= 不许下发）✓"""
+    """认 magic bytes ⇒ 返回 'jpeg'/'png'/'gif'/'webp'；认不出返回 ''（= 不许下发）"""
     if not raw:
         return ""
     for magic, name in VS_OK_MAGIC:
@@ -172,14 +172,14 @@ def vs_sniff_image(raw):
 def vs_safe_remote(url):
     """远程图 URL 的安全闸门（2026-10-27 加 · P2-5 SSRF）。
 
-    为什么：`image_urls` 里是**框架给的引用**，但引用链里可能夹着用户可控的外链
-    （引用消息、卡片图）。原样 `urlopen` 就是 SSRF —— bot 会替别人去访问内网/元数据地址 ✗
+ 为什么：`image_urls` 里是**框架给的引用**，但引用链里可能夹着用户可控的外链
+    （引用消息、卡片图）。原样 `urlopen` 就是 SSRF —— bot 会替别人去访问内网/元数据地址 
 
-    判据（全部满足才放行）：
+ 判据（全部满足才放行）：
       · scheme 是 http/https
       · 主机名解析出来的**每一个**地址都不是私网 / 回环 / 链路本地 / 保留段
-      · 解析不了的域名也不放行（宁可不看这张图 ✗）
-    ⚠️ 只挡"明显不对"，不做域名白名单 —— 图床/CDN 太多，白名单会误杀真图 ✓
+      · 解析不了的域名也不放行（宁可不看这张图 ）
+    ⚠️ 只挡"明显不对"，不做域名白名单 —— 图床/CDN 太多，白名单会误杀真图 
     """
     import ipaddress
     import socket
@@ -207,7 +207,7 @@ def vs_safe_remote(url):
 
 
 def vs_read_head(ref, limit=64):
-    """读一个图引用的前若干字节（本地路径 / http(s) / data:base64 都认 ✓）。"""
+    """读一个图引用的前若干字节（本地路径 / http(s) / data:base64 都认 ）。"""
     text = str(ref or "")
     if text.startswith("data:"):
         head, _, payload = text.partition(",")
@@ -228,9 +228,9 @@ def vs_read_head(ref, limit=64):
 
 
 def vs_filter_images(urls, event_self=""):
-    """把 `image_urls` 过一遍格式闸门 ⇒ 返回 (留下的, 剔掉的条数) ✓
+    """把 `image_urls` 过一遍格式闸门 ⇒ 返回 (留下的, 剔掉的条数) 
 
-    ⚠️ 读不动 / 认不出 = **一律剔掉**（宁可这一轮少看一张图，也不能让整轮全灭 ✗）
+    ⚠️ 读不动 / 认不出 = **一律剔掉**（宁可这一轮少看一张图，也不能让整轮全灭 ）
     """
     kept, dropped = [], 0
     for ref in list(urls or []):
@@ -249,9 +249,9 @@ def vs_filter_images(urls, event_self=""):
 
 
 def vs_attach(request, text, mark):
-    """把「这一轮」的识图提醒挂到当前消息之后 ✓（幂等靠 mark 认领 ✓）。
+    """把「这一轮」的识图提醒挂到当前消息之后 （幂等靠 mark 认领 ）。
 
-    挂载失败时退回 system_prompt（带警告 ✓）—— 宁可费钱，不可丢提醒。
+ 挂载失败时退回 system_prompt（带警告 ）—— 宁可费钱，不可丢提醒。
     """
     old = getattr(request, "system_prompt", "") or ""
     parts = getattr(request, "extra_user_content_parts", None)
@@ -331,13 +331,13 @@ class VisionMixin:
 
     @filter.on_llm_request(priority=VS_PRIORITY)
     async def vs_hint(self, event: AstrMessageEvent, request):
-        """有图 → 提醒「先查再认」；**没图但正文长得像有图** → 明确标注「那只是文字」✓。"""
+        """有图 → 提醒「先查再认」；**没图但正文长得像有图** → 明确标注「那只是文字」。"""
         try:
             if not self._vs_hit(event):
                 return
             urls = getattr(request, "image_urls", None)
             # ⚠️ 先过**格式闸门**（2026-10-14 那次"她不回消息"的真凶 ✓）：
-            #    不合规的图必须在下发前剔掉，否则整轮请求 400 全灭 ✗
+            # 不合规的图必须在下发前剔掉，否则整轮请求 400 全灭 ✗
             if urls:
                 kept, dropped = await asyncio.to_thread(
                     vs_filter_images, list(urls), event.get_self_id())
@@ -366,12 +366,12 @@ class VisionMixin:
 
     @filter.on_llm_response()
     async def vs_image_error_retry(self, event, response):
-        """**B 层兜底**：图不合规把整轮打挂了 ⇒ 去掉图重答一次 ✗
+        """**B 层兜底**：图不合规把整轮打挂了 ⇒ 去掉图重答一次 
 
         ⚠️ 2026-10-14 真事故：那一轮所有模型调用全 400（`unsupported image`），
-           `guard` 又把报错拦住（不进群 ✓）⇒ 主人只看到「她不回消息、也不报错」✗
-        ⇒ A 层（格式闸门）治根；这一层是**万一漏网时她还能开口**的保险 ✓
-        ⚠️ 每条消息**只重试一次**（`VS_RETRY_FLAG`）—— 绝不允许变成循环请求 ✗
+           `guard` 又把报错拦住（不进群 ）⇒ 主人只看到「她不回消息、也不报错」
+        ⇒ A 层（格式闸门）治根；这一层是**万一漏网时她还能开口**的保险 
+        ⚠️ 每条消息**只重试一次**（`VS_RETRY_FLAG`）—— 绝不允许变成循环请求 
         """
         try:
             if not self.vs_on:
@@ -380,7 +380,7 @@ class VisionMixin:
             if not vs_is_image_error(text):
                 return
             if getattr(event, VS_RETRY_FLAG, False):
-                logger.warning("[mindscape_vision] 图不合规，但这条已经重试过 ⇒ 不再重试 ✗")
+                logger.warning("[mindscape_vision] 图不合规，但这条已经重试过 ⇒ 不再重试 ")
                 return
             setattr(event, VS_RETRY_FLAG, True)
             logger.warning("[mindscape_vision] 图不合规把整轮打挂了 ⇒ 去掉图重答一次 | bot=%s",

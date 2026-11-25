@@ -2,7 +2,7 @@
 """mindscape_diary —— 认知层：把聊天流提炼成长期记忆
 
 思路：定期从消息库里增量读取群聊记录，让 LLM 提炼「发生了什么有趣的事」，
-      追加到人类可读的 Markdown 日记里。
+ 追加到人类可读的 Markdown 日记里。
 
 关键设计：
   - **只记事件，不学风格** —— prompt 里明确禁止总结任何人的说话方式
@@ -29,10 +29,10 @@ from mindscape_core import fmt_cst, is_platform_command
 def dy_gname(raw, gid=""):
     """把**群名**洗成可安全进 prompt 的短标签（详见上面注释）。
 
-    ⚠️ 2026-10-07 踩坑：这里原本在「群名与群号都为空」时回退成「群聊」✗ ——
-    可**私聊记录**正是这种情况 ✓ → 于是私聊日记的标签被写成了「【群聊】」✗，
-    还把下游 `m["gname"] or DM_LABEL` 那句「私聊」兜底**整个抢走**了 ✗。
-    修法：**这里只负责群名** ✓ —— 取不到就返回空串 ✓，让调用方自己决定怎么称呼 ✓。
+    ⚠️ 2026-10-07 踩坑：这里原本在「群名与群号都为空」时回退成「群聊」 ——
+ 可**私聊记录**正是这种情况  → 于是私聊日记的标签被写成了「【群聊】」，
+ 还把下游 `m["gname"] or DM_LABEL` 那句「私聊」兜底**整个抢走**了 。
+ 修法：**这里只负责群名**  —— 取不到就返回空串 ，让调用方自己决定怎么称呼 。
     """
     s = "".join(ch for ch in str(raw or "") if ch.isprintable())
     s = _GFX_JUNK.sub("", s)
@@ -116,7 +116,7 @@ def fetch(src, target, since_ts, since_seq, only_user=None):
     """从 SQLite 增量读取消息（表名/字段名来自配置）。
 
     only_user：只取这个 user_id 的消息（mindscape_learn 用它学某人的风格）。
-    不传时保持原语义 —— 排除 self_id（日记只记别人）。
+ 不传时保持原语义 —— 排除 self_id（日记只记别人）。
     """
     db = dy_abs(src.get("db"))
     if not db or not os.path.exists(db):
@@ -166,7 +166,7 @@ def fetch(src, target, since_ts, since_seq, only_user=None):
             if not txt.strip():
                 continue
             # ★ 2026-10-09（主人报 ✓）：平台指令（「#sl」之类 ✗）不进记忆 / 日记 ✓ ——
-            #   它不是「群友说的话」✓ 记进去只会污染她的记忆与风格学习 ✓。
+            # 它不是「群友说的话」✓ 记进去只会污染她的记忆与风格学习 ✓。
             if is_platform_command(txt):
                 continue
             sender = (d.get("sender") or {}).get("card") or (d.get("sender") or {}).get("nickname") or uid
@@ -191,8 +191,8 @@ DM_LABEL = "私聊"
 def dy_render(msgs):
     """把一批消息渲染成发给模型的那段文本。
 
-    单独抽出来，是因为**分批**和**发送**必须用同一套算法 ——
-    两边不一致就会出现「按 5000 字分好批、发出去却是 6000 字被砍」。
+ 单独抽出来，是因为**分批**和**发送**必须用同一套算法 ——
+ 两边不一致就会出现「按 5000 字分好批、发出去却是 6000 字被砍」。
     """
     return "群聊记录：\n" + "\n".join(
         "[" + m["time"] + "][" + (m.get("gname") or DM_LABEL) + "] " + m["who"] + ": " + m["txt"]
@@ -202,12 +202,12 @@ def dy_render(msgs):
 def chunk_by_budget(rows, batch, max_input_chars, split_group=False):
     """先按条数切、再按【真实渲染长度】细分，保证每条消息都进得了某一次请求。
 
-    为什么要这么麻烦：以前是固定 batch 条一组，再在 call_llm 里把文本砍到
+ 为什么要这么麻烦：以前是固定 batch 条一组，再在 call_llm 里把文本砍到
     max_input_chars —— 砍掉的那截尾巴没人知道，而游标照样推到 chunk[-1]，
-    于是那几条消息**永久漏记**（把预算调小或把批次调大就能触发）。
+ 于是那几条消息**永久漏记**（把预算调小或把批次调大就能触发）。
 
-    单条自己就超预算时**抛 ValueError**：明确失败、停在原游标，绝不静默截断。
-    调用方接住它、打印、**不推进游标**。
+ 单条自己就超预算时**抛 ValueError**：明确失败、停在原游标，绝不静默截断。
+ 调用方接住它、打印、**不推进游标**。
     """
     out = []
     for i in range(0, len(rows), batch):
@@ -308,9 +308,9 @@ AUTO_TITLE = "## 群里遇到的人（自动整理）"
 def load_relations(spec):
     """从人格档案里取「关系与称呼」这类段落，作为不会被自动覆盖的权威条目。
 
-    为什么需要：人物画像是一句话自动摘要，它不知道谁是「喜欢的人」，
-    只会把对方写成「群友」。一旦好友被降级成陌生人，bot 就会认错人 ——
-    而这类关系是**作者写死的**，不该由摘要模型来猜。
+ 为什么需要：人物画像是一句话自动摘要，它不知道谁是「喜欢的人」，
+ 只会把对方写成「群友」。一旦好友被降级成陌生人，bot 就会认错人 ——
+ 而这类关系是**作者写死的**，不该由摘要模型来猜。
 
     spec 可以是字符串（文件路径，取全文的 - 行），也可以是
     {file: ..., section: "关系与称呼"} —— 只取该 ## 段落里的 - 行。
@@ -352,7 +352,7 @@ def _update_people(path, people, now, relations=None):
     """把人物画像合并进 people.md（同名覆盖，保留最近时间）。
 
     relations 是来自人格档案的权威条目，单独放在文件开头；
-    自动摘要如果提到了权威条目里的人（如「小爱」出现在
+ 自动摘要如果提到了权威条目里的人（如「小爱」出现在
     「Alice（小爱）」中），**不允许**把它写成普通群友。
     """
     relations = [r for r in (relations or []) if str(r).strip()]
@@ -414,8 +414,8 @@ def _update_people(path, people, now, relations=None):
 def dy_has_batch(path, rng, tail_bytes=200000):
     """产物里是否已经写过这一批（看【文件尾巴】就够了）。
 
-    重跑要补的总是最后那批 —— 崩溃发生在「写完日记、游标还没落盘」之间，
-    所以只需在尾部找标记，不必扫整个文件。
+ 重跑要补的总是最后那批 —— 崩溃发生在「写完日记、游标还没落盘」之间，
+ 所以只需在尾部找标记，不必扫整个文件。
     """
     try:
         size = os.path.getsize(path)
@@ -486,7 +486,7 @@ def run_target(d):
             # 这一批的来源游标范围，写成【独立一行】的 HTML 注释：
             #   - 渲染时看不见；检索只认 "## " 和 "- "，所以不会污染记忆文本
             #   - 万一「日记写完、游标还没落盘」就退出，重跑时靠它认出这批已写过，
-            #     只推进游标、不再追加一遍（以前会整整重复一批）
+            # 只推进游标、不再追加一遍（以前会整整重复一批）
             rng = "%s-%s" % (chunk[0]["seq"], chunk[-1]["seq"])
             if entries and not dy_has_batch(out_file, rng):
                 with open(out_file, "a", encoding="utf-8") as fp:
