@@ -382,6 +382,50 @@ def rc_sections(text):
     return [s for s in secs if s]
 
 
+def _rc_window(sec, terms, max_chars):
+    """超长段落：围绕**命中词**取窗口，而不是从头砍 ✗（返回带说明的一段）。
+
+    - 找命中词出现的位置，取 [pos-200, pos+max_chars-400] 这一窗
+    - 多个命中词时取**最密集**的那处
+    - 窗的两端对齐到换行，别切半个词
+    """
+    low = sec.lower()
+    pos = -1
+    best = 0
+    for t in terms:
+        p = low.find(t.lower())
+        if p < 0:
+            continue
+        # 统计这个位置附近 1500 字内命中了几个词 ⇒ 取更"密集"的地方 ✓
+        seg = low[max(0, p - 300):p + 1500]
+        dense = sum(1 for x in terms if x.lower() in seg)
+        if dense > best or pos < 0:
+            best, pos = dense, p
+    if pos < 0:
+        pos = 0
+    head = max(0, pos - 200)
+    tail = min(len(sec), head + max_chars - 400)
+    win = sec[head:tail]
+    # 对齐到换行（前后各让一步，避免切半句）
+    if head > 0:
+        nl = win.find("\n")
+        if 0 <= nl < 120:
+            win = win[nl + 1:]
+    if tail < len(sec):
+        nl = win.rfind("\n")
+        if nl > len(win) - 160:
+            win = win[:nl]
+    note = []
+    if head > 0:
+        note.append("前面还有 %d 字" % head)
+    if tail < len(sec):
+        note.append("后面还有 %d 字" % (len(sec) - tail))
+    tail_note = ("\n\n（这一节很长，只给了**跟关键词相关的那一段**"
+                 + ("；" + "、".join(note) if note else "")
+                 + " —— 想看别处，换个更具体的词再查一次）") if note else ""
+    return "…" + win.strip() + tail_note
+
+
 def rc_search_sections(path, keyword, limit=3, max_chars=8000):
     """在结构化文档里按【段落】检索 —— 问到某个主题就给整段，不是散落的几行。
 
@@ -420,10 +464,9 @@ def rc_search_sections(path, keyword, limit=3, max_chars=8000):
             continue
         if not out:
             # ⚠️ 2026-10-29 实测：第一节自己就超过上限时，**截断但要告诉她后面还有** ✓
-            #    （原来直接 break ⇒ 后面的小节全被丢掉 ⇒ 她答「资料里没给」✗）
-            cut = s[:max_chars]
-            out.append(cut + "\n\n（**这一节还有 %d 字没给出** —— 想看得更细，"
-                            "换个更具体的关键词再查一次）" % (len(s) - max_chars))
+            # ⚠️ 2026-11-25 改进：**别砍头** ✗ —— 取「命中词附近」的窗口，
+            #    否则她拿到的是这一节的开头（往往跟问题无关）⇒ 只能说"翻到一半卡住" ✗
+            out.append(_rc_window(s, terms, max_chars))
             used = max_chars
             dropped += 1
             break
@@ -495,13 +538,29 @@ async def lookup_knowledge(*args, **kwargs):
     # ⚠️ 2026-10-29 实测：她给 kw=「言灵 寓言集其三 台词」⇒ 命中 5 份 / 8 段，
     #    目标那份《千星纪游PV》排在**最后** ⇒ 被噪音埋住，她答「没存货」✗
     #    ⇒ 多份命中时：① **最相关的排最前** ② **每份只给最优 1 段**（降噪 ✓）
+    # ⚠️ 2026-11-25 真事故：她传 `which='A、B、C'`（一次给了三个资料名）⇒
+    #   旧逻辑用「want 是否是名字的子串」判断 ⇒ **多名字必然 0 命中** ⇒ 她白查一次 ✗
+    #   ⇒ ① 按分隔符拆开，任一命中即算 ✓ ② 拆完一个都没命中 ⇒ 当作没给 which（退化全库）✓
+    wants = [x.strip() for x in re.split(r"[、,，/|；;\s]+", str(want or "")) if x.strip()]
+
+    def _want_ok(name):
+        if not wants:
+            return True
+        return any(w in name or name in w for w in wants)
+
     picked = []
     for d in docs:
-        if want and want not in d["name"]:
+        if not _want_ok(d["name"]):
             continue
         hits, total, score = rc_search_sections(d["path"], kw)
         if hits:
             picked.append((score, d["name"], hits))
+    if wants and not picked:
+        # 给了 which 却什么都没查到 ⇒ 回退全库再找一遍（她说得出名字，说明她真想查这块 ✓）
+        for d in docs:
+            hits, total, score = rc_search_sections(d["path"], kw)
+            if hits:
+                picked.append((score, d["name"], hits))
     multi = len(picked) > 1
     # ⚠️ 2026-10-29 实测：原来按"段长"排 ⇒ 4.1（更长）压过 4.2 ⇒ 她讲错版本 ✗
     #    ⇒ 先看**标题命中**，再看命中词数，最后才看长度；并且多份命中只给最相关 3 份（降噪）
