@@ -275,13 +275,37 @@ def strip_json_junk(text):
 def ms_tilde_ids():
     """哪些 bot 走「每句补 ~」——**写在 config 的 `tilde.targets`** 默认空 = 谁都不补。
 
-    ⚠️ 解耦铁律：这是**某个 bot 的口癖**，不是框架行为 ⇒ id 不许硬编码在代码里 
+    支持会话维度（2026-11-27）：条目可写 `id` / `id:group` / `id:private`
+    ⇒ `id:group` 只给群聊补、私聊不补（用 ms_tilde_hit 判，不要直接比字符串）
+
+    ⚠️ 解耦铁律：这是**某个 bot 的口癖**，不是框架行为 ⇒ id 不许硬编码在代码里
     """
     try:
         sec = cfg.section("tilde") or {}
-        return {str(x) for x in (sec.get("targets") or [])}
+        return {str(x).strip() for x in (sec.get("targets") or []) if str(x).strip()}
     except Exception:
         return set()
+
+
+def ms_scope_hit(entries, self_id, group_id):
+    """entries 里是否有条目命中「这个 bot + 这个会话类型」。
+
+    条目格式：`<self_id>`（都算）· `<self_id>:group`（只在群）· `<self_id>:private`（只在私聊）
+    """
+    sid = str(self_id)
+    gid = str(group_id or "")
+    for e in entries or ():
+        parts = str(e).split(":")
+        if parts[0] != sid:
+            continue
+        if len(parts) == 1:
+            return True
+        kind = parts[1].lower()
+        if kind == "group" and gid:
+            return True
+        if kind == "private" and not gid:
+            return True
+    return False
 
 
 def ensure_tilde(text):
@@ -626,7 +650,7 @@ def ms_install_send_guard(check):
                 logger.warning("[mindscape_guard] 直发整理失败: %s", str(_e)[:100])
             # ⭐ 每句一个「~」（2026-11-11 补）：这条路以前漏了 —— 愿力经济那类自己 ev.send() 的轮没有软尾 ✗
             try:
-                if str(self.get_self_id()) in ms_tilde_ids():
+                if ms_scope_hit(ms_tilde_ids(), self.get_self_id(), self.get_group_id()):
                     message, _n_t = ms_chain_tilde(message)
                     if _n_t:
                         logger.info("[mindscape_guard] 直发补软尾 self=%s 改了 %d 句",

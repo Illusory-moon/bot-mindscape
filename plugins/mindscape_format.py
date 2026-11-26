@@ -33,6 +33,25 @@ PERIODS = ("。", "．")
 CLOSERS = "」』）)】》〉”’" + chr(34) + chr(39)
 
 
+def _fmt_scope_hit(entries, self_id, group_id):
+    # 会话维度版 scope_hit：支持 id / id:group / id:private
+    # 2026-11-27 主人定：私聊接别的模型时要放开标点，群聊维持原样 ⇒ 用 id:group 区分
+    sid = str(self_id)
+    gid = str(group_id or "")
+    for e in entries or ():
+        parts = str(e).split(":")
+        if parts[0] != sid:
+            continue
+        if len(parts) == 1:
+            return True
+        kind = parts[1].lower()
+        if kind == "group" and gid:
+            return True
+        if kind == "private" and not gid:
+            return True
+    return False
+
+
 def _hoist_trailing_period(text):
     """把「…XX。）」末尾的句号提到括号外、并按句尾删掉 
 
@@ -170,7 +189,8 @@ class FormatMixin:
     @filter.on_decorating_result(priority=900)
     async def flatten_result(self, event: AstrMessageEvent):
         try:
-            if not scope_hit(self.targets, event.get_self_id()):
+            _tg = str(getattr(event, 'get_group_id', lambda: '')() or '')
+            if not _fmt_scope_hit(self.targets, event.get_self_id(), _tg):
                 return
             result = event.get_result()
             # （2026-10-27 已删：一次性诊断 [msdiag] —— 它把**每条出站正文前 200 字**写进日志 ✗
@@ -183,7 +203,9 @@ class FormatMixin:
             join_with = self.f_c.get("join_with") or "，"
             drop = bool(self.f_c.get("drop_last_if_short", False))
             short_len = int(self.f_c.get("short_len") or 8)
-            no_period = bool(self.f_np) and scope_hit(self.f_np, event.get_self_id())
+            no_period = bool(self.f_np) and _fmt_scope_hit(
+                self.f_np, event.get_self_id(),
+                str(getattr(event, 'get_group_id', lambda: '')() or ''))
             for comp in chain:
                 txt = getattr(comp, "text", None)
                 if not isinstance(txt, str) or not txt.strip():

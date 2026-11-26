@@ -1295,13 +1295,37 @@ def strip_json_junk(text):
 def ms_tilde_ids():
     """哪些 bot 走「每句补 ~」——**写在 config 的 `tilde.targets`** 默认空 = 谁都不补。
 
-    ⚠️ 解耦铁律：这是**某个 bot 的口癖**，不是框架行为 ⇒ id 不许硬编码在代码里 
+    支持会话维度（2026-11-27）：条目可写 `id` / `id:group` / `id:private`
+    ⇒ `id:group` 只给群聊补、私聊不补（用 ms_tilde_hit 判，不要直接比字符串）
+
+    ⚠️ 解耦铁律：这是**某个 bot 的口癖**，不是框架行为 ⇒ id 不许硬编码在代码里
     """
     try:
         sec = cfg.section("tilde") or {}
-        return {str(x) for x in (sec.get("targets") or [])}
+        return {str(x).strip() for x in (sec.get("targets") or []) if str(x).strip()}
     except Exception:
         return set()
+
+
+def ms_scope_hit(entries, self_id, group_id):
+    """entries 里是否有条目命中「这个 bot + 这个会话类型」。
+
+    条目格式：`<self_id>`（都算）· `<self_id>:group`（只在群）· `<self_id>:private`（只在私聊）
+    """
+    sid = str(self_id)
+    gid = str(group_id or "")
+    for e in entries or ():
+        parts = str(e).split(":")
+        if parts[0] != sid:
+            continue
+        if len(parts) == 1:
+            return True
+        kind = parts[1].lower()
+        if kind == "group" and gid:
+            return True
+        if kind == "private" and not gid:
+            return True
+    return False
 
 
 def ensure_tilde(text):
@@ -1604,7 +1628,7 @@ def ms_install_send_guard(check):
                 logger.warning("[mindscape_guard] 直发整理失败: %s", str(_e)[:100])
             # ⭐ 每句一个「~」（2026-11-11 补）：这条路以前漏了 —— 愿力经济那类自己 ev.send() 的轮没有软尾 ✗
             try:
-                if str(self.get_self_id()) in ms_tilde_ids():
+                if ms_scope_hit(ms_tilde_ids(), self.get_self_id(), self.get_group_id()):
                     message, _n_t = ms_chain_tilde(message)
                     if _n_t:
                         logger.info("[mindscape_guard] 直发补软尾 self=%s 改了 %d 句",
@@ -4213,6 +4237,25 @@ PERIODS = ("。", "．")
 CLOSERS = "」』）)】》〉”’" + chr(34) + chr(39)
 
 
+def _fmt_scope_hit(entries, self_id, group_id):
+    # 会话维度版 scope_hit：支持 id / id:group / id:private
+    # 2026-11-27 主人定：私聊接别的模型时要放开标点，群聊维持原样 ⇒ 用 id:group 区分
+    sid = str(self_id)
+    gid = str(group_id or "")
+    for e in entries or ():
+        parts = str(e).split(":")
+        if parts[0] != sid:
+            continue
+        if len(parts) == 1:
+            return True
+        kind = parts[1].lower()
+        if kind == "group" and gid:
+            return True
+        if kind == "private" and not gid:
+            return True
+    return False
+
+
 def _hoist_trailing_period(text):
     """把「…XX。）」末尾的句号提到括号外、并按句尾删掉 
 
@@ -6799,7 +6842,8 @@ class FormatMixin:
     @filter.on_decorating_result(priority=900)
     async def flatten_result(self, event: AstrMessageEvent):
         try:
-            if not scope_hit(self.targets, event.get_self_id()):
+            _tg = str(getattr(event, 'get_group_id', lambda: '')() or '')
+            if not _fmt_scope_hit(self.targets, event.get_self_id(), _tg):
                 return
             result = event.get_result()
             # （2026-10-27 已删：一次性诊断 [msdiag] —— 它把**每条出站正文前 200 字**写进日志 ✗
@@ -6812,7 +6856,9 @@ class FormatMixin:
             join_with = self.f_c.get("join_with") or "，"
             drop = bool(self.f_c.get("drop_last_if_short", False))
             short_len = int(self.f_c.get("short_len") or 8)
-            no_period = bool(self.f_np) and scope_hit(self.f_np, event.get_self_id())
+            no_period = bool(self.f_np) and _fmt_scope_hit(
+                self.f_np, event.get_self_id(),
+                str(getattr(event, 'get_group_id', lambda: '')() or ''))
             for comp in chain:
                 txt = getattr(comp, "text", None)
                 if not isinstance(txt, str) or not txt.strip():
