@@ -1313,7 +1313,11 @@ def ms_scope_hit(entries, self_id, group_id):
     条目格式：`<self_id>`（都算）· `<self_id>:group`（只在群）· `<self_id>:private`（只在私聊）
     """
     sid = str(self_id)
-    gid = str(group_id or "")
+    gid = str(group_id or "").strip()
+    # ⚠️ 2026-11-27 实测：私聊发送时 group_id 可能是 "0"/"None"/"-"（字符串真值）
+    #    ⇒ 会被误判成群聊 ⇒ 私聊也被补 ~ ✗  这类假群号一律当"没有群"✓
+    if gid.lower() in ("0", "none", "null", "-", "undefined"):
+        gid = ""
     for e in entries or ():
         parts = str(e).split(":")
         if parts[0] != sid:
@@ -4241,7 +4245,11 @@ def _fmt_scope_hit(entries, self_id, group_id):
     # 会话维度版 scope_hit：支持 id / id:group / id:private
     # 2026-11-27 主人定：私聊接别的模型时要放开标点，群聊维持原样 ⇒ 用 id:group 区分
     sid = str(self_id)
-    gid = str(group_id or "")
+    gid = str(group_id or "").strip()
+    # ⚠️ 2026-11-27 实测：私聊发送时 group_id 可能是 "0"/"None"/"-"（字符串真值）
+    #    ⇒ 会被误判成群聊 ⇒ 私聊也被补 ~ ✗  这类假群号一律当"没有群"✓
+    if gid.lower() in ("0", "none", "null", "-", "undefined"):
+        gid = ""
     for e in entries or ():
         parts = str(e).split(":")
         if parts[0] != sid:
